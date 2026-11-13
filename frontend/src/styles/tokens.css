@@ -1,0 +1,66 @@
+/* ============================================================
+ * 设计 Token（与 UI 岗交付保持一致；如需换肤，只改本文件）
+ * 原型 main.html :root 的取值已原样承接
+ * ============================================================ */
+:root {
+  /* 底色 / 文字 */
+  --bg-color: #f7f7f7;
+  --chat-bg: #fbfbfb;
+  --panel-bg: #ffffff;
+  --sidebar-bg: #fbfbfb;
+  --text-main: #1a1a1a;
+  --text-sub: #8a8a8a;
+
+  /* 品牌 */
+  --brand: #4a7c59;
+  --brand-hover: #3d6a4b;
+  --brand-light: #eef3ee;
+  --brand-medium: #dce8df;
+
+  /* 图表 */
+  --chart-protein: #5ba36c;
+  --chart-carb: #f2a33a;
+  --chart-fat: #3b8cf2;
+  --chart-empty: #f0f0f0;
+  --chart-warn: #f2a33a;
+  --chart-danger: #ef5350;
+
+  /* 线与圆角 */
+  --border: #e2e2e2;
+  --border-strong: #c8c8c8;
+  --radius: 12px;
+
+  /* 布局尺寸 */
+  --left-w: 260px;
+  --tool-bar-w: 64px;
+  --tool-panel-w: 340px;
+  --content-max-w: 880px;
+
+  /* 餐次色条（结构化渲染统一取色） */
+  --meal-breakfast: #e8942c;
+  --meal-lunch: #4a7c59;
+  --meal-dinner: #3b7fd4;
+
+  /* Element Plus 主题映射：让组件库跟着品牌色走 */
+  --el-color-primary: #4a7c59;
+  --el-color-primary-light-3: #77987f;
+  --el-color-primary-light-5: #a4baa9;
+  --el-color-primary-light-7: #cbd9cd;
+  --el-color-primary-light-8: #dce8df;
+  --el-color-primary-light-9: #eef3ee;
+  --el-color-primary-dark-2: #3d6a4b;
+  --el-border-radius-base: 10px;
+  --el-text-color-primary: #1a1a1a;
+  --el-text-color-regular: #4a4a4a;
+  --el-text-color-secondary: #8a8a8a;
+  --el-border-color: #e2e2e2;
+  --el-border-color-light: #ededed;
+  --el-fill-color-blank: #ffffff;
+  --el-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Roboto, Arial, sans-serif;
+}
+
+@media (min-width: 1900px) {
+  :root {
+    --content-max-w: 980px;
+  }
+}
