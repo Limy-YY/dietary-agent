@@ -1,0 +1,36 @@
+\set ON_ERROR_STOP on
+
+-- diet_app 是权限组，不设置登录密码。
+-- 后端可以把自己的数据库登录账号加入该权限组。
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'diet_app') THEN
+        CREATE ROLE diet_app NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE diet_agent TO diet_app;
+
+GRANT USAGE ON SCHEMA core, knowledge, app, audit TO diet_app;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA core, knowledge TO diet_app;
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA app TO diet_app;
+GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA audit TO diet_app;
+
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA app, audit TO diet_app;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA app TO diet_app;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA core, knowledge
+    GRANT SELECT ON TABLES TO diet_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA app
+    GRANT SELECT, INSERT, UPDATE ON TABLES TO diet_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA audit
+    GRANT SELECT, INSERT ON TABLES TO diet_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA app, audit
+    GRANT USAGE, SELECT ON SEQUENCES TO diet_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA app
+    GRANT EXECUTE ON FUNCTIONS TO diet_app;
+
+-- 示例：后端已有登录账号 backend_user 时，由管理员执行：
+-- GRANT diet_app TO backend_user;
