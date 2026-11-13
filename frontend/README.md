@@ -50,7 +50,7 @@ src/
   styles/                 tokens.css（设计 token）+ base.css（全站样式）
 docs/agent-output-contract.md   Agent 输出契约（block schema + 话术表）
 docs/ui-spec.md            UI 规范（设计 token + 组件规范）
-docs/ui-screens/           组件视觉稿（欢迎页 / 餐卡 / 面板 / 档案 / 空态等）
+docs/ui-screens/           组件视觉稿（欢迎页 / 餐卡 / 面板 / 档案 / 空态 / toast 等）
 scripts/e2e.mjs            契约级端到端断言（SSE + REST + 空态）
 scripts/ui-smoke.mjs       真浏览器 UI 冒烟（playwright-core 驱动本机 Chrome）
 ```
@@ -112,7 +112,7 @@ scripts/ui-smoke.mjs       真浏览器 UI 冒烟（playwright-core 驱动本机
 | 轻量档案弹窗（查看态） | 通过 |
 | 控制台无 JS 报错 | 通过 |
 
-以上断言可复跑：先 `npm run dev`，再 `npm run e2e` / `npm run e2e:ui`（脚本不写入仓库，运行结果直接在终端输出）。界面截图见 `docs/ui-screens/`：00 面板空态、01 新对话欢迎页、02 今日方案、04 详细食谱、06 食材清单、07 膳食报告、09 档案弹窗、10 周视图、14 对话生成报告后的报告面板。
+以上断言可复跑：先 `npm run dev`，再 `npm run e2e` / `npm run e2e:ui`（脚本不写入仓库，运行结果直接在终端输出）。界面截图见 `docs/ui-screens/`：00 面板空态、01 新对话欢迎页、02 今日方案、04 详细食谱、06 食材清单、07 膳食报告、09 档案弹窗、10 周视图、14 对话生成报告后的报告面板、15 轻提示 toast。
 
 > `playwright-core` 只作 devDependency 给冒烟脚本用，直接 `executablePath` 指向本机 Chrome，不额外下载 Chromium，不进构建产物。
 
