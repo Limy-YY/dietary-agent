@@ -1,0 +1,26 @@
+{
+  "name": "shanzhuo-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "膳食搭配智能体 · 前端（对话界面 + 结构化渲染 + 四面板 + 轻量档案）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "e2e": "node scripts/e2e.mjs",
+    "e2e:ui": "node scripts/ui-smoke.mjs"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "element-plus": "^2.8.4",
+    "pinia": "^2.2.4",
+    "vue": "^3.5.10",
+    "vue-router": "^4.4.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.1.4",
+    "playwright-core": "^1.65.0",
+    "vite": "^5.4.8"
+  }
+}
