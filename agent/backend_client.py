@@ -42,16 +42,24 @@ def _post(path: str, payload: dict | None = None):
     return _parse(resp)
 
 
+def _put(path: str, payload: dict | None = None):
+    try:
+        resp = requests.put(f"{BASE}{path}", json=payload, timeout=_TIMEOUT)
+    except requests.RequestException as e:
+        raise BackendError(f"请求后端失败：{e}")
+    return _parse(resp)
+
+
 # ---------------------------------------------------------------- 档案
 def get_profile(user_id: str):
     """读取用户完整档案（API-20 / T12）。"""
-    return _get(f"/api/users/{user_id}/profile")
-
+    # 契约已改为 /api/profile，不拼 URL。
+    return _get("/api/profile")
 
 def upsert_profile(user_id: str, **fields):
     """创建 / 更新用户档案（API-01）。"""
     payload = {"user_id": user_id, **fields}
-    return _post("/api/profile", payload)
+    return _put("/api/profile", payload) # 切回标准的 PUT
 
 
 # ---------------------------------------------------------------- 食材 / 菜式
@@ -76,9 +84,13 @@ def calc_nutrition(target_type: str, items: list[dict], include_micro: bool = Tr
     })
 
 
-# ---------------------------------------------------------------- 周度报告
-def weekly_report(user_id: str, week_start: str):
-    return _get("/api/nutrition/weekly-report", {"user_id": user_id, "week_start": week_start})
+# ---------------------------------------------------------------- 营养分析
+def nutrition_analysis(meal_plan_id: int):
+    return _post("/api/nutrition/analysis", {"meal_plan_id": meal_plan_id})
+
+
+def get_nutrition_report(meal_plan_id: int):
+    return _get("/api/nutrition/report", {"meal_plan_id": meal_plan_id})
 
 
 # ---------------------------------------------------------------- 疾病规则

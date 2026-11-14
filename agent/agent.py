@@ -343,17 +343,32 @@ def run(user_id: str, message: str) -> dict:
     # 膳食报告
     if kind == "report":
         scope = intent.get("scope", "week")
-        try:
-            report = bc.weekly_report(user_id, _week_start())
-        except Exception:
+        st = _user_state(user_id)
+        plan = st.get("current_plan")
+
+        if not plan:
             return {"text": "还没有可复盘的方案。先确认一份规划再生成报告吧。",
                     "blocks": [blocks.anchor_block([{"panel": "report", "label": "膳食报告"}])]}
-        needs = any(r.get("needs_clarification") for r in report.get("references", []))
-        if needs:
-            return {"text": "周报里有几项参考值需要你补充性别 / 年龄 / 生理状态（孕期、哺乳期、月经期）才能准确匹配，请先告诉我这几项，我再出精确对照。",
-                    "blocks": [blocks.report_block(_report_dict(report, scope)), blocks.sources_block()]}
+
+        plan_id = plan.get("plan_id", "")
+
+        try:
+            # 如果 plan_id 是纯数字，说明是落库后的真实方案，调真实后端 API
+            if str(plan_id).isdigit():
+                report = bc.nutrition_analysis(int(plan_id))
+            else:
+                # 如果是离线字符串 ID，做离线 Mock 兜底，防止崩溃
+                report = {
+                    "period_start": plan.get("plan_date", ""),
+                    "summary": {"reference_hints": ["此为离线预览报告，方案落库后可查看精准微量分析。"]},
+                    "key_micro_summary": {}
+                }
+        except Exception as e:
+            return {"text": f"报告生成失败：{e}。可能是方案未落库或后端未响应。",
+                    "blocks": [blocks.anchor_block([{"panel": "report", "label": "膳食报告"}])]}
+
         rb = _report_dict(report, scope)
-        return {"text": f"已为你生成{'本周' if scope == 'week' else '本月'}膳食报告。",
+        return {"text": f"已为你生成{'本周' if scope == 'week' else '本次方案'}膳食报告。",
                 "blocks": [blocks.report_block(rb), blocks.sources_block(),
                            blocks.anchor_block([{"panel": "report", "label": "打开膳食报告"}])]}
 
@@ -420,24 +435,38 @@ def _week_start() -> str:
 
 
 def _report_dict(report: dict, scope: str) -> dict:
-    """后端周报 → report block 数据。"""
-    refs = report.get("references", [])
+    """后端新版方案级营养报告 -> report block 数据。"""
+    micro_summary = report.get("key_micro_summary") or {}
     micro_items = []
-    for r in refs:
-        name = r.get("nutrient_name") or r.get("nutrient_id", "")
-        if r.get("nutrient_id") not in ("calcium", "iron", "zinc", "vitamin_a", "vitamin_b1", "vitamin_b2", "vitamin_c"):
-            continue
-        micro_items.append({"name": name, "value": "—", "ring_percent": 0, "status": "ok", "note": "见周报"})
+
+    # 适配新版 API 返回的字典结构
+    for k, v in micro_summary.items():
+        pct = v.get("covered_pct") or 0
+        status = "ok" if pct >= 80 else "warn" if pct >= 50 else "danger"
+        if v.get("status") == "参考提示":
+            status = "ok"
+
+        micro_items.append({
+            "name": v.get("name_zh") or k,
+            "value": f"{pct}%" if pct else "—",
+            "ring_percent": pct,
+            "status": status,
+            "note": v.get("status") or "详见周报"
+        })
+
+    summary = report.get("summary") or {}
+    hints = summary.get("reference_hints") or []
+
     return {
-        "report_id": f"report_{report.get('week_start', '')}",
+        "report_id": f"report_{report.get('nutrition_report_id', 'mock')}",
         "scope": scope,
-        "headline": "本周膳食报告" if scope == "week" else "本月膳食报告",
-        "meta": {"range_start": report.get("week_start", ""), "range_end": "",
+        "headline": "本周膳食报告" if scope == "week" else "方案膳食报告",
+        "meta": {"range_start": report.get("period_start", ""), "range_end": report.get("period_end", ""),
                  "generated_at": date.today().isoformat(), "valid_days": 0, "total_meals": 0,
                  "target_kcal": 0},
-        "summary_text": "周度参考值对照见后端周报。",
+        "summary_text": hints[0] if hints else "微量元素平衡已分析。",
         "macro": {"center_value": "0", "center_label": "kcal 日均", "segments": []},
         "micro": {"title": "关键微量元素覆盖", "items": micro_items},
         "daily_trend": [],
-        "insights": report.get("notes", [])[:3],
+        "insights": hints[:3],
     }
