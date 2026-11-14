@@ -1,10 +1,10 @@
 {
   "target": "E:\\RG\\dietary-agent\\agent",
-  "run_at": "2026-11-14T21:21:40",
+  "run_at": "2026-11-14T22:06:53",
   "total": 35,
-  "pass": 31,
-  "fail": 3,
-  "warn": 1,
+  "pass": 35,
+  "fail": 0,
+  "warn": 0,
   "results": [
     {
       "id": "C-01",
@@ -272,8 +272,8 @@
       "title": "实现含 needs_clarification 必须追问",
       "req": "TEST_README 铁律7",
       "expected": "命中",
-      "actual": false,
-      "status": "FAIL",
+      "actual": true,
+      "status": "PASS",
       "note": ""
     },
     {
@@ -292,9 +292,9 @@
       "title": "实现覆盖 FR-19/20（食材口径 vs 菜式口径（双口径分别标注））",
       "req": "FR-19/20",
       "expected": "话术出现在实现中",
-      "actual": "未命中",
-      "status": "FAIL",
-      "note": "agent/*.py + backend/app/services/rule_engine/** 源码中未找到该约束话术"
+      "actual": "命中",
+      "status": "PASS",
+      "note": ""
     },
     {
       "id": "C-37.FR-21",
@@ -322,9 +322,9 @@
       "title": "实现覆盖 FR-29（反向营养用「可能/建议关注」非确定性措辞）",
       "req": "FR-29",
       "expected": "话术出现在实现中",
-      "actual": "未命中",
-      "status": "FAIL",
-      "note": "agent/*.py + backend/app/services/rule_engine/** 源码中未找到该约束话术"
+      "actual": "命中",
+      "status": "PASS",
+      "note": ""
     },
     {
       "id": "C-37.FR-30",
@@ -352,8 +352,8 @@
       "title": "指令需求覆盖缺口汇总",
       "req": "3.2 系统特征",
       "expected": "0 处缺口",
-      "actual": "2 处缺口：['FR-19/20', 'FR-29']",
-      "status": "WARN",
+      "actual": "0 处缺口：[]",
+      "status": "PASS",
       "note": "补话术到 agent 指令 / blocks 模板 / rule_engine 文案后复跑，对应 C-37.* 转 PASS"
     }
   ]
