@@ -37,42 +37,34 @@ class WeeklyRequest(BaseModel):
     hard_constraints: dict | None = None
 
 
-# 活动系数（需求 FR-09：久坐 1.2 / 轻度 1.4 / 中度 1.6 / 重度 1.8；档案未填时按轻度 1.4）
-_PAL = {"久坐": 1.2, "轻度": 1.4, "中度": 1.6, "重度": 1.8}
-
-# 目标能量缺口（需求 FR-10：减脂 −500 / 增肌 +300 / 维持 0；兼容 v1.2 英文目标码）
-_GOAL_DELTA = {
-    "减脂": -500, "fat_loss": -500,
-    "增肌": 300, "muscle_gain": 300,
-    "维持": 0, "maintain": 0,
-    "控糖": 0, "glucose_control": 0,
-    "养胃": 0, "digestive_health": 0,
-}
+# 能量目标口径（后端任务书 v1.2）：BMR × 1.4 固定系数，只作份量量级参考，
+# 不做热量缺口/盈余；v1.2 已删除 activity_level 档案字段，goal 只改结构不改热量。
+_ENERGY_FACTOR = 1.4
 
 
 def _goal_energy(db: Session, user_id: str, override: dict | None) -> float:
-    """能量目标 = BMR(Mifflin-St Jeor) × 活动系数 + 目标缺口（FR-09 / FR-10）。
+    """能量目标 = BMR(Mifflin-St Jeor) × 1.4（固定系数）。
 
-    BUG-05 修复：此前 PAL 误用 1.2/1.375/1.55/1.725 且未实现目标缺口，
-    u_test_001 因此返回 1920.5（= BMR×1.55）；按需求口径应为 BMR×1.6−500≈1482.4。
+    口径依据：后端任务书 v1.2「能量目标 = BMR × 1.4 固定系数，只作份量量级，
+    不做缺口/盈余」。BUG-05：此前 PAL 误写 1.2/1.375/1.55/1.725，会随
+    activity_level 漂移，u_test_001 返回 1920.5（=BMR×1.55）；按 v1.2 应为
+    1239 × 1.4 = 1734.6，且不再随目标类型加减缺口。
     """
     if override and override.get("goal_energy_kcal"):
         return float(override["goal_energy_kcal"])
     row = db.execute(
-        text("SELECT sex, age, height_cm, weight_kg, activity_level, goal FROM app.profile WHERE user_id = :uid"),
+        text("SELECT sex, age, height_cm, weight_kg FROM app.profile WHERE user_id = :uid"),
         {"uid": user_id},
     ).mappings().first()
     if row is None:
         raise BizError(code=BizCode.NOT_FOUND, message=f"用户档案不存在: {user_id}")
-    # Mifflin-St Jeor 估算基础代谢 + PAL 系数（确定性，可复算）
+    # Mifflin-St Jeor 估算基础代谢，乘固定 1.4（确定性，可复算）
     sex_factor = -161 if row["sex"] == "女" else 5
     weight = float(row["weight_kg"] or 60)
     height = float(row["height_cm"] or 165)
     age = int(row["age"] or 20)
     bmr = 10 * weight + 6.25 * height - 5 * age + sex_factor
-    pal = _PAL.get((row["activity_level"] or "").strip(), 1.4)
-    delta = _GOAL_DELTA.get((row["goal"] or "").strip(), 0)
-    return round(bmr * pal + delta, 1)
+    return round(bmr * _ENERGY_FACTOR, 1)
 
 
 def _select_dishes(db: Session, user_id: str, goal: float) -> list[dict]:
