@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { streamChat } from '@/api/agent.js'
-import { normalizeBlocks } from '@/utils/schema.js'
+import { normalizeArtifact } from '@/utils/schema.js'
 import { groupOf, uid } from '@/utils/format.js'
 import { usePanelStore } from './panel.js'
 
@@ -202,24 +202,45 @@ export const useChatStore = defineStore('chat', () => {
         onEvent: (evt) => {
           const payload = evt.data && typeof evt.data === 'object' ? evt.data : {}
 
+          // message：正文增量（v1.2 为 {type:'text', content}）
           if (evt.event === 'message') {
-            if (typeof payload.delta === 'string' && payload.delta) aiMsg.text += payload.delta
-            if (payload.meta) {
-              const blocks = normalizeBlocks(payload.meta)
-              aiMsg.blocks = blocks
-              if (blocks.some((b) => b.type === 'report')) panel.markReportUnread()
+            if (payload.type === 'text' && typeof payload.content === 'string' && payload.content) {
+              aiMsg.text += payload.content
             }
-            if (payload.conversation_id) session.conversationId = payload.conversation_id
+            session.updatedAt = new Date().toISOString()
+          }
+
+          // artifact：结构化产物，按 type 分发到注册表
+          if (evt.event === 'artifact') {
+            if (!payload.type) return
+            const block = normalizeArtifact(payload.type, payload.payload || {})
+            const sameIndex = aiMsg.blocks.findIndex(
+              (b) => b.type === block.type && (!b.raw_id || b.raw_id === block.raw_id)
+            )
+            if (sameIndex >= 0) aiMsg.blocks.splice(sameIndex, 1, block)
+            else aiMsg.blocks.push(block)
+            if (block.type === 'nutrition_report') panel.markReportUnread()
+            session.updatedAt = new Date().toISOString()
+          }
+
+          // clarify：信息不足，后端要求追问
+          if (evt.event === 'clarify') {
+            aiMsg.clarify = {
+              question: payload.question || '还需要补充一些信息',
+              missing_fields: Array.isArray(payload.missing_fields) ? payload.missing_fields : []
+            }
+            if (!aiMsg.text) aiMsg.text = aiMsg.clarify.question
             session.updatedAt = new Date().toISOString()
           }
 
           if (evt.event === 'done') {
             aiMsg.status = 'done'
-            if (Array.isArray(payload.suggestions)) aiMsg.suggestions = payload.suggestions
             if (payload.conversation_id) session.conversationId = payload.conversation_id
+            if (payload.meal_plan_id != null) aiMsg.meal_plan_id = payload.meal_plan_id
             session.updatedAt = new Date().toISOString()
           }
 
+          // error：{code,message}，code 语义与 REST 一致
           if (evt.event === 'error') {
             aiMsg.status = 'error'
             aiMsg.error = payload.message || '生成失败，请重试'

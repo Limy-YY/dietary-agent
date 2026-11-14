@@ -1,334 +1,372 @@
 /**
- * Mock 状态机：模拟 Agent 的「意图路由 + 确定性工具落库」结果。
- * 所有接口返回统一 { code, message, data } 结构。
+ * Mock 状态机（v1.2）：档案 11 字段、方案状态机、清单与报告。
+ * 返回体一律 { code, message, data }，data 直接是对象（列表为分页结构）。
  */
-import { buildPlan, buildShoppingList, buildReport, planSummary, dayInfo, SOURCES } from './data.js'
+import {
+  planToMealCard,
+  planToCurrentPlan,
+  planToShoppingList,
+  toNutritionReport,
+  makeLegacyPlan,
+  buildReport
+} from './v12.js'
+
+const GOALS = ['maintain', 'fat_loss', 'muscle_gain', 'glucose_control', 'digestive_health']
+export const GOAL_NAMES = {
+  maintain: '维持',
+  fat_loss: '减脂',
+  muscle_gain: '增肌',
+  glucose_control: '控糖',
+  digestive_health: '改善肠胃'
+}
+export const CONDITION_IDS = ['hypertension', 'diabetes', 'hyperlipidemia', 'gout']
+export const CONDITION_NAMES = {
+  hypertension: '高血压',
+  diabetes: '糖尿病',
+  hyperlipidemia: '高血脂',
+  gout: '痛风'
+}
+
+function bmrTarget(p) {
+  const isFemale = p.gender !== '男'
+  const bmr = 10 * Number(p.weight_kg) + 6.25 * Number(p.height_cm) - 5 * Number(p.age) + (isFemale ? -161 : 5)
+  return Math.round((bmr * 1.4) / 10) * 10
+}
 
 const DEFAULT_PROFILE = {
-  profile_id: 1,
   user_id: 'demo-user',
-  sex: '女',
+  name: '小膳',
+  avatar: '🍃',
+  gender: '女',
   age: 26,
   height_cm: 158,
   weight_kg: 58,
-  activity_level: 'light',
-  goal: '减脂',
-  allergies: ['花生'],
-  taboos: [],
-  conditions: { 高血压: false, 糖尿病: false, 高血脂: false, 痛风: false },
-  extras: {
-    name: '小膳',
-    avatar: '🍃',
-    cookware: ['灶具', '电饭煲'],
-    religion: ['无'],
-    goals: ['减脂'],
-    target_energy_kcal: 1850
+  goal_code: 'fat_loss',
+  goal_name: GOAL_NAMES.fat_loss,
+  cooking_equipment: ['电饭煲', '炒锅'],
+  conditions: {
+    hypertension: { status: 'confirmed' },
+    diabetes: { status: 'unknown' },
+    hyperlipidemia: { status: 'unknown' },
+    gout: { status: 'unknown' }
   },
-  birth_date: null,
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString()
+  allergies: ['花生'],
+  religious_ethical: [],
+  target_calories: 0
 }
+DEFAULT_PROFILE.target_calories = bmrTarget(DEFAULT_PROFILE)
 
 export const state = {
   profile: JSON.parse(JSON.stringify(DEFAULT_PROFILE)),
-  currentPlan: null,
   plans: [],
-  reports: []
+  currentPlanId: null,
+  planSeq: 101
 }
 
-/* ---------- 档案 ---------- */
+/** 仅 mock 联调使用：把内存状态清回初始值 */
+export function resetState() {
+  state.profile = JSON.parse(JSON.stringify(DEFAULT_PROFILE))
+  state.plans = []
+  state.currentPlanId = null
+  state.planSeq = 101
+  return { ok: true }
+}
+
+/* ---------------- 档案 ---------------- */
+
 export function getProfile() {
   return state.profile
 }
 
+export function normalizeConditions(input) {
+  const out = {}
+  CONDITION_IDS.forEach((id) => {
+    const raw = input && input[id]
+    const status = raw && (typeof raw === 'string' ? raw : raw.status)
+    out[id] = { status: ['confirmed', 'suspected', 'unknown'].includes(status) ? status : 'unknown' }
+  })
+  return out
+}
+
 export function saveProfile(payload) {
-  const next = { ...state.profile, ...payload }
-  next.extras = { ...state.profile.extras, ...(payload.extras || {}) }
-  next.conditions = { ...state.profile.conditions, ...(payload.conditions || {}) }
-  next.allergies = Array.isArray(payload.allergies) ? payload.allergies.filter((x) => x && x !== '无') : state.profile.allergies
-  next.taboos = Array.isArray(payload.taboos) ? payload.taboos.filter((x) => x && x !== '无') : state.profile.taboos
-  // 能量目标：BMR × 1.4（固定活动系数），仅作份量量级参考
-  const isFemale = next.sex !== '男'
-  const bmr = 10 * Number(next.weight_kg) + 6.25 * Number(next.height_cm) - 5 * Number(next.age) + (isFemale ? -161 : 5)
-  next.extras.target_energy_kcal = Math.round((bmr * 1.4) / 10) * 10
-  next.updated_at = new Date().toISOString()
+  const next = { ...state.profile }
+  const writable = [
+    'name', 'avatar', 'gender', 'age', 'height_cm', 'weight_kg',
+    'goal_code', 'cooking_equipment', 'allergies', 'religious_ethical'
+  ]
+  writable.forEach((k) => {
+    if (payload[k] !== undefined) next[k] = payload[k]
+  })
+  if (payload.conditions !== undefined) next.conditions = normalizeConditions(payload.conditions)
+  next.gender = next.gender === '男' ? '男' : '女'
+  next.goal_name = GOAL_NAMES[next.goal_code] || ''
+  next.cooking_equipment = Array.isArray(next.cooking_equipment) ? next.cooking_equipment : []
+  next.allergies = Array.isArray(next.allergies) ? next.allergies.filter((x) => x && x !== '无') : []
+  next.religious_ethical = Array.isArray(next.religious_ethical) ? next.religious_ethical.filter((x) => x && x !== '无') : []
+  // 只读字段：target_calories 由后端按 BMR×1.4 计算，忽略请求体里的值
+  next.target_calories = bmrTarget(next)
   state.profile = next
-  // 档案变更后，当前草稿方案的依据同步更新（模拟 Agent 联动）
-  if (state.currentPlan) {
-    state.currentPlan.goal_text = `${goalText(next)} · 目标 ${next.extras.target_energy_kcal} kcal`
-    state.currentPlan.goal_energy_kcal = next.extras.target_energy_kcal
-  }
   return next
 }
 
-function goalText(profile) {
-  const goals = profile.extras.goals && profile.extras.goals.length ? profile.extras.goals : [profile.goal]
-  return goals.join('、')
-}
+/* ---------------- 方案 ---------------- */
 
-/* ---------- 方案 ---------- */
-export function getCurrentPlan() {
-  return state.currentPlan
-}
-
-export function getPlanById(id) {
-  if (state.currentPlan && state.currentPlan.plan_id === id) return state.currentPlan
-  return state.plans.find((p) => p.plan_id === id) || null
-}
-
-export function listPlans() {
-  return state.plans.map(planSummary)
-}
-
-export function createPlan(planType) {
-  const plan = buildPlan(planType)
-  plan.goal_text = `${goalText(state.profile)} · 目标 ${state.profile.extras.target_energy_kcal} kcal`
-  plan.goal_energy_kcal = state.profile.extras.target_energy_kcal
-  state.currentPlan = plan
-  return plan
-}
-
-export function confirmPlan() {
-  if (!state.currentPlan) return null
-  const plan = state.currentPlan
-  plan.status = 'fixed'
-  plan.executed = false
-  plan.updated_at = new Date().toISOString()
-  const exists = state.plans.findIndex((p) => p.plan_id === plan.plan_id)
-  const copy = JSON.parse(JSON.stringify(plan))
-  if (exists >= 0) state.plans[exists] = copy
-  else state.plans.unshift(copy)
-  return plan
-}
-
-export function swapCandidate(mealLabel) {
-  if (!state.currentPlan) return null
-  const slot = findSlot(mealLabel)
-  if (!slot) return null
-  const cans = slot.candidates || []
-  if (!cans.length) return null
-  const curIdx = cans.findIndex((c) => c.candidate_id === slot.selected_candidate_id)
-  const next = cans[(curIdx + 1) % cans.length]
-  slot.selected_candidate_id = next.candidate_id
-  slot.dishes = JSON.parse(JSON.stringify(next.dishes))
-  slot.kcal = next.kcal
-  slot.macro = {
-    protein_g: Math.round((next.kcal * 0.22) / 4),
-    carb_g: Math.round((next.kcal * 0.5) / 4),
-    fat_g: Math.round((next.kcal * 0.28) / 9)
-  }
-  recalcPlanKcal()
-  state.currentPlan.status = 'draft'
-  state.currentPlan.updated_at = new Date().toISOString()
-  return { slot, candidate: next }
-}
-
-export function chooseCandidate(mealLabel, candidateName) {
-  if (!state.currentPlan) return null
-  const slot = findSlot(mealLabel)
-  if (!slot) return null
-  const cans = slot.candidates || []
-  const target = cans.find((c) => candidateName && candidateName.includes(c.name.replace('方案 ', ''))) || null
-  if (!target) return null
-  slot.selected_candidate_id = target.candidate_id
-  slot.dishes = JSON.parse(JSON.stringify(target.dishes))
-  slot.kcal = target.kcal
-  recalcPlanKcal()
-  state.currentPlan.status = 'draft'
-  return { slot, candidate: target }
-}
-
-function findSlot(mealLabel) {
-  const label = mealLabel || ''
-  const day = state.currentPlan.days[0]
-  if (!day) return null
-  return (
-    day.slots.find((s) => label.includes(s.label)) ||
-    day.slots.find((s) => label.includes(s.meal_type)) ||
-    null
-  )
-}
-
-function recalcPlanKcal() {
-  state.currentPlan.days.forEach((d) => {
-    d.kcal = d.slots.reduce((s, x) => s + x.kcal, 0)
+function adjustDates(legacy, startDate, dayCount) {
+  const base = startDate ? new Date(`${startDate}T00:00:00`) : new Date()
+  legacy.days = legacy.days.slice(0, dayCount).map((d, i) => {
+    const dt = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i)
+    const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+    const md = iso.slice(5)
+    const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][dt.getDay()]
+    return { ...d, iso, date: md, weekday: week, is_today: i === 0 }
   })
+  legacy.days.forEach((d) => {
+    d.kcal = d.slots.reduce((s, x) => s + (Number(x.kcal) || 0), 0)
+  })
+  return legacy
 }
 
-/* ---------- 食材清单 / 报告 ---------- */
-export function getShoppingList(mealPlanId) {
-  const plan = mealPlanId ? getPlanById(mealPlanId) : state.currentPlan
-  if (!plan || plan.status !== 'fixed') return null
-  return buildShoppingList(plan)
+function rangePlanType(start, end) {
+  const s = new Date(`${start}T00:00:00`)
+  const e = new Date(`${end}T00:00:00`)
+  const days = Math.round((e - s) / 86400000) + 1
+  if (start === end) return '日'
+  if (days <= 3) return '多日'
+  if (days === 7) return '周'
+  return '自定义'
 }
 
-export function getNutritionReport({ meal_plan_id, scope } = {}) {
-  if (scope === 'week' || scope === 'month') {
-    return state.reports.find((r) => r.scope === scope) || buildReport(scope)
+export function createPlan({ start_date, end_date, plan_type, goal_code, candidates_per_slot, meal_types }) {
+  const start = start_date
+  const end = end_date
+  const s = new Date(`${start}T00:00:00`)
+  const e = new Date(`${end}T00:00:00`)
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return { error: { code: 1001, message: '日期格式不合法' } }
+  if (e < s) return { error: { code: 1001, message: 'end_date 不能早于 start_date' } }
+  const days = Math.round((e - s) / 86400000) + 1
+  if (days > 31) return { error: { code: 1001, message: '方案跨度上限 31 天' } }
+
+  const type = plan_type || rangePlanType(start, end)
+  if (!['餐', '日', '多日', '周', '自定义'].includes(type)) {
+    return { error: { code: 1001, message: 'plan_type 取值非法' } }
   }
-  // 没指定方案时，优先回已生成过的报告：对话里生成的那份要在右侧面板里能看到
-  if (!meal_plan_id && state.reports.length) return state.reports[0]
-  const plan = meal_plan_id ? getPlanById(meal_plan_id) : state.currentPlan
-  if (!plan || plan.status !== 'fixed') return null
+  if (candidates_per_slot != null) {
+    const n = Number(candidates_per_slot)
+    if (!Number.isInteger(n) || n < 2 || n > 3) {
+      return { error: { code: 1001, message: 'candidates_per_slot 需在 2～3 之间' } }
+    }
+  }
+  if (meal_types != null && (!Array.isArray(meal_types) || !meal_types.length || meal_types.some((t) => !['早', '午', '晚'].includes(t)))) {
+    return { error: { code: 1001, message: 'meal_types 仅支持 早/午/晚 且不能为空' } }
+  }
+
+  // 内容按跨度取模板：单餐用午餐模板，多日/周用周模板，日/自定义按天
+  const templateType = type === '餐' ? 'meal' : type === '日' ? 'day' : 'week'
+  const legacy = makeLegacyPlan(templateType)
+  adjustDates(legacy, start, Math.max(1, days))
+  legacy.plan_type = type === '餐' ? 'meal' : type === '周' ? 'week' : type === '多日' ? 'multi' : 'day'
+  legacy.status = 'candidates'
+  legacy.goal_code = goal_code || state.profile.goal_code
+  legacy.goal_energy_kcal = state.profile.target_calories
+
+  const planId = state.planSeq++
+  const card = planToMealCard(legacy, planId)
+  card.plan_type = type
+  if (meal_types) card.slots = card.slots.filter((s) => meal_types.includes(s.meal_type))
+  if (candidates_per_slot != null) {
+    const n = Number(candidates_per_slot)
+    for (const slot of card.slots) {
+      slot.candidates = slot.candidates.slice(0, n)
+      if (!slot.candidates.some((c) => c.candidate_id === slot.selected_candidate_id)) {
+        slot.selected_candidate_id = slot.candidates[0]?.candidate_id ?? null
+      }
+    }
+  }
+  const record = {
+    id: planId,
+    card,
+    legacy,
+    created_at: new Date().toISOString(),
+    fixed_at: null
+  }
+  state.plans.unshift(record)
+  state.currentPlanId = planId
+  return { plan: card, record }
+}
+
+export function findRecord(planId) {
+  return state.plans.find((p) => String(p.id) === String(planId)) || null
+}
+
+export function currentPlanRecord() {
+  const fixed = state.plans.find((p) => p.card.status === 'fixed')
+  if (fixed) return fixed
+  const candidates = state.plans.find((p) => p.card.status === 'candidates')
+  return candidates || null
+}
+
+export function getCurrentPlanPayload() {
+  const record = currentPlanRecord()
+  if (!record) return null
+  return planToCurrentPlan(record.card)
+}
+
+export function getPlanPayload(planId) {
+  const record = findRecord(planId)
+  return record ? record.card : null
+}
+
+export function listPlans({ page = 1, page_size = 20, status } = {}) {
+  let list = state.plans.slice()
+  if (status) list = list.filter((p) => p.card.status === status)
+  const total = list.length
+  const p = Math.max(1, Number(page) || 1)
+  const size = Math.min(100, Math.max(1, Number(page_size) || 20))
+  const items = list.slice((p - 1) * size, p * size).map((r) => ({
+    meal_plan_id: r.id,
+    plan_type: r.card.plan_type,
+    status: r.card.status,
+    start_date: r.card.start_date,
+    end_date: r.card.end_date,
+    goal_energy_kcal: r.card.goal_energy_kcal,
+    created_at: r.created_at,
+    fixed_at: r.fixed_at
+  }))
+  return { total, page: p, page_size: size, items }
+}
+
+export function swapCandidate({ meal_plan_id, meal_slot_id, candidate_id }) {
+  const record = findRecord(meal_plan_id)
+  if (!record) return { error: { code: 1004, message: '方案不存在' } }
+  if (record.card.status === 'fixed') {
+    return { error: { code: 2005, message: '方案已固定，不能再换候选' } }
+  }
+  const slot = record.card.slots.find((s) => String(s.meal_slot_id) === String(meal_slot_id))
+  if (!slot) return { error: { code: 1004, message: '餐位不存在' } }
+  const current = slot.candidates.find((c) => c.candidate_id === slot.selected_candidate_id) || slot.candidates[0]
+  let next
+  if (candidate_id != null) {
+    next = slot.candidates.find((c) => String(c.candidate_id) === String(candidate_id))
+    if (!next) return { error: { code: 2005, message: '候选不属于该餐位' } }
+  } else {
+    const idx = slot.candidates.indexOf(current)
+    next = slot.candidates[(idx + 1) % slot.candidates.length]
+  }
+  if (!next || next.candidate_id === current.candidate_id) {
+    return { error: { code: 2006, message: '该餐位没有可替换的候选' } }
+  }
+  slot.selected_candidate_id = next.candidate_id
   return {
-    report_id: `report_${plan.plan_id}`,
-    scope: plan.plan_type,
-    headline: `${plan.title} · 营养复盘`,
-    meta: {
-      scope: plan.plan_type,
-      range_start: plan.days[0].date,
-      range_end: plan.days[plan.days.length - 1].date,
-      generated_at: plan.updated_at,
-      valid_days: plan.days.length,
-      total_meals: plan.days.reduce((s, d) => s + d.slots.length, 0),
-      target_kcal: plan.goal_energy_kcal
-    },
-    summary_text: `覆盖 ${plan.days.length} 天，${plan.days.reduce((s, d) => s + d.slots.length, 0)} 餐；7 项关键微量按跨日动态平衡评估。`,
-    ...plan.nutrition
+    meal_plan_id: record.id,
+    meal_slot_id: slot.meal_slot_id,
+    selected_candidate_id: next.candidate_id,
+    candidate: next,
+    macro_delta: {
+      kcal: (next.macro_estimate.kcal || 0) - (current.macro_estimate.kcal || 0),
+      protein_g: (next.macro_estimate.protein_g || 0) - (current.macro_estimate.protein_g || 0)
+    }
   }
 }
 
-export function generateReport(scope) {
-  const report = buildReport(scope)
-  state.reports.unshift(report)
-  return report
-}
-
-/* ---------- 结构化边车（SSE meta.blocks） ---------- */
-
-export function slotView(slot) {
-  return {
-    slot_id: slot.slot_id,
-    meal_type: slot.meal_type,
-    label: slot.label,
-    time: slot.time,
-    color: slot.color,
-    kcal: slot.kcal,
-    oil_g: slot.oil_g,
-    salt_g: slot.salt_g,
-    dish_text: slot.dishes.map((d) => d.name).join(' + '),
-    dish_count: slot.dishes.length,
-    dishes: slot.dishes,
-    candidates: (slot.candidates || []).map((c) => ({
-      candidate_id: c.candidate_id,
-      name: c.name,
-      kcal: c.kcal,
-      desc: c.desc,
-      dishes: c.dishes
-    })),
-    selected_candidate_id: slot.selected_candidate_id,
-    micro: slot.micro_coverage
+export function fixPlan({ meal_plan_id, selections }) {
+  const record = findRecord(meal_plan_id)
+  if (!record) return { error: { code: 1004, message: '方案不存在' } }
+  if (record.card.status === 'fixed') {
+    return { error: { code: 2005, message: '方案已固定，无需重复固定' } }
   }
-}
-
-export function mealCardBlock(plan) {
-  const isWeek = plan.plan_type === 'week'
-  const goal = goalText(state.profile)
-  const firstDay = plan.days[0]
-  const avgKcal = Math.round(plan.days.reduce((s, d) => s + d.kcal, 0) / plan.days.length)
-  const candidateCount = (firstDay.slots[0] && firstDay.slots[0].candidates ? firstDay.slots[0].candidates.length : 0)
-  const subtitle = isWeek
-    ? `目标：${goal} · ${plan.range_text} · 日均约 ${avgKcal} kcal`
-    : plan.plan_type === 'meal'
-      ? `目标：${goal} · 单餐约 ${firstDay.kcal} kcal · ${candidateCount} 个候选`
-      : `目标：${goal} · 全天约 ${firstDay.kcal} kcal`
-  return {
-    type: 'meal_card',
-    plan_id: plan.plan_id,
-    card_id: `card_${plan.plan_id}`,
-    title: isWeek ? '📅 一周食谱' : plan.plan_type === 'meal' ? '🍱 午餐搭配' : '🗓️ 今日食谱',
-    subtitle,
-    scope: plan.plan_type,
-    status: plan.status === 'fixed' ? 'fixed' : plan.plan_type === 'meal' ? 'candidates' : 'draft',
-    goal_text: plan.goal_text,
-    target_kcal: plan.goal_energy_kcal,
-    total_kcal: plan.days[0].kcal,
-    range_text: plan.range_text,
-    slots: isWeek ? [] : plan.days[0].slots.map(slotView),
-    days: isWeek
-      ? plan.days.map((d) => ({
-          date: d.date,
-          weekday: d.weekday,
-          is_today: d.is_today,
-          kcal: d.kcal,
-          slots: d.slots.map(slotView)
-        }))
-      : [],
-    reason: { summary: '按档案与近期微量摄入平衡排出这套方案', points: plan.reason_points },
-    action_scope_label: plan.plan_type === 'week' ? '整周规划' : plan.plan_type === 'meal' ? '这一餐' : '规划'
+  if (Array.isArray(selections) && selections.length) {
+    for (const sel of selections) {
+      const slot = record.card.slots.find((s) => String(s.meal_slot_id) === String(sel.meal_slot_id))
+      if (!slot) return { error: { code: 1001, message: 'selections 中的餐位不存在' } }
+      if (!slot.candidates.some((c) => String(c.candidate_id) === String(sel.candidate_id))) {
+        return { error: { code: 2005, message: '候选不属于该餐位' } }
+      }
+      slot.selected_candidate_id = sel.candidate_id
+    }
   }
-}
-
-export function mealPlanBlock(plan, view) {
-  return {
-    type: 'meal_plan',
-    plan_id: plan.plan_id,
-    view: view || (plan.plan_type === 'week' ? 'week' : 'day'),
-    title: plan.title,
-    subtitle: plan.subtitle,
-    days: plan.days.map((d) => ({
-      date: d.date,
-      weekday: d.weekday,
-      is_today: d.is_today,
-      kcal: d.kcal,
-      slots: d.slots.map(slotView)
-    }))
+  const missing = record.card.slots.filter((s) => !s.selected_candidate_id)
+  if (missing.length) {
+    return { error: { code: 2005, message: '还有餐位未选择候选，不能固定' } }
   }
+  record.card.status = 'fixed'
+  record.fixed_at = new Date().toISOString()
+  return record.card
 }
 
-export function nutritionBlock(plan) {
-  return {
-    type: 'nutrition',
-    plan_id: plan.plan_id,
-    ...plan.nutrition
+/* ---------------- 清单 / 报告 ---------------- */
+
+export function getShoppingListPayload(planId) {
+  const record = findRecord(planId)
+  if (!record) return { error: { code: 1004, message: '方案不存在' } }
+  if (record.card.status !== 'fixed') {
+    return { error: { code: 2005, message: '方案未固定，清单未生成' } }
   }
-}
-
-export function recipeBlock(plan) {
-  return {
-    type: 'recipe_detail',
-    title: `${plan.title} · 详细食谱`,
-    meals: plan.days[0].slots.map((s) => ({
-      label: s.label,
-      time: s.time,
-      color: s.color,
-      kcal: s.kcal,
-      total: s.kcal,
-      dishes: s.dishes.map((d) => ({
-        name: d.name,
-        amount: d.amount,
-        kcal: d.kcal,
-        tip: d.tip,
-        steps: d.steps || []
-      }))
-    }))
+  if (!record.shopping) {
+    const legacyList = {
+      groups: []
+    }
+    const byGroup = []
+    record.legacy.days.forEach((day, di) => {
+      day.slots.forEach((slot) => {
+        (slot.candidates || []).slice(0, 1).forEach((c) => {
+          (c.dishes || []).forEach((d) => {
+            const cat = /菜|瓜|茄|椒|芦笋|木耳|海带|菌|菇|笋|菠菜|芥蓝|空心菜|油麦菜|娃娃菜|包菜|番茄|西兰花|萝卜|白菜/.test(d.name)
+              ? '蔬菜类'
+              : /鸡|牛|猪|鱼|虾|肉|排|三文鱼|鳕鱼|鲈鱼|龙利鱼|鸡胸|鸡腿|排骨|蛋/.test(d.name)
+                ? '肉禽蛋水产'
+                : /米|面|吐司|馒头|红薯|玉米|藜麦|燕麦|小米|麦|饼|面包/.test(d.name)
+                  ? '主食杂粮'
+                  : /豆浆|酸奶|牛奶|豆腐|豆/.test(d.name)
+                    ? '奶豆饮品'
+                    : '其他'
+            let g = byGroup.find((x) => x.category === cat)
+            if (!g) {
+              g = { category: cat, items: [] }
+              byGroup.push(g)
+            }
+            if (!g.items.some((x) => x.name === d.name)) {
+              g.items.push({ name: d.name, amount: d.portion_text || d.amount })
+            }
+          })
+        })
+      })
+    })
+    legacyList.groups = byGroup
+    record.shopping = planToShoppingList({ groups: byGroup, updated_at: record.fixed_at }, record.id)
   }
+  return record.shopping
 }
 
-export function sourcesBlock() {
-  return { type: 'sources', title: '参考来源', items: SOURCES }
-}
-
-export function anchorBlock(items) {
-  return { type: 'anchor', items }
-}
-
-export function shoppingBlock(list) {
-  const total = list.groups.reduce((s, g) => s + g.items.length, 0)
-  return {
-    type: 'shopping_list',
-    title: '食材清单',
-    summary: `共 ${total} 项，分 ${list.groups.length} 组`,
-    groups: list.groups.slice(0, 12)
+export function reportForPlan(planId, { window_days = 7 } = {}) {
+  const record = findRecord(planId)
+  if (!record) return { error: { code: 1004, message: '方案不存在' } }
+  if (!record.report) {
+    const legacyReport = buildReport('week')
+    record.report = toNutritionReport(legacyReport, { planId: record.id, reportId: record.id + 900, windowDays: window_days })
+    record.report.period_start = record.card.start_date
+    record.report.period_end = record.card.end_date
+    const slotCount = record.card.slots.length
+    record.report.completeness = {
+      meal_count: slotCount,
+      known_meal_count: slotCount,
+      missing_meal_count: 0
+    }
   }
+  return record.report
 }
 
-export function reportBlock(report) {
-  return { type: 'report', ...report, expanded: false }
+export function getReportPayload(planId) {
+  const record = findRecord(planId)
+  if (!record) return { error: { code: 1004, message: '方案不存在' } }
+  if (!record.report) return { error: { code: 1004, message: '该方案还没有生成报告' } }
+  return record.report
 }
 
-export const DEMO_USER = {
-  name: DEFAULT_PROFILE.extras.name,
-  goal: goalText(DEFAULT_PROFILE),
-  today: dayInfo(0)
+/* ---------------- 演示数据 ---------------- */
+
+export const DEMO = {
+  GOALS,
+  GOAL_NAMES,
+  CONDITION_IDS,
+  CONDITION_NAMES
 }

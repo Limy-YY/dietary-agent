@@ -1,8 +1,30 @@
-import { state, getProfile, saveProfile, getCurrentPlan, getPlanById, listPlans, createPlan, confirmPlan, swapCandidate, chooseCandidate, getShoppingList, getNutritionReport, generateReport, mealCardBlock, mealPlanBlock, nutritionBlock, recipeBlock, sourcesBlock, anchorBlock, shoppingBlock, reportBlock } from './store.js'
+/**
+ * Mock 后端（v1.2）：SSE 四类事件 + REST 契约路由。
+ * 事件：message{type,content} / artifact{type,payload} / clarify / error / done
+ * 响应：{ code, message, data }，data 直接是对象；列表为 {total,page,page_size,items}
+ */
+import {
+  state,
+  getProfile,
+  saveProfile,
+  createPlan,
+  currentPlanRecord,
+  getCurrentPlanPayload,
+  getPlanPayload,
+  listPlans,
+  swapCandidate,
+  fixPlan,
+  getShoppingListPayload,
+  reportForPlan,
+  getReportPayload,
+  findRecord,
+  GOAL_NAMES,
+  CONDITION_IDS,
+  resetState
+} from './store.js'
 
-const ok = (data) => ({ code: 0, message: 'success', data })
-const fail = (code, message, data = null) => ({ code, message, data })
-const empty = (message) => ({ code: 1004, message, data: null })
+const ok = (data) => ({ code: 0, message: 'ok', data })
+const fail = (code, message) => ({ code, message, data: null })
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -21,156 +43,227 @@ function readBody(req) {
   })
 }
 
-/* ================= 意图路由（模拟 Agent 编排结果） ================= */
-
-function goalText() {
-  const g = state.profile.extras.goals && state.profile.extras.goals.length ? state.profile.extras.goals : [state.profile.goal]
-  return g.join('、')
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
 }
 
-function planIntro(plan) {
-  if (plan.plan_type === 'week') {
-    return `收到！按你的${goalText()}档案排了接下来七天（${plan.range_text}）的三餐，食材尽量不重复：`
+function isoDate(offset = 0) {
+  const d = new Date()
+  const dt = new Date(d.getFullYear(), d.getMonth(), d.getDate() + offset)
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+}
+
+/* ---------------- 意图路由 ---------------- */
+
+function mealLabelOf(message) {
+  if (message.includes('早')) return '早'
+  if (message.includes('晚')) return '晚'
+  return '午'
+}
+
+function findSlotByMeal(record, meal) {
+  if (!record) return null
+  return record.card.slots.find((s) => s.meal_type === meal) || record.card.slots[0] || null
+}
+
+function candidateName(c) {
+  return (c.dishes || []).map((d) => d.name).join(' + ') || `候选 ${c.rank}`
+}
+
+function planIntro(card) {
+  const goal = GOAL_NAMES[card.goal_code] || '均衡'
+  if (card.plan_type === '周') {
+    return `收到！按你的${goal}档案排了接下来七天（${card.start_date} ~ ${card.end_date}）的三餐，每个餐位 2~3 个候选，食材尽量不重复：`
   }
-  if (plan.plan_type === 'meal') {
-    return '午餐给你挑了三个方向，热量都在 620～680 kcal，点一个就能确认：'
+  if (card.plan_type === '餐') {
+    return '这一餐给你挑了三个方向，热量都在参考区间，点一个候选就能确认：'
   }
-  return `收到！已结合你的${goalText()}档案，为你生成了今天的方案：`
+  if (card.plan_type === '多日') {
+    return `按你的${goal}档案排了 ${card.start_date} ~ ${card.end_date} 的方案，按天拆开，候选备好了：`
+  }
+  return `收到！已结合你的${goal}档案，为你生成了今天的方案，候选都在里面：`
+}
+
+function generate(kind) {
+  if (kind === 'week') {
+    return createPlan({ start_date: isoDate(0), end_date: isoDate(6), plan_type: '周' })
+  }
+  if (kind === 'meal') {
+    return createPlan({ start_date: isoDate(0), end_date: isoDate(0), plan_type: '餐' })
+  }
+  if (kind === 'multi') {
+    return createPlan({ start_date: isoDate(0), end_date: isoDate(2), plan_type: '多日' })
+  }
+  return createPlan({ start_date: isoDate(0), end_date: isoDate(0), plan_type: '日' })
+}
+
+function missingProfileFields() {
+  const p = state.profile
+  const miss = []
+  if (!p.gender) miss.push('gender')
+  if (!p.age) miss.push('age')
+  if (!p.height_cm) miss.push('height_cm')
+  if (!p.weight_kg) miss.push('weight_kg')
+  if (!p.goal_code) miss.push('goal_code')
+  return miss
 }
 
 function routeIntent(rawMessage) {
   const message = String(rawMessage || '').trim()
   const has = (re) => re.test(message)
+  const artifacts = []
 
-  /* 1. 换候选 */
+  /* 1. 选候选 */
+  if (has(/选用|就选|选第/)) {
+    const record = currentPlanRecord()
+    if (!record) return { text: '还没有可以选候选的方案，先让我配一份？', artifacts: [] }
+    if (record.card.status === 'fixed') {
+      return { text: '这份方案已经固定，候选不能再改。要调整的话，我们重新配一份。', artifacts: [] }
+    }
+    const slot = findSlotByMeal(record, mealLabelOf(message))
+    const candidate = slot.candidates.find((c) => message.includes(candidateName(c))) || slot.candidates[0]
+    const res = swapCandidate({
+      meal_plan_id: record.id,
+      meal_slot_id: slot.meal_slot_id,
+      candidate_id: candidate.candidate_id
+    })
+    if (res.error) return { text: res.error.message, artifacts: [] }
+    artifacts.push({ type: 'meal_card', payload: getPlanPayload(record.id) })
+    return {
+      text: `${slot.meal_type}餐改成「${candidateName(res.candidate)}」，约 ${res.candidate.macro_estimate.kcal == null ? '—' : res.candidate.macro_estimate.kcal} kcal。方案仍是待确认，确认后才会写进右侧。`,
+      artifacts
+    }
+  }
+
+  /* 2. 换候选 */
   if (has(/换一换|更换|换一餐|换个|换掉/)) {
-    const label = ['早餐', '午餐', '晚餐'].find((l) => message.includes(l)) || '午餐'
-    const res = swapCandidate(label)
-    if (!res) {
-      return {
-        text: '还没有可以先换的方案。要不要我先生成今天的搭配？',
-        blocks: [anchorBlock([{ panel: 'current_plan', label: '查看当前规划' }])]
-      }
+    const record = currentPlanRecord()
+    if (!record) {
+      return { text: '还没有可以先换的方案。要不要我先生成今天的搭配？', artifacts: [] }
     }
-    const plan = getCurrentPlan()
-    const dishText = res.candidate.name.split('·').slice(1).join('·').trim()
+    if (record.card.status === 'fixed') {
+      return { text: '这份方案已经固定，改不了候选。要调整的话，我们重新配一份？', artifacts: [] }
+    }
+    const slot = findSlotByMeal(record, mealLabelOf(message))
+    const res = swapCandidate({ meal_plan_id: record.id, meal_slot_id: slot.meal_slot_id })
+    if (res.error) {
+      return { text: res.error.message, artifacts: [] }
+    }
+    artifacts.push({ type: 'meal_card', payload: getPlanPayload(record.id) })
+    const kcal = res.candidate.macro_estimate.kcal
     return {
-      text: `换好了。${label}换成「${dishText}」，这一餐 ${res.slot.kcal} kcal，油盐没有额外增加。方案还是草稿，确认后才会写进右侧。`,
-      blocks: [mealCardBlock(plan), anchorBlock([{ panel: 'current_plan', label: '查看当前规划' }])]
+      text: `换好了。${slot.meal_type}餐换成「${candidateName(res.candidate)}」，这一餐约 ${kcal == null ? '—' : kcal} kcal（估算值），方案还是未固定状态，确认后才会写进右侧。`,
+      artifacts
     }
   }
 
-  /* 2. 选用某个候选 */
-  if (has(/选用|就用|选这个|选方案/)) {
-    const label = ['早餐', '午餐', '晚餐'].find((l) => message.includes(l)) || '午餐'
-    const res = chooseCandidate(label, message)
-    if (!res) {
-      return { text: '我没听清是哪个候选，可以把候选名称发我，或直接点候选卡片。', blocks: [] }
-    }
-    return {
-      text: `已选定「${res.candidate.name.split('·').slice(1).join('·').trim()}」，${label} ${res.slot.kcal} kcal，总数已经重新算过。`,
-      blocks: [mealCardBlock(getCurrentPlan())]
-    }
-  }
-
-  /* 3. 确认 / 固定 */
+  /* 2. 确认 / 固定 */
   if (has(/确认|固定|就这个|可以了|没问题/)) {
-    const plan = confirmPlan()
-    if (!plan) {
+    const record = currentPlanRecord()
+    if (!record) {
+      return { text: '现在还没有待确认的方案。我可以先按你的档案排今天的三餐，也可以排一周。', artifacts: [] }
+    }
+    if (record.card.status === 'fixed') {
+      const shop = getShoppingListPayload(record.id)
       return {
-        text: '现在还没有待确认的方案。我可以先按你的档案排今天的三餐，也可以排一周。',
-        blocks: [anchorBlock([{ panel: 'current_plan', label: '打开当前规划' }])]
+        text: '这份方案已经固定过了。右侧「当前规划」和「食材清单」里都能回看。',
+        artifacts: [
+          { type: 'meal_card', payload: record.card },
+          ...(shop.error ? [] : [{ type: 'shopping_list', payload: shop }])
+        ]
       }
     }
-    const list = getShoppingList(plan.plan_id)
-    const total = list.groups.reduce((s, g) => s + g.items.length, 0)
+    const fixed = fixPlan({ meal_plan_id: record.id })
+    if (fixed.error) {
+      return { text: fixed.error.message, artifacts: [] }
+    }
+    const shop = getShoppingListPayload(record.id)
+    const total = shop.total_items || 0
     return {
-      text: `已确认，方案已生效。右侧「当前规划」和「食材清单」同步完成，清单共 ${total} 项，按类别分好了。`,
-      blocks: [
-        mealCardBlock(plan),
-        shoppingBlock(list),
-        anchorBlock([
-          { panel: 'current_plan', label: '当前规划' },
-          { panel: 'grocery', label: '食材清单' },
-          { panel: 'history', label: '历史方案' }
-        ])
+      text: `已固定，方案生效。右侧「当前规划」和「食材清单」同步完成，清单共 ${total} 项，按类别分好了（数量为估算值）。`,
+      artifacts: [
+        { type: 'meal_card', payload: fixed },
+        ...(shop.error ? [] : [{ type: 'shopping_list', payload: shop }])
       ]
     }
   }
 
-  /* 4. 膳食报告 */
+  /* 3. 膳食报告 */
   if (has(/报告|复盘/)) {
-    const scope = has(/月|30天|30 天/) ? 'month' : 'week'
-    const report = generateReport(scope)
+    const record = currentPlanRecord()
+    if (!record) {
+      return { text: '还没有可复盘的方案。先让我给你配一份，再生成报告？', artifacts: [] }
+    }
+    const report = reportForPlan(record.id)
+    if (report.error) return { text: report.error.message, artifacts: [] }
+    const completeness = report.completeness || {}
     return {
-      text: `已为你生成${scope === 'week' ? '上周' : '本月'}膳食报告，覆盖 ${report.meta.valid_days} 天、${report.meta.total_meals} 餐。点「展开查看」看完整分析，右侧「膳食报告」里也能回看。`,
-      blocks: [reportBlock(report), sourcesBlock(), anchorBlock([{ panel: 'report', label: '打开膳食报告' }])]
+      text: `已按方案生成 ${record.card.start_date} ~ ${record.card.end_date} 的膳食报告，覆盖 ${completeness.meal_count || 0} 餐。点「展开查看」看完整分析，右侧「膳食报告」里也能回看；月/周口径暂只支持方案级报告。`,
+      artifacts: [
+        { type: 'nutrition_report', payload: report },
+        { type: 'meal_card', payload: record.card }
+      ]
     }
   }
 
-  /* 5. 看完整食谱 */
-  if (has(/完整食谱|详细食谱|做法|步骤/)) {
-    const plan = getCurrentPlan()
-    if (!plan) return { text: '还没有方案可以展开。要先排今天的三餐吗？', blocks: [] }
-    return {
-      text: '完整食谱在下面，每道菜都有估量、热量和做法。份量按身高体重估算，只作参考。',
-      blocks: [mealPlanBlock(plan), nutritionBlock(plan), sourcesBlock()]
-    }
-  }
-
-  /* 6. 食材清单 */
+  /* 4. 食材清单 */
   if (has(/食材|清单|买菜|采购/)) {
-    const list = getShoppingList()
-    if (!list) return { text: '方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类。', blocks: [anchorBlock([{ panel: 'grocery', label: '打开食材清单' }])] }
+    const record = currentPlanRecord()
+    if (!record) {
+      return { text: '还没有方案，清单自然也没有。先让我按你的档案配一份？', artifacts: [] }
+    }
+    const shop = getShoppingListPayload(record.id)
+    if (shop.error) {
+      return { text: '方案还没固定，清单暂时是空的。确认方案后我就按类别拆好食材。', artifacts: [] }
+    }
     return {
-      text: `清单已经整理好，共 ${list.groups.reduce((s, g) => s + g.items.length, 0)} 项，按类别分好了。`,
-      blocks: [shoppingBlock(list), anchorBlock([{ panel: 'grocery', label: '打开食材清单' }])]
+      text: `清单已经整理好，共 ${shop.total_items} 项，按类别分好了。数量是估算值，按实际采购调整。`,
+      artifacts: [{ type: 'shopping_list', payload: shop }]
     }
   }
 
-  /* 7. 一周 / 单餐 / 一日三餐 */
-  if (has(/一周|七天|7天|整周|一周食谱/)) {
-    const plan = createPlan('week')
-    return { text: planIntro(plan), blocks: [mealCardBlock(plan), nutritionBlock(plan), sourcesBlock(), anchorBlock([{ panel: 'current_plan', label: '查看当前规划' }])] }
+  /* 5. 生成方案 */
+  if (has(/一周|七天|7天|整周/)) {
+    const res = generate('week')
+    if (res.error) return { text: res.error.message, artifacts: [] }
+    artifacts.push({ type: 'meal_card', payload: res.plan })
+    return { text: planIntro(res.plan), artifacts }
+  }
+  if (has(/三天|3天|这三天|多日/)) {
+    const res = generate('multi')
+    if (res.error) return { text: res.error.message, artifacts: [] }
+    artifacts.push({ type: 'meal_card', payload: res.plan })
+    return { text: planIntro(res.plan), artifacts }
   }
   if (has(/一餐|推荐|午餐|晚餐|早餐/) && !has(/三餐|一日/)) {
-    const plan = createPlan('meal')
-    return { text: planIntro(plan), blocks: [mealCardBlock(plan)] }
+    const res = generate('meal')
+    if (res.error) return { text: res.error.message, artifacts: [] }
+    artifacts.push({ type: 'meal_card', payload: res.plan })
+    return { text: planIntro(res.plan), artifacts }
   }
   if (has(/三餐|一日|今天|明天|吃什么|搭配/)) {
-    const plan = createPlan('day')
-    return { text: planIntro(plan), blocks: [mealCardBlock(plan), nutritionBlock(plan), sourcesBlock(), anchorBlock([{ panel: 'current_plan', label: '查看当前规划' }])] }
+    const res = generate('day')
+    if (res.error) return { text: res.error.message, artifacts: [] }
+    artifacts.push({ type: 'meal_card', payload: res.plan })
+    return { text: planIntro(res.plan), artifacts }
   }
 
-  /* 8. 微量 / 症状咨询 */
+  /* 6. 微量 / 症状咨询（纯文本 + 就医提示） */
   if (has(/微量|营养|缺什么|乏力|掉发|头晕|抽筋|便秘/)) {
     return {
-      text: '先说结论：单看一份食谱判断不了你身上的具体症状，但可以从你近七天的摄入趋势看缺口。你日记里维生素 C 和钙的达标天数偏少，先按方案把这两项补上，观察 2～4 周。如果症状持续或加重，建议直接就医，别靠调整饮食硬扛。',
-      blocks: [
-        {
-          type: 'medical_hint',
-          level: 'warn',
-          title: '这不是医学诊断',
-          text: '营养建议只作饮食参考，不能替代检查与诊断。出现持续乏力、明显掉发、心慌等情况，请先到正规医院就诊。',
-          action_label: '查看参考来源'
-        },
-        sourcesBlock()
-      ]
+      text: '先说结论：单看一份食谱判断不了你身上的具体症状，但可以从近七天的摄入趋势看缺口。你的记录里维生素 C 和钙的达标天数偏少，先按方案把这两项补上，观察 2～4 周。如果症状持续或加重，建议直接就医，别靠调整饮食硬扛。',
+      artifacts: []
     }
   }
 
-  /* 9. 兜底闲聊 */
+  /* 7. 兜底 */
   return {
     text: '这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告，这几件事我做得稳一些。',
-    blocks: [anchorBlock([{ panel: 'current_plan', label: '当前规划' }, { panel: 'report', label: '膳食报告' }])]
+    artifacts: []
   }
 }
 
-/* ================= SSE ================= */
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms))
-}
+/* ---------------- SSE ---------------- */
 
 async function streamChat(req, res, body) {
   res.writeHead(200, {
@@ -186,147 +279,252 @@ async function streamChat(req, res, body) {
   }
 
   const conversationId = body.conversation_id || `conv_${Date.now()}`
-  const result = routeIntent(body.message)
+  const text = String(body.message || '')
+  const missing = missingProfileFields()
+  const wantsPlan = /三餐|一日|今天|明天|吃什么|搭配|一周|七天|整周|一餐|推荐|午餐|晚餐|早餐/.test(text)
 
-  send('message', { conversation_id: conversationId, delta: '' })
-  await sleep(220)
-
-  // 正文增量：按 4～8 字切片，模拟 token 流
-  const text = result.text || ''
-  let i = 0
-  while (i < text.length) {
-    const step = 3 + Math.floor(Math.random() * 5)
-    send('message', { delta: text.slice(i, i + step) })
-    i += step
-    await sleep(28)
-  }
-
-  // 结构化边车：正文结束后一次性下发
-  if (result.blocks && result.blocks.length) {
-    await sleep(60)
-    send('message', { meta: { blocks: result.blocks }, conversation_id: conversationId })
-  }
-
-  send('done', { conversation_id: conversationId, message_id: `msg_${Date.now()}`, finish_reason: 'stop', suggestions: buildSuggestions(result.blocks) })
-  res.end()
-}
-
-function buildSuggestions(blocks) {
-  const types = (blocks || []).map((b) => b.type)
-  if (types.includes('meal_card')) return ['换一换', '看完整食谱', '确认当前方案']
-  if (types.includes('report')) return ['生成月膳食报告', '看看食材清单']
-  return ['生成一日三餐', '生成一周食谱', '推荐一餐搭配']
-}
-
-/* ================= HTTP 入口 ================= */
-
-async function handle(req, res, pathname, searchParams) {
-  const token = req.headers['authorization']
-  if (!token) {
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify(fail(1002, '登录状态已失效，请重新登录')))
+  // 信息不足必须先追问，符合「needs_clarification 必须追问」
+  if (wantsPlan && missing.length) {
+    send('clarify', {
+      question: '配餐前还需要你补充几项档案信息：' + missing.join('、'),
+      missing_fields: missing
+    })
+    send('done', { conversation_id: conversationId, meal_plan_id: null, finish_reason: 'clarify' })
+    res.end()
     return
   }
 
+  const result = routeIntent(text)
+  const chunks = []
+  let i = 0
+  while (i < result.text.length) {
+    const step = 3 + Math.floor(Math.random() * 5)
+    chunks.push(result.text.slice(i, i + step))
+    i += step
+  }
+  for (const chunk of chunks) {
+    send('message', { type: 'text', content: chunk })
+    await sleep(24)
+  }
+
+  let mealPlanId = null
+  for (const art of result.artifacts || []) {
+    await sleep(50)
+    send('artifact', { type: art.type, payload: art.payload })
+    if (art.type === 'meal_card' && art.payload && art.payload.meal_plan_id != null) {
+      mealPlanId = art.payload.meal_plan_id
+    }
+  }
+
+  send('done', {
+    conversation_id: conversationId,
+    meal_plan_id: mealPlanId,
+    finish_reason: 'stop'
+  })
+  res.end()
+}
+
+/* ---------------- HTTP ---------------- */
+
+async function handle(req, res, pathname, searchParams) {
+  const token = req.headers['authorization']
   const json = (payload, status = 200) => {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify(payload))
   }
 
-  /* ---- 对话（SSE） ---- */
+  /* 仅 mock：联调前清状态（不在契约内） */
+  if (pathname === '/__reset' && req.method === 'POST') {
+    json(ok(resetState()))
+    return
+  }
+
+  if (!token) {
+    json(fail(1002, '登录状态已失效，请重新登录'))
+    return
+  }
+
+  /* 对话 */
   if (pathname === '/agent/chat' && req.method === 'POST') {
     const body = await readBody(req)
     if (!body.message || !String(body.message).trim()) {
-      json(fail(2002, 'message 不能为空'))
+      json(fail(1001, 'message 不能为空'))
       return
     }
     await streamChat(req, res, body)
     return
   }
 
-  /* ---- 档案 ---- */
+  /* 档案 */
   if (pathname === '/profile' && req.method === 'GET') {
-    await sleep(80)
-    json(ok({ profile: getProfile() }))
+    await sleep(60)
+    json(ok(getProfile()))
     return
   }
   if (pathname === '/profile' && req.method === 'PUT') {
     const body = await readBody(req)
-    if (body.height_cm !== undefined && !(Number(body.height_cm) >= 100 && Number(body.height_cm) <= 230)) {
-      json(fail(2002, '身高需在 100～230 cm 之间'))
+    const gender = body.gender
+    if (gender !== undefined && !['男', '女'].includes(gender)) {
+      json(fail(1001, 'gender 只能取 男/女'))
+      return
+    }
+    if (body.age !== undefined && !(Number(body.age) >= 10 && Number(body.age) <= 100)) {
+      json(fail(1001, 'age 需在 10～100 岁之间'))
+      return
+    }
+    if (body.height_cm !== undefined && !(Number(body.height_cm) >= 120 && Number(body.height_cm) <= 220)) {
+      json(fail(1001, 'height_cm 需在 120～220 cm 之间'))
       return
     }
     if (body.weight_kg !== undefined && !(Number(body.weight_kg) >= 30 && Number(body.weight_kg) <= 200)) {
-      json(fail(2002, '体重需在 30～200 kg 之间'))
+      json(fail(1001, 'weight_kg 需在 30～200 kg 之间'))
       return
     }
-    if (body.age !== undefined && !(Number(body.age) >= 12 && Number(body.age) <= 100)) {
-      json(fail(2002, '年龄需在 12～100 岁之间'))
+    if (body.goal_code !== undefined && !Object.keys(GOAL_NAMES).includes(body.goal_code)) {
+      json(fail(1001, 'goal_code 不在 goal_structure_map 值域内'))
       return
     }
-    await sleep(120)
-    json(ok({ profile: saveProfile(body) }))
+    if (body.conditions !== undefined) {
+      const bad = CONDITION_IDS.some((id) => {
+        const raw = body.conditions[id]
+        if (!raw) return false
+        const st = typeof raw === 'string' ? raw : raw.status
+        return st !== undefined && !['confirmed', 'suspected', 'unknown'].includes(st)
+      })
+      if (bad) {
+        json(fail(1001, 'conditions.status 只能是 confirmed/suspected/unknown'))
+        return
+      }
+    }
+    await sleep(100)
+    json(ok(saveProfile(body)))
     return
   }
 
-  /* ---- 方案 ---- */
+  /* 方案 */
   if (pathname === '/meal-plan/current' && req.method === 'GET') {
-    await sleep(80)
-    const plan = getCurrentPlan()
-    if (!plan) {
-      json(empty('还没有生效的方案，先和膳宝聊一句试试'))
-      return
-    }
-    json(ok({ plan }))
+    await sleep(60)
+    json(ok(getCurrentPlanPayload()))
     return
   }
   if (pathname === '/meal-plan/list' && req.method === 'GET') {
-    await sleep(80)
-    json(ok({ plans: listPlans() }))
+    await sleep(60)
+    json(ok(listPlans({
+      page: searchParams.get('page') || 1,
+      page_size: searchParams.get('page_size') || 20,
+      status: searchParams.get('status') || undefined
+    })))
     return
   }
+  if (pathname === '/meal-plan/week/generate' && req.method === 'POST') {
+    const body = await readBody(req)
+    if (!body.start_date || !body.end_date) {
+      json(fail(1001, 'start_date / end_date 必填'))
+      return
+    }
+    const resPlan = createPlan(body)
+    if (resPlan.error) {
+      json(fail(resPlan.error.code, resPlan.error.message))
+      return
+    }
+    await sleep(60)
+    json(ok(resPlan.plan))
+    return
+  }
+  if (pathname === '/meal-plan/candidate/swap' && req.method === 'POST') {
+    const body = await readBody(req)
+    if (body.meal_plan_id == null || body.meal_slot_id == null) {
+      json(fail(1001, 'meal_plan_id / meal_slot_id 必填'))
+      return
+    }
+    const result = swapCandidate(body)
+    if (result.error) {
+      json(fail(result.error.code, result.error.message))
+      return
+    }
+    json(ok(result))
+    return
+  }
+  if (pathname === '/meal-plan/week/fix' && req.method === 'POST') {
+    const body = await readBody(req)
+    if (body.meal_plan_id == null) {
+      json(fail(1001, 'meal_plan_id 必填'))
+      return
+    }
+    const result = fixPlan(body)
+    if (result.error) {
+      json(fail(result.error.code, result.error.message))
+      return
+    }
+    json(ok(result))
+    return
+  }
+
   const planMatch = pathname.match(/^\/meal-plan\/([^/]+)$/)
   if (planMatch && req.method === 'GET' && !['current', 'list'].includes(planMatch[1])) {
-    await sleep(80)
-    const plan = getPlanById(decodeURIComponent(planMatch[1]))
+    await sleep(60)
+    const plan = getPlanPayload(decodeURIComponent(planMatch[1]))
     if (!plan) {
-      json(empty('这个方案不存在，可能已经被删掉了'))
+      json(fail(1004, '方案不存在'))
       return
     }
-    json(ok({ plan }))
+    json(ok(plan))
     return
   }
 
-  /* ---- 食材清单 ---- */
+  /* 食材清单 */
   if (pathname === '/shopping-list' && req.method === 'GET') {
-    await sleep(90)
-    const list = getShoppingList(searchParams.get('meal_plan_id') || undefined)
-    if (!list) {
-      json(empty('方案确认后才会生成食材清单'))
+    const planId = searchParams.get('meal_plan_id')
+    if (!planId) {
+      json(fail(1001, 'meal_plan_id 必填'))
       return
     }
-    json(ok({ shopping_list: list }))
+    const list = getShoppingListPayload(planId)
+    if (list.error) {
+      json(fail(list.error.code, list.error.message))
+      return
+    }
+    json(ok(list))
     return
   }
 
-  /* ---- 膳食报告 ---- */
+  /* 营养分析与报告 */
+  if (pathname === '/nutrition/analysis' && req.method === 'POST') {
+    const body = await readBody(req)
+    if (body.meal_plan_id == null) {
+      json(fail(1001, 'meal_plan_id 必填'))
+      return
+    }
+    const windowDays = Number(body.window_days) || 7
+    if (windowDays < 3 || windowDays > 30) {
+      json(fail(1001, 'window_days 需在 3～30 之间'))
+      return
+    }
+    const report = reportForPlan(body.meal_plan_id, { window_days: windowDays })
+    if (report.error) {
+      json(fail(report.error.code, report.error.message))
+      return
+    }
+    json(ok(report))
+    return
+  }
   if (pathname === '/nutrition/report' && req.method === 'GET') {
-    await sleep(90)
-    const report = getNutritionReport({
-      meal_plan_id: searchParams.get('meal_plan_id') || undefined,
-      scope: searchParams.get('scope') || undefined
-    })
-    if (!report) {
-      json(empty('还没有可复盘的方案，先确认一份规划吧'))
+    const planId = searchParams.get('meal_plan_id')
+    if (!planId) {
+      json(fail(1001, 'meal_plan_id 必填'))
       return
     }
-    json(ok({ report }))
+    const report = getReportPayload(planId)
+    if (report.error) {
+      json(fail(report.error.code, report.error.message))
+      return
+    }
+    json(ok(report))
     return
   }
 
-  /* ---- 健康检查 ---- */
   if (pathname === '/health') {
-    json(ok({ status: 'ok', mock: true }))
+    json(ok({ status: 'ok', mock: true, contract: 'v1.2' }))
     return
   }
 
@@ -341,7 +539,6 @@ export default function mockPlugin() {
       server.middlewares.use('/api', (req, res, next) => {
         const url = new URL(req.url || '/', 'http://127.0.0.1')
         handle(req, res, url.pathname, url.searchParams).catch((e) => {
-          // 兜底：避免 Mock 异常打断前端联调
           if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' })
             res.end(JSON.stringify(fail(2500, `Mock 内部错误：${e.message}`)))

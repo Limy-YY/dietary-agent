@@ -30,3 +30,9 @@ const dash = computed(() => {
   return `${(circumference.value * pct) / 100} ${circumference.value}`
 })
 </script>
+
+<style scoped>
+.micro-ring .progress.neutral {
+  stroke: var(--chart-empty);
+}
+</style>

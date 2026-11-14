@@ -16,11 +16,11 @@
         </div>
         <div v-for="(it, ii) in g.items" :key="it.item_id || ii" class="grocery-item" style="cursor: default">
           <span class="gi-name">{{ it.name }}</span>
-          <span v-if="it.is_staple" class="staple-tag">主食</span>
           <span class="gi-amount">{{ it.amount }}</span>
         </div>
       </div>
-      <div v-if="!groups.length" class="card-sub">清单还是空的，确认方案后我按三餐归好类。</div>
+      <div v-if="!groups.length" class="card-sub">清单还是空的，确认方案后我按类别归好。</div>
+      <div v-if="groups.length" class="grocery-note">数量为估算量，按实际采购调整；粮油等常备品类按家中存量自行增减。</div>
     </div>
 
     <div class="card-foot">
@@ -41,9 +41,21 @@ const props = defineProps({ block: { type: Object, required: true } })
 const panel = usePanelStore()
 
 const groups = computed(() => normalizeGroups(props.block.groups))
-const total = computed(() => groups.value.reduce((s, g) => s + g.items.length, 0))
+const total = computed(() => {
+  if (props.block.total_items != null) return props.block.total_items
+  return groups.value.reduce((s, g) => s + g.items.length, 0)
+})
 
 function openPanel() {
   panel.open('grocery')
 }
 </script>
+
+<style scoped>
+.grocery-note {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-sub);
+  line-height: 1.6;
+}
+</style>

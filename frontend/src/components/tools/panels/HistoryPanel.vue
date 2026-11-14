@@ -7,21 +7,19 @@
     </div>
 
     <template v-else-if="plans.length">
-      <div class="report-archive-section-title">共 {{ plans.length }} 份方案</div>
+      <div class="report-archive-section-title">共 {{ total }} 份方案</div>
 
       <div v-for="p in plans" :key="p.plan_id" class="history-plan" @click="view(p)">
         <div style="min-width: 0">
           <div class="plan-title">{{ p.title }}</div>
-          <div class="plan-range">{{ p.range_text }}</div>
+          <div class="plan-range">{{ p.range_text }} · {{ p.created_text }}</div>
         </div>
-        <label class="plan-action-row" @click.stop>
-          <input type="checkbox" :checked="executedMap[p.plan_id]" @change="toggleExecuted(p, $event.target.checked)" />
-          <div class="plan-checkbox"></div>
-          <span class="plan-status-text">{{ executedMap[p.plan_id] ? '已执行' : '未执行' }}</span>
-        </label>
+        <span class="type-tag" :class="p.status === 'fixed' ? 'live' : 'archive'">{{ p.status_label }}</span>
       </div>
 
-      <div class="panel-note">勾选可以标记这份方案是否已经执行过。</div>
+      <div v-if="total > plans.length" class="panel-note">
+        已显示 {{ plans.length }}/{{ total }} 份，回到面板顶部可重新加载。
+      </div>
     </template>
 
     <template v-else-if="error">
@@ -32,18 +30,20 @@
       <EmptyState
         icon="🗂️"
         title="还没有历史方案"
-        desc="确认过的配餐方案会按周归档在这里，
+        desc="生成过的配餐方案会归档在这里，
 方便你回看当时怎么吃的。"
+        :actions="[{ icon: '🥗', label: '生成一日三餐', desc: '先让智能体为你配餐', phrase: '生成一日三餐' }]"
+        @action="onAction"
       />
     </template>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchPlanList, fetchPlanById } from '@/api/mealPlan.js'
-import { normalizePlan } from '@/utils/schema.js'
+import { normalizeMealCard, planTypeTitle, STATUS_LABELS } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
 import { usePanelStore } from '@/stores/panel.js'
 import { useChatStore } from '@/stores/chat.js'
@@ -57,19 +57,29 @@ const ui = useUi()
 const loading = ref(false)
 const error = ref('')
 const plans = ref([])
-const executedMap = reactive({})
-const updatedText = computed(() => (plans.value[0]?.created_at ? fmtDateTime(plans.value[0].created_at) : '—'))
+const total = ref(0)
 
-function toggleExecuted(p, checked) {
-  executedMap[p.plan_id] = checked
-  ElMessage(checked ? '已标记为已执行' : '已取消执行标记')
+function summaryView(item) {
+  return {
+    plan_id: item.meal_plan_id,
+    plan_type: item.plan_type,
+    title: planTypeTitle(item.plan_type),
+    range_text:
+      item.start_date && item.end_date ? `${item.start_date} ~ ${item.end_date}` : '—',
+    status: item.status || 'draft',
+    status_label: STATUS_LABELS[item.status] || '草稿',
+    created_text: item.created_at ? fmtDateTime(item.created_at) : '—',
+    goal_energy_kcal: item.goal_energy_kcal
+  }
 }
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    plans.value = await fetchPlanList()
+    const page = await fetchPlanList({ page: 1, pageSize: 20 })
+    plans.value = (page.items || []).map(summaryView)
+    total.value = page.total || plans.value.length
   } catch (e) {
     error.value = e.message || '历史方案加载失败'
     plans.value = []
@@ -85,9 +95,9 @@ async function view(p) {
       ElMessage('这份方案已经找不到了')
       return
     }
-    const plan = normalizePlan(raw)
+    const plan = normalizeMealCard(raw)
     ui.recipePayload = {
-      title: `${plan.title} · ${plan.range_text || ''}`.trim(),
+      title: `${planTypeTitle(plan.plan_type)} · ${plan.range_text}`.trim(),
       meals: plan.days.flatMap((d) =>
         d.slots.map((s) => ({ label: `${dayLabel(d)} ${s.label}`, time: s.time, kcal: s.kcal, dishes: s.dishes }))
       )

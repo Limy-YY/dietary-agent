@@ -8,14 +8,9 @@
 <script setup>
 import { computed } from 'vue'
 import MealCardBlock from './blocks/MealCardBlock.vue'
-import MealPlanBlock from './blocks/MealPlanBlock.vue'
-import NutritionBlock from './blocks/NutritionBlock.vue'
 import ReportBlock from './blocks/ReportBlock.vue'
-import SourcesBlock from './blocks/SourcesBlock.vue'
-import MedicalHintBlock from './blocks/MedicalHintBlock.vue'
-import AnchorBlock from './blocks/AnchorBlock.vue'
-import RecipeDetailBlock from './blocks/RecipeDetailBlock.vue'
 import ShoppingBlock from './blocks/ShoppingBlock.vue'
+import CurrentPlanBlock from './blocks/CurrentPlanBlock.vue'
 import FallbackBlock from './blocks/FallbackBlock.vue'
 
 const props = defineProps({ block: { type: Object, required: true } })
@@ -27,14 +22,9 @@ defineEmits(['phrase'])
  */
 const REGISTRY = {
   meal_card: MealCardBlock,
-  meal_plan: MealPlanBlock,
-  recipe_detail: RecipeDetailBlock,
   shopping_list: ShoppingBlock,
-  nutrition: NutritionBlock,
-  report: ReportBlock,
-  sources: SourcesBlock,
-  medical_hint: MedicalHintBlock,
-  anchor: AnchorBlock
+  current_plan: CurrentPlanBlock,
+  nutrition_report: ReportBlock
 }
 
 const comp = computed(() => REGISTRY[props.block.type] || null)

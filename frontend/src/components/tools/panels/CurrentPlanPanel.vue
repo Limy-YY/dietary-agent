@@ -7,31 +7,31 @@
     </div>
 
     <template v-else-if="plan">
-      <div class="data-timestamp">🕒 方案更新于 {{ updatedText }}</div>
+      <div class="data-timestamp">🕒 {{ plan.status === 'fixed' ? '固定于' : '更新于' }} {{ updatedText }}</div>
 
       <div class="plan-overview">
         <div class="po-head">
           <div>
             <div class="po-title">{{ plan.title || '当前规划' }}</div>
-            <div class="po-target">{{ plan.goal_text || plan.subtitle }}</div>
+            <div class="po-target">{{ plan.range_text }}</div>
           </div>
-          <span class="type-tag" :class="isFixed ? 'live' : 'archive'">{{ isFixed ? '已生效' : '草稿' }}</span>
+          <span class="type-tag" :class="isFixed ? 'live' : 'archive'">{{ isFixed ? '已生效' : '待确认' }}</span>
         </div>
         <div class="po-cal-compact">
-          <span class="num">{{ firstDayKcal }}</span>
-          <span class="unit">kcal {{ target ? `/ 目标 ${target}` : '' }}</span>
+          <span class="num">{{ fmtNum(plan.goal_energy_kcal) }}</span>
+          <span class="unit">kcal 目标</span>
         </div>
       </div>
 
       <div
         v-for="(day, di) in plan.days"
-        :key="day.date + di"
+        :key="day.iso + di"
         class="plan-day"
         :class="{ open: openDay === di }"
       >
         <div class="plan-day-head" @click="openDay = openDay === di ? -1 : di">
           <span class="pd-label">{{ day.is_today ? '今天' : day.weekday }} · {{ day.date }}</span>
-          <span class="pd-kcal">{{ day.kcal }} kcal</span>
+          <span class="pd-kcal">{{ fmtNum(day.kcal) }} kcal</span>
           <span class="pd-chevron">▾</span>
         </div>
         <div class="plan-day-body">
@@ -40,8 +40,8 @@
               <tbody>
                 <tr v-for="(slot, si) in day.slots" :key="si">
                   <td class="mt-meal">{{ slot.label }}</td>
-                  <td class="mt-dish">{{ slot.dish_text }}</td>
-                  <td class="mt-kcal"><span class="num">{{ slot.kcal }}</span></td>
+                  <td class="mt-dish">{{ slot.dish_text || '—' }}</td>
+                  <td class="mt-kcal"><span class="num">{{ fmtNum(slot.kcal) }}</span></td>
                 </tr>
               </tbody>
             </table>
@@ -51,6 +51,7 @@
 
       <div class="plan-actions">
         <button class="plan-btn-secondary" @click="openRecipe">看完整食谱</button>
+        <button v-if="!isFixed" class="fix-btn" @click="send('确认当前方案')">确认方案</button>
       </div>
     </template>
 
@@ -62,10 +63,10 @@
       <EmptyState
         icon="📅"
         title="暂无进行中的规划"
-        desc="你还没有确认今天的食谱。
-配餐并确认后，可在这里查看详细食谱和成分。"
+        desc="还没有固定下来的方案。
+配餐并确认后，可在这里查看每一餐的菜品与热量。"
         :actions="[{ icon: '✨', label: '生成一日三餐', desc: '先让智能体为你配餐并确认', phrase: '生成一日三餐' }]"
-        hint="💡 生成食谱后，记得在对话框或卡片中点击 <b>“确认规划”</b>，这里才会更新哦。"
+        hint="💡 生成后记得在卡片或这里点 <b>“确认方案”</b>，方案固定后才会更新。"
         @action="onAction"
       />
     </template>
@@ -75,7 +76,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { fetchCurrentPlan } from '@/api/mealPlan.js'
-import { normalizePlan } from '@/utils/schema.js'
+import { fmtNum, normalizeCurrentPlan } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
 import { usePanelStore } from '@/stores/panel.js'
 import { useChatStore } from '@/stores/chat.js'
@@ -92,16 +93,18 @@ const plan = ref(null)
 const openDay = ref(0)
 
 const isFixed = computed(() => plan.value?.status === 'fixed')
-const target = computed(() => plan.value?.target_kcal || 0)
-const firstDayKcal = computed(() => (plan.value?.days?.[0]?.kcal ? plan.value.days[0].kcal : plan.value?.total_kcal || 0))
-const updatedText = computed(() => (plan.value?.updated_at ? fmtDateTime(plan.value.updated_at) : '—'))
+const updatedText = computed(() => {
+  const t = plan.value?.fixed_at
+  return t ? fmtDateTime(t) : '—'
+})
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
     const raw = await fetchCurrentPlan()
-    plan.value = raw ? normalizePlan(raw) : null
+    const view = raw ? normalizeCurrentPlan(raw) : null
+    plan.value = view && view.has_plan ? view.plan : null
     openDay.value = Math.max(0, plan.value?.days?.findIndex((d) => d.is_today) ?? 0)
   } catch (e) {
     error.value = e.message || '方案加载失败'

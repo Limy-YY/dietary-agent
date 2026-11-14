@@ -1,15 +1,20 @@
 import { getToken, apiBase, ApiError } from './http.js'
 
 /**
- * 对话流：POST /api/agent/chat（SSE）
- * 事件：
- *   message → { delta }  正文增量
- *   message → { meta, conversation_id }  结构化边车（正文结束后一次下发）
- *   done    → { conversation_id, message_id, finish_reason, suggestions }
- *   error   → { code, message }
- *   ping    → 心跳，忽略
+ * 对话流：POST /api/agent/chat（SSE，v1.2 事件流）
+ * event: X\ndata: {json}\n\n
+ *   message  → { type: 'text', content: '...' }            正文增量
+ *   artifact → { type: 'meal_card'|'shopping_list'|'current_plan'|'nutrition_report', payload }
+ *   clarify  → { question, missing_fields[] }              信息不足，必须追问
+ *   error    → { code, message }                           业务错误码同 REST
+ *   done     → { conversation_id, meal_plan_id, finish_reason }
+ * 请求体：{ conversation_id?, message, context?{ meal_plan_id } }
  */
-export async function streamChat({ conversationId, message, signal, onEvent }) {
+export async function streamChat({ conversationId, message, context, signal, onEvent }) {
+  const bodyPayload = { message }
+  if (conversationId) bodyPayload.conversation_id = conversationId
+  if (context && context.meal_plan_id != null) bodyPayload.context = { meal_plan_id: context.meal_plan_id }
+
   const res = await fetch(`${apiBase()}/agent/chat`, {
     method: 'POST',
     headers: {
@@ -17,7 +22,7 @@ export async function streamChat({ conversationId, message, signal, onEvent }) {
       Accept: 'text/event-stream',
       Authorization: `Bearer ${getToken()}`
     },
-    body: JSON.stringify({ conversation_id: conversationId || null, message }),
+    body: JSON.stringify(bodyPayload),
     signal
   })
 
@@ -33,7 +38,6 @@ export async function streamChat({ conversationId, message, signal, onEvent }) {
     }
   }
 
-  // 后端若返回 JSON 错误（例如 1002），按错误处理而不是当成流
   const contentType = res.headers.get('content-type') || ''
   if (!res.body || !contentType.includes('text/event-stream')) {
     let body = null
@@ -55,7 +59,6 @@ export async function streamChat({ conversationId, message, signal, onEvent }) {
       if (done) break
       buffer += decoder.decode(value, { stream: true })
 
-      // SSE 以空行分隔事件块
       let sep = buffer.indexOf('\n\n')
       while (sep !== -1) {
         const chunk = buffer.slice(0, sep)
@@ -66,7 +69,6 @@ export async function streamChat({ conversationId, message, signal, onEvent }) {
       }
     }
 
-    // 兜底：部分代理会吞掉最后的空行
     if (buffer.trim()) {
       const evt = parseChunk(buffer)
       if (evt) onEvent(evt)

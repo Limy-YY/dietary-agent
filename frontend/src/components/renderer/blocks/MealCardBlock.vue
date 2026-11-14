@@ -22,13 +22,13 @@
           <div class="cand-name">{{ c.name }}</div>
           <div class="cand-desc">{{ c.desc || '按档案份量做了微调' }}</div>
         </div>
-        <div class="cand-kcal">{{ c.kcal }} kcal</div>
+        <div class="cand-kcal">{{ fmtNum(c.kcal) }} kcal</div>
       </div>
       <div v-if="!candidates.length" class="cand-empty">这一餐暂无候选，换个说法试试（例如「推荐午餐搭配」）</div>
     </div>
 
-    <!-- 一日三餐 -->
-    <template v-else-if="scope !== 'week'">
+    <!-- 一日三餐 / 自定义单日 -->
+    <template v-else-if="!isMultiDay">
       <div
         v-for="(slot, i) in slots"
         :key="slot.slot_id || i"
@@ -39,7 +39,7 @@
           <div class="meal-type">
             {{ slot.label || MEAL_LABELS[slot.meal_type] || '一餐' }}
             <span v-if="slot.time">· {{ slot.time }}</span>
-            <span class="meal-kcal">{{ slot.kcal }} kcal</span>
+            <span class="meal-kcal">{{ fmtNum(slot.kcal) }} kcal</span>
           </div>
           <div class="meal-dish">{{ slot.dish_text }}</div>
           <div class="meal-meta">{{ slot.dish_count }} 道菜 · 点这里看用量和做法</div>
@@ -54,7 +54,7 @@
 
     <!-- 一周食谱：按天折叠 -->
     <div v-else class="week-list">
-      <div v-for="(day, di) in days" :key="day.date + di" class="week-day" :class="{ 'is-today': day.is_today, open: openDay === di }">
+      <div v-for="(day, di) in days" :key="day.iso + di" class="week-day" :class="{ 'is-today': day.is_today, open: openDay === di }">
         <div class="week-day-head" @click="openDay = openDay === di ? -1 : di">
           <div class="wd-date">
             <div class="wd-day">
@@ -68,7 +68,7 @@
               {{ (s.label || s.meal_type || '').charAt(0) }} {{ s.dish_count }}
             </span>
           </div>
-          <div class="wd-kcal">{{ day.kcal }} kcal</div>
+          <div class="wd-kcal">{{ fmtNum(day.kcal) }} kcal</div>
           <span class="wd-chevron">▾</span>
         </div>
         <div class="week-day-body">
@@ -81,7 +81,7 @@
               <div class="wd-meal-dishes">{{ s.dish_text }}</div>
             </div>
             <div class="wd-meal-side">
-              <span class="wd-meal-kcal">{{ s.kcal }} kcal</span>
+              <span class="wd-meal-kcal">{{ fmtNum(s.kcal) }} kcal</span>
               <button class="wd-swap" :disabled="isFixed || !s.candidates.length" @click.stop="swap(s)">
                 换一换
               </button>
@@ -95,7 +95,7 @@
       <button class="card-foot-left" @click="onReason">💡 为什么这样搭？</button>
       <div class="action-col">
         <button class="fix-btn" :disabled="isFixed" @click="onConfirm">
-          {{ isFixed ? '已确认' : `确认${block.action_scope_label || '规划'}` }}
+          {{ isFixed ? '已确认' : '确认方案' }}
         </button>
       </div>
     </div>
@@ -121,7 +121,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { MEAL_LABELS, PHRASE } from '@/constants/actions.js'
-import { arr, normalizeSlot } from '@/utils/schema.js'
+import { arr, fmtNum } from '@/utils/schema.js'
 import { useUi } from '@/composables/useUi.js'
 
 const props = defineProps({ block: { type: Object, required: true } })
@@ -131,23 +131,24 @@ const ui = useUi()
 const reasonOpen = ref(false)
 const openDay = ref(0)
 
-const scope = computed(() => {
-  const raw = props.block.scope || props.block.plan_type
-  if (raw) return raw === 'week' ? 'week' : raw === 'meal' ? 'meal' : 'day'
-  return arr(props.block.days).length > 1 ? 'week' : 'day'
+const scope = computed(() => props.block.plan_key || props.block.scope || 'day')
+const isMultiDay = computed(() => days.value.length > 1)
+
+const title = computed(() => {
+  if (props.block.title) return props.block.title
+  return isMultiDay.value ? '📅 多日食谱' : scope.value === 'meal' ? '🍱 单餐搭配' : '🗓️ 今日食谱'
 })
+const subtitle = computed(() => props.block.subtitle || '按你的档案估算份量')
 
-const title = computed(() => props.block.title || (scope.value === 'week' ? '📅 一周食谱' : scope.value === 'meal' ? '🍱 单餐搭配' : '🗓️ 今日食谱'))
-const subtitle = computed(() => props.block.subtitle || props.block.goal_text || '按你的档案估算份量')
-
-const slots = computed(() => arr(props.block.slots).map(normalizeSlot))
+const slots = computed(() => arr(props.block.slots))
 const days = computed(() =>
   arr(props.block.days).map((d) => ({
+    iso: d.iso || '',
     date: d.date || '',
     weekday: d.weekday || '',
     is_today: Boolean(d.is_today),
-    kcal: Number(d.kcal) || arr(d.slots).reduce((s, x) => s + (Number(x.kcal) || 0), 0),
-    slots: arr(d.slots).map(normalizeSlot)
+    kcal: d.kcal == null ? null : d.kcal,
+    slots: arr(d.slots)
   }))
 )
 
@@ -155,8 +156,7 @@ const candidates = computed(() => {
   const first = slots.value[0]
   if (!first) return []
   if (first.candidates.length) return first.candidates
-  const fromBlock = arr(props.block.candidates)
-  return fromBlock
+  return arr(props.block.candidates)
 })
 
 const pickedId = ref('')
@@ -170,13 +170,18 @@ const status = computed(() => {
   return raw === 'fixed' ? 'fixed' : raw === 'candidates' ? 'candidates' : 'draft'
 })
 const isFixed = computed(() => status.value === 'fixed')
-const statusText = computed(() => (isFixed.value ? '已生效' : status.value === 'candidates' ? '待选定' : '待确认'))
+const statusText = computed(() => props.block.status_label || (isFixed.value ? '已生效' : '待确认'))
 const statusClass = computed(() => (isFixed.value ? 'fixed' : 'draft'))
 
-const reasonSummary = computed(() => props.block.reason?.summary || '')
+const reasonSummary = computed(() => {
+  const r = props.block.reason
+  if (typeof r === 'string') return r
+  return (r && r.summary) || ''
+})
 const reasonPoints = computed(() => {
-  const p = arr(props.block.reason?.points)
-  return p.length ? p : arr(props.block.reason_points)
+  const hints = arr(props.block.reference_hints)
+  const notes = arr(props.block.data_quality_notes)
+  return [...hints, ...notes]
 })
 
 function pickCandidate(c) {

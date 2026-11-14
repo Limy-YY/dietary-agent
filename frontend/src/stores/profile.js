@@ -8,15 +8,13 @@ export const useProfileStore = defineStore('profile', () => {
   const saving = ref(false)
   const error = ref('')
 
-  const name = computed(() => profile.value?.extras?.name || '小膳')
-  const avatar = computed(() => profile.value?.extras?.avatar || '🍃')
-  const goals = computed(() => {
-    if (!profile.value) return []
-    const list = profile.value.extras?.goals
-    return Array.isArray(list) && list.length ? list : profile.value.goal ? [profile.value.goal] : []
+  const name = computed(() => profile.value?.name || '小膳')
+  const avatar = computed(() => profile.value?.avatar || '🍃')
+  const goalText = computed(() => profile.value?.goal_name || '')
+  const targetKcal = computed(() => {
+    const n = Number(profile.value?.target_calories)
+    return Number.isFinite(n) ? n : null
   })
-  const goalText = computed(() => goals.value.join('、'))
-  const targetKcal = computed(() => Number(profile.value?.extras?.target_energy_kcal) || 0)
   const bmi = computed(() => {
     if (!profile.value?.height_cm || !profile.value?.weight_kg) return ''
     const h = Number(profile.value.height_cm) / 100
@@ -50,5 +48,5 @@ export const useProfileStore = defineStore('profile', () => {
     }
   }
 
-  return { profile, loading, saving, error, name, avatar, goals, goalText, targetKcal, bmi, hasProfile, load, save }
+  return { profile, loading, saving, error, name, avatar, goalText, targetKcal, bmi, hasProfile, load, save }
 })
