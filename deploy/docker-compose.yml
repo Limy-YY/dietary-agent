@@ -1,0 +1,26 @@
+# QA-04 数据库验收环境：PostgreSQL 18 + pgvector，一键起库并自动还原 v1.2 dump
+# 用法见同目录《数据库验收执行说明.md》
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: diet-agent-db
+    environment:
+      POSTGRES_DB: diet_agent
+      POSTGRES_USER: diet_app
+      POSTGRES_PASSWORD: diet_app_dev   # 仅本地验收用，正式部署必须改
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # 数据库交付包（01 dump / 03 权限 / 04 验收 sql），随仓库 database/ 目录挂载
+      - ../database:/delivery:ro
+      # 首次初始化时自动建扩展 + 还原 01 dump + 跑 03 权限脚本
+      - ./db_init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diet_app -d diet_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  pgdata:
