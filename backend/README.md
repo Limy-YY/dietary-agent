@@ -72,7 +72,7 @@ backend/
 | API-15 | POST /api/agent/rag-query | 知识检索：当前关键词兜底，向量 + RRF 待 pgvector 与 embedding 就绪 |
 | API-16 | POST /api/agent/reverse-nutrition | 反向营养，附就医提示（`symptom_nutrient_map` 待数据岗补表） |
 | API-17/18/19 | GET /api/condition-rules/catalog · /production · POST /evaluate | 疾病规则目录（含审核状态）/ 正式规则 / 生产评估 |
-| 病种字典 | GET /api/conditions · /api/conditions/catalog | 档案三态选择 `condition_id` 的取值域，读 `core.health_condition`（与 `/condition-rules/catalog` 的规则目录不同） |
+| 病种字典 | GET /api/conditions · /api/conditions/catalog | 档案三态选择 `condition_id` 的取值域，读 `core.health_condition`（与 `/condition-rules/catalog` 的规则目录不同）；数据由 `database/18_病种字典补齐_v1.2r1.sql` 补齐，当前 4 条：hypertension / diabetes / hyperlipidemia / gout |
 | API-20 | GET /api/users/{user_id}/profile | 用户档案，复用档案同一 SQL 与序列化 |
 
 > 鉴权：除 `/api/health` 外统一 `Authorization: Bearer <JWT>`，`user_id` 由 token 注入，不再走查询参数。
