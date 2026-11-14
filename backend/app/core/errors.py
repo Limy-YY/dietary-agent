@@ -1,4 +1,4 @@
-"""业务错误码：与《后端接口契约 v0.1》§2.5 一致。"""
+"""业务错误码：与《后端接口契约 v1.2》§2.5 一致。"""
 from enum import IntEnum
 
 
@@ -12,6 +12,8 @@ class BizCode(IntEnum):
     AGENT_CALL_FAILED = 2002
     STRUCTURED_OUTPUT_INVALID = 2003
     DATA_SOURCE_UNAVAILABLE = 2004
+    PLAN_STATE_CONFLICT = 2005
+    PLAN_GENERATION_FAILED = 2006
     CONTENT_SAFETY_BLOCKED = 3001
 
 
