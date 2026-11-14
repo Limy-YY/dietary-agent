@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.core.response import ApiResponse, PageData, api_success, page_data
 from app.db import get_db
-from app.schemas.conditions import EvaluateRuleRequest, EvaluateRuleResult, RuleItem
+from app.schemas.conditions import (
+    ConditionItem,
+    EvaluateRuleRequest,
+    EvaluateRuleResult,
+    RuleItem,
+)
 
 router = APIRouter(prefix="/condition-rules", tags=["condition-rules"])
 
@@ -137,3 +142,33 @@ def evaluate_rule(
         )
 
     raise BizError(code=BizCode.NOT_FOUND, message=f"规则不存在: {req.rule_id}")
+
+
+# ---------------------------------------------------------------- 病种字典
+
+# 与 /condition-rules 分离：这里是纯字典（不含规则），供档案弹窗选择 condition_id
+catalog_router = APIRouter(prefix="/conditions", tags=["conditions"])
+
+_CONDITION_COLS = "condition_id, name_zh, category, aliases, description, activation_status"
+
+
+def _condition_items(db: Session) -> list[ConditionItem]:
+    rows = db.execute(
+        text(
+            f"SELECT {_CONDITION_COLS} FROM core.health_condition "
+            "ORDER BY category, condition_id"
+        )
+    ).mappings().all()
+    return [ConditionItem(**{k: r[k] for k in r.keys()}) for r in rows]
+
+
+@catalog_router.get("/catalog")
+def condition_catalog(db: Session = Depends(get_db)) -> ApiResponse[list[ConditionItem]]:
+    """病种字典：档案 `conditions` 三态选择时 `condition_id` 的取值域（前端档案弹窗）。"""
+    return api_success(_condition_items(db))
+
+
+@catalog_router.get("")
+def condition_catalog_root(db: Session = Depends(get_db)) -> ApiResponse[list[ConditionItem]]:
+    """`GET /conditions` 与 `/conditions/catalog` 等价，保留两种写法便于前端对接。"""
+    return api_success(_condition_items(db))

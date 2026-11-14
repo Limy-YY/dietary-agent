@@ -47,6 +47,8 @@ _KCAL_PRECHECK_HIGH = 1.65
 _W_DEVIATION = 1.0
 _W_MICRO_BONUS = 0.35
 _W_OIL_SALT = 2.0
+#: 收紧目标下用油贴近上限的附加扣分（只影响排序，不判淘汰）
+_W_OIL_TIGHTENED = 0.15
 _W_INCOMPLETE = 0.6
 _W_SOFT_AVOID = 0.4
 
@@ -239,7 +241,7 @@ def _score(
         penalty += max(0.0, (salt - target.salt_limit_g) / target.salt_limit_g) * strict_weight
     if targets.oil_salt_strict and oil is not None and target.oil_limit_g > 0:
         # 收紧目标下，用油越接近上限扣分越明显（只影响排序，不判淘汰）
-        penalty += 0.15 * (oil / target.oil_limit_g)
+        penalty += _W_OIL_TIGHTENED * (oil / target.oil_limit_g)
         reason_codes.append("oil_salt_tightened")
 
     incomplete = any(totals.get(k) is None for k in ("protein_g", "fat_g", "carb_g"))

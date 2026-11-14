@@ -5,6 +5,17 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class ConditionItem(BaseModel):
+    """病种字典项（档案三态选择用，取自 core.health_condition）。"""
+
+    condition_id: str
+    name_zh: str
+    category: str | None = None
+    aliases: list[str] | None = None
+    description: str | None = None
+    activation_status: str | None = None
+
+
 class RuleItem(BaseModel):
     """规则目录项（T6/T7，取自 v_condition_rule_catalog / v_production_condition_rules）。"""
 

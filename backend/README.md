@@ -72,12 +72,27 @@ backend/
 | API-15 | POST /api/agent/rag-query | 知识检索：当前关键词兜底，向量 + RRF 待 pgvector 与 embedding 就绪 |
 | API-16 | POST /api/agent/reverse-nutrition | 反向营养，附就医提示（`symptom_nutrient_map` 待数据岗补表） |
 | API-17/18/19 | GET /api/condition-rules/catalog · /production · POST /evaluate | 疾病规则目录（含审核状态）/ 正式规则 / 生产评估 |
+| 病种字典 | GET /api/conditions · /api/conditions/catalog | 档案三态选择 `condition_id` 的取值域，读 `core.health_condition`（与 `/condition-rules/catalog` 的规则目录不同） |
 | API-20 | GET /api/users/{user_id}/profile | 用户档案，复用档案同一 SQL 与序列化 |
 
 > 鉴权：除 `/api/health` 外统一 `Authorization: Bearer <JWT>`，`user_id` 由 token 注入，不再走查询参数。
 > 能量口径：v1.2 删 `activity_level`，统一 `BMR(Mifflin-St Jeor) × 1.4`，**不做热量缺口/盈余**，健康目标只改结构比例。依据 2026-11-14 项目组裁决（按契约 §0.2）；SRS FR-09/10 的四档活动系数与减脂 −500 为旧口径，不再适用，缺口/盈余留待后期改进。
 > 实现落点：`rule_engine/targets.py` 的 `bmr × goal_structure_map.activity_factor`（库内五条目标均为 1.4）、`profile.py` 的 `target_calories`、`mealplan` 直接取引擎 `targets.energy_kcal`——三处同源同值，接口层不再自算热量。
 > 营养口径：多日方案一律折日均后与每日参考量比较；任一餐位缺值的指标返 null，不判「不足/达标」。
+
+## RAG（API-15）待接入说明
+
+向量侧参数已按 Agent 岗 `11.14/embedding-contract.md`（2026-11-14 定稿）**定死，不再改**：
+
+| 项 | 值 |
+|---|---|
+| 模型 / 维度 | `BAAI/bge-m3` / **1024**（改维度须重建 HNSW 索引） |
+| 端点 | 默认 SiliconFlow `https://api.siliconflow.cn/v1`（OpenAI 兼容，需 `EMBEDDING_API_KEY`）；备选 Ollama 本地 `http://127.0.0.1:11434` |
+| 检索函数 | `knowledge.search_documents(p_query, p_query_embedding, p_limit=5, p_min_similarity=0.5, p_rrf_k=60)` |
+| RRF | `k=60`；关键词 : 向量 = 1 : 1；每路池 20；融合后取 `top_k=5` |
+
+**当前阻塞**：容器镜像为 `postgres:18`，`pg_available_extensions` 无 `vector`，`14_RAG向量化_v1.2r1.sql` 首段即抛异常，导致 `knowledge_doc.embedding` 列、HNSW 索引与检索函数均不存在。故 `POST /agent/rag-query` 暂时保留关键词兜底。
+**解除后改动**：仅需在 `routers/agent.py` 把查询词送 embedding 端点取 1024 维向量，再调用上述函数；请求与出参结构不变，前端无需改动。
 
 ## 数据库恢复（一次性）
 
