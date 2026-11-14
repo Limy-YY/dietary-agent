@@ -60,8 +60,8 @@ _INTENT_SYSTEM = (
     'profile_build（用户描述身体指标/目标/过敏，需建档）、rag_qa（营养知识问答）、'
     'reverse_nutrition（症状咨询，如口角炎/乏力/掉发）、chat（闲聊）。\n'
     'JSON 字段：{"intent":"...", "meal_type":"早餐|午餐|晚餐|null", '
-    '"profile":{"sex":"男|女","age":0,"height_cm":0,"weight_kg":0,'
-    '"goal":"减脂|维持|增肌|控糖|改善肠胃","allergies":[],"taboos":[],"conditions":[],"name":""}}。'
+    '"profile":{"gender":"男|女","age":0,"height_cm":0,"weight_kg":0,'
+    '"goal_code":"maintain|fat_loss|muscle_gain|glucose_control|digestive_health","allergies":[],"conditions":{},"name":""}}。'
     '仅 profile_build 需要填 profile，其余为 null。'
 )
 
@@ -241,10 +241,10 @@ def run(user_id: str, message: str) -> dict:
         try:
             bc.upsert_profile(
                 new_id,
-                sex=p.get("sex"), age=p.get("age"), height_cm=p.get("height_cm"),
-                weight_kg=p.get("weight_kg"), goal=p.get("goal"),
+                gender=p.get("gender"), age=p.get("age"), height_cm=p.get("height_cm"),
+                weight_kg=p.get("weight_kg"), goal_code=p.get("goal_code"),
                 allergies=p.get("allergies") or [], taboos=p.get("taboos") or [],
-                conditions=p.get("conditions") or [],
+                conditions=p.get("conditions") or {},
                 extras={"name": p.get("name") or ""},
             )
             profile = _load_profile(new_id)

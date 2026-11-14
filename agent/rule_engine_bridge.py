@@ -73,16 +73,19 @@ def build_profile(profile: dict) -> Profile:
     religious = [t for t in taboos if t in RELIGIOUS_LABELS]
     exclude = [t for t in taboos if t not in RELIGIOUS_LABELS]
 
-    # 后端 conditions 是中文病名列表；rule_engine 用 dict{id: {status}}。
-    # 当前 pipeline 仅把 confirmed 病名写进说明、不参与过滤，故直接按病名作 key。
-    conditions = {c: {"status": "confirmed"} for c in (profile.get("conditions") or []) if c}
+    # 从后端的 conditions 对象中，过滤出 status 为 confirmed 的疾病
+    conditions = {
+        cid: {"status": detail["status"]}
+        for cid, detail in (profile.get("conditions") or {}).items()
+        if isinstance(detail, dict) and detail.get("status") == "confirmed"
+    }
 
     return Profile(
-        gender=profile.get("sex") or "女",
+        gender=profile.get("gender") or "女",
         age=int(profile.get("age") or 20),
         height_cm=float(profile.get("height_cm") or 160),
         weight_kg=float(profile.get("weight_kg") or 55),
-        goal_code=GOAL_MAP.get(str(profile.get("goal") or "maintain"), "maintain"),
+        goal_code=profile.get("goal_code") or "maintain",
         conditions=conditions,
         allergies=allergies,
         religious_ethical=religious,
@@ -307,7 +310,7 @@ def _result_to_plan(result, profile: dict) -> dict:
 
     first = days[0] if days else None
     energy = round(result.targets.energy_kcal, 1)
-    goal_name = result.targets.goal_name or str(profile.get("goal") or "维持")
+    goal_name = result.targets.goal_name or str(profile.get("goal_name") or "维持")
     title = {"week": "接下来七天食谱", "meal": "午餐搭配", "day": "今日三餐"}.get(scope, "今日三餐")
     subtitle = (
         f"目标：{goal_name} · {result.start_date} ~ {result.end_date} · 日均约 {energy} kcal"
