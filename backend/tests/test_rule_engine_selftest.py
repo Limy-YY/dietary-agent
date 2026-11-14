@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from dataclasses import replace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -25,14 +26,21 @@ from app.services.rule_engine import (  # noqa: E402
     compute_balance,
     compute_targets,
     generate_plan,
+    hard_filter_reasons,
     parse_goal_policy,
 )
 
-CSV_PATH = (
-    r"C:\Users\Anna\Desktop\膳食搭配系统\11.13"
-    r"\膳食搭配智能体_数据库交付包_v1.2_2026-11-13"
-    r"\Feishu20261113-10340506_菜式数据明细_60道.csv"
-)
+def _resolve_csv_path() -> str | None:
+    """菜式明细 CSV 路径：优先环境变量 DISH_CSV，其次仓库内 tests/fixtures；都没有返回 None。"""
+    env = os.environ.get("DISH_CSV")
+    if env and os.path.exists(env):
+        return env
+    local = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "fixtures", "菜式数据明细_60道.csv"
+    )
+    if os.path.exists(local):
+        return local
+    return None
 
 
 def dish(
@@ -227,6 +235,27 @@ def main() -> int:
             _ = ok
     check("B3 每餐都有候选", all(s.candidates for s in result.slots), f"餐位数={len(result.slots)}")
 
+    # B4/B5 厨具硬过滤（回归修复后必须真的生效，不能是摆设）
+    stir_facts = next(d for d in sample_dishes() if d.dish_id == "DISH-S2")
+    kettle_targets = compute_targets(
+        replace(profile, cooking_equipment=["电饭煲"]), GOAL_ROW, MICRO_REFS, request
+    )
+    kettle_reasons = hard_filter_reasons(stir_facts, kettle_targets)
+    check(
+        "B4 只有电饭煲 → 快炒菜被硬排除",
+        any(r.startswith("equipment:") for r in kettle_reasons),
+        str(kettle_reasons),
+    )
+    no_equip_targets = compute_targets(
+        replace(profile, cooking_equipment=[]), GOAL_ROW, MICRO_REFS, request
+    )
+    no_equip_reasons = hard_filter_reasons(stir_facts, no_equip_targets)
+    check(
+        "B5 未填厨具 → 不做厨具过滤",
+        no_equip_reasons == [],
+        str(no_equip_reasons),
+    )
+
     # C 差异化
     for slot in result.slots:
         mains = {c.signature[0] for c in slot.candidates}
@@ -238,26 +267,31 @@ def main() -> int:
     ranks = [c.rank for s in result.slots for c in s.candidates]
     check("C3 rank 从 1 连续", ranks and min(ranks) == 1)
 
-    # D 缺失值语义（CSV 源缺 fat/carb）
-    csv_source = CsvDishSource(CSV_PATH)
-    csv_dishes = csv_source.load()
-    check("D1 CSV 加载 60 道菜", len(csv_dishes) == 60, f"{len(csv_dishes)}")
-    check("D2 CSV 源 fat 全为 None", all(d.fat_g is None for d in csv_dishes))
-    csv_result = generate_plan(
-        profile,
-        PlanRequest(start_date="2026-11-13", end_date="2026-11-13", user_id=None),
-        FakeDataSource(csv_dishes),
-        skip_balance=True,
-    )
-    check(
-        "D3 缺失宏量 → 记 partial_data",
-        any("partial_data" in c.reason_codes for s in csv_result.slots for c in s.candidates)
-        or any("未按 0 计" in n for n in csv_result.data_quality_notes),
-        csv_result.data_quality_notes[0] if csv_result.data_quality_notes else "无说明",
-    )
-    check("D4 输出未把 None 变 0", any(
-        c.totals["fat_g"] is None for s in csv_result.slots for c in s.candidates
-    ))
+    # D 缺失值语义（CSV 源缺 fat/carb）；CSV 不在仓库内时跳过，不判失败
+    csv_dishes = None
+    csv_path = _resolve_csv_path()
+    if csv_path is None:
+        print("SKIP D1-D4：未找到菜式明细 CSV，可用环境变量 DISH_CSV 指定路径")
+    else:
+        csv_source = CsvDishSource(csv_path)
+        csv_dishes = csv_source.load()
+        check("D1 CSV 加载 60 道菜", len(csv_dishes) == 60, f"{len(csv_dishes)}")
+        check("D2 CSV 源 fat 全为 None", all(d.fat_g is None for d in csv_dishes))
+        csv_result = generate_plan(
+            profile,
+            PlanRequest(start_date="2026-11-13", end_date="2026-11-13", user_id=None),
+            FakeDataSource(csv_dishes),
+            skip_balance=True,
+        )
+        check(
+            "D3 缺失宏量 → 记 partial_data",
+            any("partial_data" in c.reason_codes for s in csv_result.slots for c in s.candidates)
+            or any("未按 0 计" in n for n in csv_result.data_quality_notes),
+            csv_result.data_quality_notes[0] if csv_result.data_quality_notes else "无说明",
+        )
+        check("D4 输出未把 None 变 0", any(
+            c.totals["fat_g"] is None for s in csv_result.slots for c in s.candidates
+        ))
 
     # E 跨日平衡
     empty_window = compute_balance(targets, [], 7)
@@ -302,18 +336,24 @@ def main() -> int:
     ))
     check("F5 JSON 可序列化", isinstance(json.dumps(payload, ensure_ascii=False), str))
 
-    # G 主食识别
-    csv_staples = [d.dish_id for d in csv_dishes if d.is_staple]
-    declared = {d.dish_id for d in csv_dishes if (d.category or "").strip() == "主食"}
-    check("G1 category=主食 的 6 道全部识别", declared <= set(csv_staples), f"{len(declared)} 道")
-    check(
-        "G2 category 空时按名称兜底（DISH-029 糙米鹰嘴豆拌饭）",
-        "DISH-029" in csv_staples and "DISH-029" not in declared,
-    )
-    check(
-        "G3 名称兜底不误伤（土豆/玉米/汤类不入主食）",
-        all(x not in csv_staples for x in ("DISH-040", "DISH-048", "DISH-052", "DISH-053", "DISH-060")),
-    )
+    # G 主食识别（依赖同一份 CSV，缺失时跳过）
+    if csv_dishes is None:
+        print("SKIP G1-G3：未找到菜式明细 CSV")
+    else:
+        csv_staples = [d.dish_id for d in csv_dishes if d.is_staple]
+        declared = {d.dish_id for d in csv_dishes if (d.category or "").strip() == "主食"}
+        check("G1 category=主食 的 6 道全部识别", declared <= set(csv_staples), f"{len(declared)} 道")
+        check(
+            "G2 category 空时按名称兜底（DISH-029 糙米鹰嘴豆拌饭）",
+            "DISH-029" in csv_staples and "DISH-029" not in declared,
+        )
+        check(
+            "G3 名称兜底不误伤（土豆/玉米/汤类不入主食）",
+            all(
+                x not in csv_staples
+                for x in ("DISH-040", "DISH-048", "DISH-052", "DISH-053", "DISH-060")
+            ),
+        )
 
     print()
     if FAILED:

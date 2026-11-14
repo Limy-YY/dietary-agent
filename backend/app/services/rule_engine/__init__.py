@@ -6,7 +6,7 @@
 - 数据模型（`Profile` / `PlanRequest` / `PlanResult`）。
 """
 from .balance import apply_balance, build_micro_hints, compute_balance
-from .candidates import build_candidates, diversify
+from .candidates import build_candidates, diversify, hard_filter_reasons
 from .errors import HardConstraintUnsatisfiable, InsufficientData, RuleEngineError
 from .models import (
     Candidate,
@@ -32,6 +32,7 @@ __all__ = [
     "bmr_mifflin",
     "build_candidates",
     "diversify",
+    "hard_filter_reasons",
     "compute_balance",
     "apply_balance",
     "build_micro_hints",

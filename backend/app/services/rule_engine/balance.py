@@ -171,8 +171,11 @@ def apply_balance(
             if cand is current:
                 continue
             for nutrient_id, need in needed.items():
-                now = current.micro_estimate.get(nutrient_id) or 0.0
-                alt = cand.micro_estimate.get(nutrient_id) or 0.0
+                now = current.micro_estimate.get(nutrient_id)
+                alt = cand.micro_estimate.get(nutrient_id)
+                # null ≠ 0：任一侧缺该微量数据就跳过，不当作 0 参与增益比较
+                if now is None or alt is None:
+                    continue
                 gain = alt - now
                 if gain <= 0:
                     continue

@@ -97,7 +97,7 @@ def _template_pool(
         soft_avoid=request.soft_avoid,
     )
     if pool:
-        diagnostics.setdefault("relaxe_attempts", {})[meal_type] = "strict"
+        diagnostics.setdefault("relax_attempts", {})[meal_type] = "strict"
         return pool
 
     pool = build_candidates(
@@ -120,8 +120,8 @@ def _template_pool(
                 "hint": "请检查过敏原/宗教忌口/排除食材/厨具过滤是否过严，或菜式库是否缺少该类菜品",
             },
         )
-    diagnostics.setdefault("relaxe_attempts", {})[meal_type] = "macro_range_relaxed"
-    diagnostics.setdefault("relaxe_notes", []).append(
+    diagnostics.setdefault("relax_attempts", {})[meal_type] = "macro_range_relaxed"
+    diagnostics.setdefault("relax_notes", []).append(
         f"{meal_type}餐无候选严格落在宏量区间，已放宽区间取最接近组合（硬约束仍生效）"
     )
     return pool
@@ -147,7 +147,7 @@ def generate_plan(
     skip_balance: bool = False,
 ) -> PlanResult:
     """执行五步算法，返回可直接序列化为 MealCard 的结果对象。"""
-    diagnostics: dict = {"relaxe_attempts": {}, "relaxe_notes": [], "slots": 0}
+    diagnostics: dict = {"relax_attempts": {}, "relax_notes": [], "slots": 0}
 
     # 1) 算目标
     goal_code = request.goal_code or profile.goal_code
@@ -300,7 +300,7 @@ def generate_plan(
             f"（示例：{'、'.join(unverified[:3])}）"
         )
     data_notes.extend(slot_notes)
-    data_notes.extend(diagnostics["relaxe_notes"])
+    data_notes.extend(diagnostics["relax_notes"])
 
     status = "candidates" if all(s.candidates for s in slots) else "draft"
     if status != "candidates":

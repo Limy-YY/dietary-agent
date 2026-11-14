@@ -17,7 +17,9 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.services.rule_engine import PlanRequest, Profile, SqlDataSource, generate_plan  # noqa: E402
 from app.services.rule_engine.targets import parse_goal_policy  # noqa: E402
 
-DEFAULT_DSN = "postgresql+psycopg://diet_app:diet_app_dev@localhost:5432/diet_agent_v12_check"
+DEFAULT_DSN = os.environ.get(
+    "CHECK_DSN", "postgresql+psycopg://diet_app@localhost:5432/diet_agent_v12_check"
+)
 
 
 def main() -> int:

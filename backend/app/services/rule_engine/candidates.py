@@ -19,6 +19,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from .models import (
+    DEFAULT_MACRO_TOLERANCE,
     KEY_MICRONUTRIENTS,
     METHOD_EQUIPMENT,
     MICRO_IDS,
@@ -89,14 +90,12 @@ def hard_filter_reasons(
         if excluded in name_blob:
             reasons.append(f"excluded:{excluded}")
 
-    # 4) 做法所需厨具
+    # 4) 做法所需厨具：档案填了厨具但无一满足该做法 → 硬排除
     equipment = [str(e) for e in (targets.equipment or [])]
     if equipment:
         required = _required_equipment(facts.method_text)
-        if required and not any(eq in required or eq in equipment for eq in equipment):
-            # 档案填了厨具但都不满足该做法
-            if not any(req in " ".join(equipment) for req in required):
-                reasons.append(f"equipment:{facts.method_text}")
+        if required and not any(req in equipment for req in required):
+            reasons.append(f"equipment:{facts.method_text}")
 
     # 5) 软排除只记录、不排除（由打分处理）
     for avoid in soft_avoid:
@@ -169,9 +168,9 @@ def _within(target: MealTarget, totals: dict[str, float | None]) -> tuple[bool, 
     if kcal is None:
         failures.append("kcal_missing")
     else:
-        # 能量用 ±容差区间（kcal 目标即 target）
-        low = target.kcal * (1 - 0.15)
-        high = target.kcal * (1 + 0.15)
+        # 能量用 ±容差区间（kcal 目标即 target），容差取全局常量
+        low = target.kcal * (1 - DEFAULT_MACRO_TOLERANCE)
+        high = target.kcal * (1 + DEFAULT_MACRO_TOLERANCE)
         if not (low <= kcal <= high):
             failures.append(f"kcal_out:{kcal:g}")
 

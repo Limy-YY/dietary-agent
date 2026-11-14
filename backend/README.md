@@ -4,7 +4,7 @@
 
 - Python 3.13+（开发机 3.13.16）
 - PostgreSQL 18（本地开发：Docker 容器 `diet-agent-pg`，库 `diet_agent`，端口 5432）
-- 应用连接账号：`diet_app / diet_app_dev`（由 `scripts/grant_diet_app.sql` 创建授权；应用**不**使用超级用户）
+- 应用连接账号：`diet_app`（口令见 `.env`，不写入代码；由 `scripts/grant_diet_app.sql` 创建授权；应用**不**使用超级用户）
 
 ## 快速启动
 
@@ -50,25 +50,33 @@ backend/
 - 错误码与状态码映射见契约 §2.4 / §2.5
 - 鉴权：`Authorization: Bearer <token>`（契约 §2.2，当前为骨架，签发见 `core.security.create_access_token`）
 
-## 已实现接口（2026-10-22）
+## 已实现接口（v1.2，2026-11-14）
 
 | 接口 | 路由 | 说明 |
 |---|---|---|
 | 健康检查 | GET /api/health | 服务与数据库状态 |
-| API-11（T1） | GET /api/ingredients/search?q=&limit= | 食材搜索：名称/别名匹配 + 营养明细 + 过敏原三态 + 完整性 |
-| API-12（T2/T3） | GET /api/dishes/search?q=&exclude_allergies=&page=&page_size= | 菜式搜索：营养 + 完整性标记 + 过敏原过滤（decision/reason） |
-| API-09（T11） | POST /api/calc/nutrition | 营养核算：菜式（×份量+油盐估算）/ 食材（生重×可食部）双口径，确定性计算 |
-| API-20（T12） | GET /api/users/{user_id}/profile | 用户档案：基本信息 + 硬约束（过敏/忌口/疾病）+ 月经状态（extras） |
-| API-13（T4/T5） | GET /api/nutrition/weekly-report?user_id=&week_start= | 周报：RNI/AI/UL 参考值对照 + 周度 UL 超限评估（sex 中英映射） |
-| API-17/18/19（T6/T7/T8） | GET /api/condition-rules/catalog · /production · POST /evaluate | 疾病规则：目录（含审核状态）/ 正式规则 / 生产评估（未审核返回 rule_not_approved） |
-| API-15/16（T9/T10） | POST /api/agent/rag-query · /reverse-nutrition | 知识检索（关键词兜底，向量 RRF 待 Agent 侧组件）+ 反向营养推理（表待补） |
-| API-14（对话） | POST /api/agent/chat（SSE） | 多轮对话：会话自动创建 + 消息落库 + 归属校验；Agent 服务接入点占位待联调 |
-| API-01 | POST /api/profile | 创建 / 更新用户档案（按 user_id upsert） |
-| API-02 | GET /api/profile/{user_id} | 获取用户完整档案 |
-| API-03 | POST /api/meal-plan/generate | 生成一日膳食方案（确定性骨架：过敏过滤 + 蛋白源优先贪心 + 油盐估算，落库） |
-| API-04 | GET /api/meal-plan/{plan_id} | 获取单份历史膳食方案 |
-| API-05 | GET /api/meal-plan/list?user_id=&page=&page_size= | 历史膳食方案列表（摘要分页） |
-| API-06 | POST /api/meal-plan/weekly | 生成一周完整食谱（7 天落库，周度评估待 Agent 工作流） |
+| API-01/02 | PUT /api/profile · GET /api/profile | 档案 v1.2 十一项可写；`target_calories` 由后端按 BMR×1.4 计算落库；`POST /api/profile` 为兼容别名 |
+| API-04 | GET /api/meal-plan/{plan_id} | 方案详情（slots → candidates → dishes 四级出参） |
+| API-05 | GET /api/meal-plan/list?page=&page_size= | 方案列表摘要分页 |
+| API-21 | GET /api/meal-plan/current | 当前规划面板 |
+| API-22 | POST /api/meal-plan/week/generate | 用户自定范围生成，落库 `status=candidates` |
+| API-23 | POST /api/meal-plan/candidate/swap | 换候选，写 `app.plan_adjustment` 留痕并返回 `macro_delta` |
+| API-24 | POST /api/meal-plan/week/fix | 固定方案，触发器补 `fixed_at` 并同步 `shopping_list` |
+| API-25 | POST /api/nutrition/analysis | 7 关键微量跨日平衡，日均口径（`summary.basis=daily_average`），缺值返 null 不判达标 |
+| API-26 | GET /api/nutrition/report | 膳食报告面板只读 |
+| API-27 | GET /api/shopping-list | 食材清单，按 `core.ingredient.category` 分组 |
+| API-09 | POST /api/calc/nutrition | 营养核算：菜式（份量+油盐估算）/ 食材（生重×可食部）双口径 |
+| API-11 | GET /api/ingredients/search?q=&limit= | 食材搜索，含 `purine_level / sfa_g / iodine_ug / data_quality / source_note` |
+| API-12 | GET /api/dishes/search?q=&exclude_allergies= | 菜式搜索，过敏原三态判定（decision / reason） |
+| API-14 | POST /api/agent/chat（SSE） | 六事件 session / message / artifact / clarify / error / done；Agent 服务接入点待联调 |
+| API-15 | POST /api/agent/rag-query | 知识检索：当前关键词兜底，向量 + RRF 待 pgvector 与 embedding 就绪 |
+| API-16 | POST /api/agent/reverse-nutrition | 反向营养，附就医提示（`symptom_nutrient_map` 待数据岗补表） |
+| API-17/18/19 | GET /api/condition-rules/catalog · /production · POST /evaluate | 疾病规则目录（含审核状态）/ 正式规则 / 生产评估 |
+| API-20 | GET /api/users/{user_id}/profile | 用户档案，复用档案同一 SQL 与序列化 |
+
+> 鉴权：除 `/api/health` 外统一 `Authorization: Bearer <JWT>`，`user_id` 由 token 注入，不再走查询参数。
+> 能量口径：v1.2 删 `activity_level`，统一 `BMR(Mifflin-St Jeor) × 1.4`。
+> 营养口径：多日方案一律折日均后与每日参考量比较；任一餐位缺值的指标返 null，不判「不足/达标」。
 
 ## 数据库恢复（一次性）
 

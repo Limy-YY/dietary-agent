@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # 数据库
-    DATABASE_URL: str = "postgresql+psycopg://diet_app:diet_app_dev@localhost:5432/diet_agent"
+    # 数据库：不写死口令，密码由 .env / 环境变量 DATABASE_URL 或 PGPASSWORD 提供
+    DATABASE_URL: str = "postgresql+psycopg://diet_app@localhost:5432/diet_agent"
 
     # JWT
     JWT_SECRET: str = "change-me-in-production"

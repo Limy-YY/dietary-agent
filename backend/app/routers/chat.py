@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BizCode, BizError
 from app.db import get_db
+from app.routers.mealplan import _get_plan, _serialize_plan
 from app.schemas.chat import ChatRequest
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -28,8 +29,8 @@ _PLACEHOLDER_REPLY = (
     "本回复将替换为智能体的真实流式回答。"
 )
 
-# 建档所需的轻量字段（与契约 §3.1 必填项一致），clarify 时原样下发
-_REQUIRED_PROFILE_FIELDS = ["sex", "age", "height_cm", "weight_kg", "goal_code"]
+# 建档所需的轻量字段（与契约 §3.3 必填项一致，v1.2 用 gender），clarify 时原样下发
+_REQUIRED_PROFILE_FIELDS = ["gender", "age", "height_cm", "weight_kg", "goal_code"]
 
 
 def _sse(event: str, data: dict) -> str:
@@ -78,30 +79,14 @@ def _profile_exists(db: Session, user_id: str) -> bool:
 
 
 def _load_plan_payload(db: Session, plan_id: int, user_id: str) -> dict | None:
-    """current_plan 的 payload：与 API-04 出参同构，仅做归属校验与字段改名。"""
-    row = db.execute(
-        text(
-            "SELECT meal_plan_id, user_id, plan_type, plan_date, goal_energy_kcal, "
-            "macro_ratio, meals, sources, created_at "
-            "FROM app.meal_plan WHERE meal_plan_id = :pid AND user_id = :uid"
-        ),
-        {"pid": plan_id, "uid": user_id},
-    ).mappings().first()
-    if row is None:
+    """current_plan 的 payload：复用 API-04 的序列化，保证与 slots 四级出参同构。"""
+    try:
+        plan = _get_plan(db, plan_id)
+    except BizError:
         return None
-    return {
-        "plan_id": row["meal_plan_id"],
-        "user_id": row["user_id"],
-        "plan_type": row["plan_type"],
-        "plan_date": row["plan_date"].isoformat() if row["plan_date"] else None,
-        "goal_energy_kcal": (
-            float(row["goal_energy_kcal"]) if row["goal_energy_kcal"] is not None else None
-        ),
-        "macro_ratio": row["macro_ratio"],
-        "meals": row["meals"],
-        "sources": row["sources"],
-        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-    }
+    if plan.user_id != user_id:
+        return None
+    return _serialize_plan(plan)
 
 
 @router.post("/chat")
