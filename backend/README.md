@@ -96,7 +96,17 @@ backend/
 
 **接口已接入**：`POST /api/agent/rag-query` 调用上述函数，`method` 三态如实反映实际路径——`hybrid_rrf`（有向量）、`rrf_text_only`（无 key，仅关键词 RRF）、`keyword_fallback`（函数不可用或零命中）。
 
-**仍需一步**：填 `EMBEDDING_API_KEY` 后跑 `database/15_RAG灌库脚本.py` 灌向量（当前 26 条文档待向量化，`backlog_rows=26`）；灌完 `method` 自动变 `hybrid_rrf`。
+**灌库已完成**：26 条文档已全部写入 `BAAI/bge-m3` 1024 维向量（`backlog=0`），`method` 已为 `hybrid_rrf`。
+实测对比（同一接口 `POST /agent/rag-query`）：
+
+| 查询 | 灌库前 | 灌库后 |
+|---|---|---|
+| `钠` | `rrf_text_only`，3 条 | `hybrid_rrf`，3 条，钠 0.032787（双路各排第 1，RRF 分加和） |
+| `血液里钠太多会怎样` | `keyword_fallback`，**0 条** | `hybrid_rrf`，5 条，钠排第一（向量相似度 0.7021） |
+| `蛋白质` | `rrf_text_only`，3 条 | `hybrid_rrf`，3 条 |
+
+长句类查询是向量路的主要收益：文本路要求整串子串命中，自然语言问句基本匹配不到。
+
 **数据边界**：知识库现只有 26 条营养素条目（维生素 / 矿物质 / 脂肪酸 / 纤维），不含疾病饮食、食物嘌呤、烹饪方法等主题，故此类自然语言长句检索会 0 命中并回落，属内容覆盖问题而非检索缺陷。
 
 ## 数据库恢复（一次性）
