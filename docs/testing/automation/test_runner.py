@@ -1,17 +1,25 @@
 # -*- coding: utf-8 -*-
 """膳食搭配智能体 MVP · 离线测试执行器
 
-不依赖后端、不依赖 DeepSeek key、不依赖 agno（用 stub 替身），
+不依赖后端、不依赖 DeepSeek key；MVP 模式不依赖 agno（用 stub 替身）。
 可在任意一台装了 requests 的机器上直接跑。
+
+双模式（按被测目录自动识别）：
+  目标目录含 tools.py  → MVP 模式（agno + INSTRUCTIONS 那版）：
+                          G1 数值口径 + G2 工具契约 + G3 指令覆盖（import 被测模块断言）
+  目标目录含 agent.py → 仓库版模式（rule_engine 桥接那版）：
+                          G1 数值口径 + G2R 后端封装契约 + G3R 指令话术扫描
+                          （扫描 agent/*.py 与 backend/app/services/rule_engine/** 源码文本）
 
 覆盖三组：
   G1 数值口径基准  —— BMR / TDEE / 能量目标 / 三餐分配 / 供能比 / 油脂能量
-  G2 工具层契约    —— 12 个工具的 URL、方法、参数、错误降级、user_id 生成
-  G3 配置与指令覆盖 —— 工具注册、系统指令对需求条款的覆盖矩阵、配置解析
+  G2 工具层契约    —— MVP 版 12 个工具的 URL、方法、参数、错误降级、user_id 生成
+  G3 配置与指令覆盖 —— 工具注册、系统指令对需求条款的覆盖矩阵（BUG-01~04 对应 C-37.*）
 
 用法：
-  python test_runner.py
-  python test_runner.py --target "E:\\RG\\agent_1" --json out.json
+  python test_runner.py                              # 默认测本仓库的 agent/（仓库版模式）
+  python test_runner.py --target <agent目录> --json out.json
+  python test_runner.py --target E:\\RG\\agent_1     # 兼容旧 MVP 目录（含 tools.py）
 
 判定三态：PASS / FAIL / WARN（WARN = 与文档或需求不一致的可疑项，需人工确认）
 退出码：有 FAIL 则为 1，否则 0
@@ -28,6 +36,18 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 
 RESULTS = []
+
+# 需求条款 → 指令话术覆盖矩阵（BUG-01~04 对应其中 FR-13 / FR-19/20 / FR-21 / FR-29、FR-30）。
+# MVP 模式作用于 agent.INSTRUCTIONS；仓库版模式扫描实现源码文本。
+COVERAGE_MATRIX = [
+    ("FR-13", "三餐 30/40/30 或 供能比 50~65/20~30/10~15", ["30%", "40%", "供能比"]),
+    ("FR-19/20", "食材口径 vs 菜式口径（双口径分别标注）", ["双口径", "生重", "成品口径"]),
+    ("FR-21", "油盐以 低/中/高 分级 + 克数区间，不得伪精确", ["分级", "油盐"]),
+    ("FR-23", "被规避菜式需给出提醒及依据说明", ["规避", "忌口说明", "排除原因"]),
+    ("FR-29", "反向营养用「可能/建议关注」非确定性措辞", ["可能缺乏", "建议关注"]),
+    ("FR-30", "回复末尾附「若症状持续请及时就医」", ["及时就医", "就医"]),
+    ("FR-27", "关键结论标注权威来源（source/source_id）", ["source_id", "出处", "来源"]),
+]
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -412,17 +432,8 @@ def g3_config(agent, tools, config, bc):
 
     # 需求条款覆盖矩阵（关键缺口）
     all_ins = "\n".join(agent.INSTRUCTIONS)
-    matrix = [
-        ("FR-13", "三餐 30/40/30 或 供能比 50~65/20~30/10~15", ["30%", "40%", "供能比"]),
-        ("FR-19/20", "食材口径 vs 菜式口径（双口径分别标注）", ["双口径", "生重", "成品口径", "口径"]),
-        ("FR-21", "油盐以 低/中/高 分级 + 克数区间，不得伪精确", ["分级", "油盐"]),
-        ("FR-23", "被规避菜式需给出提醒及依据说明", ["规避", "忌口说明", "排除原因"]),
-        ("FR-29", "反向营养用「可能/建议关注」非确定性措辞", ["可能缺乏", "建议关注"]),
-        ("FR-30", "回复末尾附「若症状持续请及时就医」", ["及时就医", "就医"]),
-        ("FR-27", "关键结论标注权威来源（source/source_id）", ["source_id", "出处", "来源"]),
-    ]
     gaps = []
-    for req, desc, kws in matrix:
+    for req, desc, kws in COVERAGE_MATRIX:
         hit = any(k in all_ins for k in kws)
         if not hit:
             gaps.append(req)
@@ -463,35 +474,199 @@ def g3_config(agent, tools, config, bc):
           bc._TIMEOUT >= 15, note=f"硬编码 _TIMEOUT={bc._TIMEOUT}，不可配置；周报目标 3s 无独立超时")
 
 
+# ---------------------------------------------------------------- 仓库版模式
+def _catch(fn):
+    try:
+        fn()
+        return None
+    except Exception as e:
+        return e
+
+
+def g2r_backend(bc):
+    """仓库版 backend_client 契约：URL / 参数 / 统一解包 / 错误降级。
+
+    与 MVP 版的差别：仓库版遇错抛 BackendError（MVP 版返回 error 字符串）。
+    """
+    G = "G2R 后端封装契约"
+    fake = FakeRequests()
+    bc.requests = fake
+
+    def call(fn, *a, **kw):
+        fake.calls.clear()
+        return fn(*a, **kw)
+
+    call(bc.get_profile, "u_test_001")
+    c = fake.calls[-1]
+    truth("C-42", G, "get_profile 走 GET /api/users/{id}/profile", "API-20, T12",
+          "GET .../api/users/u_test_001/profile",
+          c["method"] == "GET" and c["url"].endswith("/api/users/u_test_001/profile"),
+          note=f"实际 {c['method']} {c['url']}")
+
+    call(bc.upsert_profile, "u_zhangsan", sex="男", age=28)
+    c = fake.calls[-1]
+    truth("C-43", G, "upsert_profile 走 POST /api/profile 且 user_id 在 body", "API-01",
+          "POST /api/profile，body 含 user_id",
+          c["method"] == "POST" and c["url"].endswith("/api/profile")
+          and (c["json"] or {}).get("user_id") == "u_zhangsan",
+          note=f"{c['json']}")
+
+    call(bc.search_ingredients, "西红柿", 10)
+    c = fake.calls[-1]
+    truth("C-44", G, "search_ingredients 走 GET /api/ingredients/search?q&limit", "API-11",
+          "q=西红柿 limit=10",
+          c["method"] == "GET" and c["url"].endswith("/api/ingredients/search")
+          and (c["params"] or {}).get("q") == "西红柿" and (c["params"] or {}).get("limit") == 10,
+          note=f"{c['params']}")
+
+    call(bc.search_dishes, "", ["花生", "海鲜"], 1, 20)
+    c = fake.calls[-1]
+    truth("C-45", G, "search_dishes 的 exclude_allergies 以逗号拼接", "FR-22",
+          "exclude_allergies=花生,海鲜",
+          (c["params"] or {}).get("exclude_allergies") == "花生,海鲜",
+          note=f"{c['params']}")
+
+    call(bc.calc_nutrition, "ingredient", [{"ingredient_id": 23, "amount_g": 150}], True)
+    c = fake.calls[-1]
+    body = c["json"] or {}
+    truth("C-46", G, "calc_nutrition 走 POST /api/calc/nutrition，body 三字段齐全", "FR-19, API-09",
+          "target_type=ingredient / items / include_micro=true",
+          c["method"] == "POST" and c["url"].endswith("/api/calc/nutrition")
+          and body.get("target_type") == "ingredient" and body.get("items")
+          and body.get("include_micro") is True, note=f"{body}")
+
+    call(bc.weekly_report, "u_test_001", "2026-10-19")
+    c = fake.calls[-1]
+    truth("C-47", G, "weekly_report 走 GET 带 user_id/week_start", "API-13",
+          "params week_start=2026-10-19",
+          c["method"] == "GET" and (c["params"] or {}).get("week_start") == "2026-10-19",
+          note=f"{c['params']}")
+
+    fake.next = FakeResp({"code": 4040, "message": "profile not found", "data": None})
+    err = _catch(lambda: bc.get_profile("u_none"))
+    truth("C-48", G, "后端业务错误（code≠0）→ 抛 BackendError 且带 code", "3.5.2 可靠性",
+          "BackendError 含 4040",
+          err is not None and "BackendError" in type(err).__name__ and "4040" in str(err),
+          note=str(err)[:120])
+
+    fake.next = None
+    fake.raise_exc = FakeRequests.RequestException("Connection refused")
+    err = _catch(lambda: bc.get_profile("u_test_001"))
+    truth("C-49", G, "后端断连 → 统一降级为 BackendError（不裸抛 RequestException）", "3.5.2 可靠性",
+          "BackendError",
+          err is not None and "BackendError" in type(err).__name__, note=str(err)[:120])
+
+    fake.raise_exc = None
+    fake.next = FakeResp(None, status=502, text="<html>502 Bad Gateway</html>", bad_json=True)
+    err = _catch(lambda: bc.get_profile("u_test_001"))
+    truth("C-50", G, "后端返回非 JSON（网关 502 HTML）→ 统一降级为 BackendError", "3.5.2 可靠性",
+          "BackendError",
+          err is not None and "BackendError" in type(err).__name__, note=str(err)[:120])
+    fake.next = None
+
+    truth("C-51", G, "HTTP 超时 30s ≥ 最慢接口目标（配餐 P95≤15s）", "3.3 性能",
+          "_TIMEOUT >= 15", bc._TIMEOUT >= 15, note=f"_TIMEOUT={bc._TIMEOUT}")
+
+
+def g3r_instructions(target: Path):
+    """仓库版模式：扫描实现源码文本对需求条款的覆盖（BUG-01~04 对应 C-37.*）。
+
+    已知局限：文本扫描含注释，可能出现个别假阳性；修复时请把话术加进
+    实际输出路径（agent 的 LLM 指令 / blocks 模板 / rule_engine 文案）。
+    """
+    G = "G3R 指令话术覆盖"
+    files = sorted(target.glob("*.py"))
+    rule_dir = target.parent / "backend" / "app" / "services" / "rule_engine"
+    scope = "agent/*.py"
+    if rule_dir.is_dir():
+        files += sorted(rule_dir.rglob("*.py"))
+        scope += " + backend/app/services/rule_engine/**"
+    texts = []
+    for f in files:
+        try:
+            texts.append(f.read_text(encoding="utf-8"))
+        except OSError:
+            pass
+    all_src = "\n".join(texts)
+    print(f"        （话术扫描范围：{scope}，共 {len(texts)} 个文件）")
+
+    truth("C-31", G, "实现含「绝不自己计算/不编造数值」铁律", "FR-05, 3.4 确定性计算",
+          "命中", any(k in all_src for k in ("绝不自己计算", "不编造")))
+    truth("C-32", G, "实现含「不做医学诊断」边界", "2.4 法规与伦理",
+          "命中", "医学诊断" in all_src)
+    truth("C-33", G, "实现含 null≠0 空值语义", "TEST_README 铁律3",
+          "命中", any(k in all_src for k in ("null 表示未知", "无法判断")))
+    truth("C-34", G, "实现含 data_quality 可信度语义", "TEST_README 铁律4",
+          "命中", "data_quality" in all_src)
+    truth("C-35", G, "实现含 allergen_status=未核查 不得称安全", "TEST_README 铁律5",
+          "命中", "未核查" in all_src)
+    truth("C-36", G, "实现含 needs_clarification 必须追问", "TEST_README 铁律7",
+          "命中", "needs_clarification" in all_src)
+
+    gaps = []
+    for req, desc, kws in COVERAGE_MATRIX:
+        hit = any(k in all_src for k in kws)
+        if not hit:
+            gaps.append(req)
+        record(f"C-37.{req}", G, f"实现覆盖 {req}（{desc}）", req,
+               "话术出现在实现中", "命中" if hit else "未命中",
+               "PASS" if hit else "FAIL",
+               note="" if hit else f"{scope} 源码中未找到该约束话术")
+    record("C-38", G, "指令需求覆盖缺口汇总", "3.2 系统特征",
+           "0 处缺口", f"{len(gaps)} 处缺口：{gaps}", "PASS" if not gaps else "WARN",
+           note="补话术到 agent 指令 / blocks 模板 / rule_engine 文案后复跑，对应 C-37.* 转 PASS")
+
+
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", default=os.getenv("MVP_AGENT_DIR", r"E:\RG\agent_1"))
+    ap.add_argument("--target", default=os.getenv("MVP_AGENT_DIR", ""),
+                    help="被测 agent 目录；缺省为本仓库的 agent/（相对本脚本定位）")
     ap.add_argument("--json", default="")
     args = ap.parse_args()
 
-    target = Path(args.target)
-    if not (target / "tools.py").exists():
-        print(f"找不到被测目录：{target}")
-        sys.exit(2)
-    sys.path.insert(0, str(target))
-    install_stubs()
+    if args.target:
+        target = Path(args.target)
+    else:
+        target = Path(__file__).resolve().parents[3] / "agent"
 
-    import backend_client as bc
-    import config
-    import tools
-    import agent
+    has_tools = (target / "tools.py").exists()
+    has_agent = (target / "agent.py").exists()
+    if not has_tools and not has_agent:
+        print(f"找不到被测目录（需含 tools.py 或 agent.py）：{target}")
+        sys.exit(2)
 
     print("=" * 72)
-    print("膳食搭配智能体 MVP · 离线测试")
+    print("膳食搭配智能体 · 离线测试")
     print(f"被测目录：{target}")
+    print(f"模式：{'MVP（agno + tools.py）' if has_tools else '仓库版（rule_engine 桥接）'}")
     print(f"执行时间：{datetime.now():%Y-%m-%d %H:%M:%S}")
-    print(f"后端地址：{bc.BASE}（本组不依赖真实后端）")
     print("=" * 72)
 
     g1_numeric()
-    g2_tools(bc, tools)
-    g3_config(agent, tools, config, bc)
+
+    if has_tools:
+        sys.path.insert(0, str(target))
+        install_stubs()
+        import backend_client as bc
+        import config
+        import tools
+        import agent
+        print(f"后端地址：{bc.BASE}（本组不依赖真实后端）")
+        g2_tools(bc, tools)
+        g3_config(agent, tools, config, bc)
+    else:
+        sys.path.insert(0, str(target))
+        bc = None
+        try:
+            import backend_client as bc
+        except Exception as e:
+            record("C-42", "G2R 后端封装契约", "backend_client 可导入", "3.5.2 可靠性",
+                   "可导入", f"导入失败：{e}", "WARN", note="通常缺 requests，pip install requests")
+        if bc is not None:
+            print(f"后端地址：{bc.BASE}（本组不依赖真实后端）")
+            g2r_backend(bc)
+        g3r_instructions(target)
 
     total = len(RESULTS)
     p = sum(1 for r in RESULTS if r["status"] == "PASS")
