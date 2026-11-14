@@ -75,7 +75,8 @@ backend/
 | API-20 | GET /api/users/{user_id}/profile | 用户档案，复用档案同一 SQL 与序列化 |
 
 > 鉴权：除 `/api/health` 外统一 `Authorization: Bearer <JWT>`，`user_id` 由 token 注入，不再走查询参数。
-> 能量口径：v1.2 删 `activity_level`，统一 `BMR(Mifflin-St Jeor) × 1.4`。
+> 能量口径：v1.2 删 `activity_level`，统一 `BMR(Mifflin-St Jeor) × 1.4`，**不做热量缺口/盈余**，健康目标只改结构比例。依据 2026-11-14 项目组裁决（按契约 §0.2）；SRS FR-09/10 的四档活动系数与减脂 −500 为旧口径，不再适用，缺口/盈余留待后期改进。
+> 实现落点：`rule_engine/targets.py` 的 `bmr × goal_structure_map.activity_factor`（库内五条目标均为 1.4）、`profile.py` 的 `target_calories`、`mealplan` 直接取引擎 `targets.energy_kcal`——三处同源同值，接口层不再自算热量。
 > 营养口径：多日方案一律折日均后与每日参考量比较；任一餐位缺值的指标返 null，不判「不足/达标」。
 
 ## 数据库恢复（一次性）
