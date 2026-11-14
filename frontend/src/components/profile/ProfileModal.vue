@@ -146,12 +146,13 @@
 
         <div class="pf-group">
           <span class="field-label">疾病情况（三态）</span>
-          <div v-for="id in CONDITION_IDS" :key="id" class="cond-row">
-            <span class="cond-name">{{ CONDITION_LABELS[id] }}</span>
+          <div v-for="id in conditionIds" :key="id" class="cond-row">
+            <span class="cond-name">{{ conditionLabels[id] }}</span>
             <el-select v-model="form.conditions[id]" size="small" style="width: 120px">
               <el-option v-for="(label, key) in CONDITION_STATUS" :key="key" :label="label" :value="key" />
             </el-select>
           </div>
+          <div v-if="!conditionIds.length" class="cond-empty">疾病项目录加载中或为空，暂无法编辑疾病限制</div>
         </div>
 
         <div class="pf-group">
@@ -182,11 +183,12 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PillGroup from './PillGroup.vue'
 import { useProfileStore } from '@/stores/profile.js'
 import { useUi } from '@/composables/useUi.js'
+import { fetchConditionCatalog } from '@/api/profile.js'
 
 const ui = useUi()
 const profile = useProfileStore()
@@ -199,13 +201,17 @@ const GOAL_OPTIONS = [
   { value: 'glucose_control', label: '控糖' },
   { value: 'digestive_health', label: '改善肠胃' }
 ]
-const CONDITION_IDS = ['hypertension', 'diabetes', 'hyperlipidemia', 'gout']
-const CONDITION_LABELS = {
-  hypertension: '高血压',
-  diabetes: '糖尿病',
-  hyperlipidemia: '高血脂',
-  gout: '痛风'
-}
+// 病种字典从 GET /conditions/catalog 动态拉取，前端不写死
+const conditionCatalog = ref([]) // [{ condition_id, name_zh }]
+const conditionCatalogLoaded = ref(false)
+const conditionIds = computed(() => conditionCatalog.value.map((c) => c.condition_id))
+const conditionLabels = computed(() => {
+  const m = {}
+  conditionCatalog.value.forEach((c) => {
+    m[c.condition_id] = c.name_zh || c.condition_id
+  })
+  return m
+})
 const CONDITION_STATUS = { confirmed: '已确诊', suspected: '疑似', unknown: '未填写' }
 const ALLERGY_OPTIONS = ['花生', '牛奶', '海鲜', '鸡蛋', '麸质', '无']
 const ETHICAL_OPTIONS = ['清真', '素食', '不吃牛肉', '不吃猪肉', '无']
@@ -225,9 +231,9 @@ const isImageAvatar = computed(() => String(p.value.avatar || '').startsWith('da
 
 const conditionList = computed(() => {
   const c = p.value.conditions || {}
-  return CONDITION_IDS.filter((id) => c[id] && c[id].status && c[id].status !== 'unknown').map((id) => ({
+  return conditionIds.value.filter((id) => c[id] && c[id].status && c[id].status !== 'unknown').map((id) => ({
     id,
-    label: CONDITION_LABELS[id],
+    label: conditionLabels.value[id] || id,
     status: c[id].status
   }))
 })
@@ -254,7 +260,7 @@ const backup = ref(null)
 
 function emptyConditions() {
   const out = {}
-  CONDITION_IDS.forEach((id) => {
+  conditionIds.value.forEach((id) => {
     out[id] = 'unknown'
   })
   return out
@@ -273,7 +279,7 @@ function fillForm() {
   form.allergies = [...(pr.allergies || [])]
   form.religious_ethical = [...(pr.religious_ethical || [])]
   const cond = emptyConditions()
-  CONDITION_IDS.forEach((id) => {
+  conditionIds.value.forEach((id) => {
     const st = pr.conditions && pr.conditions[id] && pr.conditions[id].status
     cond[id] = ['confirmed', 'suspected', 'unknown'].includes(st) ? st : 'unknown'
   })
@@ -287,8 +293,20 @@ function fillForm() {
   }
 }
 
-function onOpen() {
+async function loadConditionCatalog() {
+  if (conditionCatalogLoaded.value) return
+  try {
+    conditionCatalog.value = (await fetchConditionCatalog()) || []
+  } catch (e) {
+    conditionCatalog.value = []
+  } finally {
+    conditionCatalogLoaded.value = true
+  }
+}
+
+async function onOpen() {
   if (!profile.profile) profile.load()
+  await loadConditionCatalog()
   backup.value = fillForm()
 }
 
@@ -316,7 +334,7 @@ async function save() {
     weight_kg: Number(form.weight_kg),
     goal_code: form.goal_code,
     cooking_equipment: [...form.cooking_equipment],
-    conditions: CONDITION_IDS.reduce((acc, id) => {
+    conditions: conditionIds.value.reduce((acc, id) => {
       acc[id] = { status: form.conditions[id] || 'unknown' }
       return acc
     }, {}),
@@ -332,6 +350,8 @@ async function save() {
     ElMessage.error(e.message || '保存失败，请稍后重试')
   }
 }
+
+onMounted(loadConditionCatalog)
 </script>
 
 <style scoped>
@@ -349,5 +369,11 @@ async function save() {
 .cond-name {
   font-size: 13px;
   color: var(--text-main, #333);
+}
+
+.cond-empty {
+  font-size: 12px;
+  color: var(--text-sub, #999);
+  padding: 4px 0;
 }
 </style>

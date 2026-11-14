@@ -9,3 +9,8 @@ export async function fetchProfile() {
 export async function updateProfile(payload) {
   return (await http.put('/profile', payload)) || null
 }
+
+/** GET /conditions/catalog：病种字典（condition_id + 中文名），前端不写死 */
+export async function fetchConditionCatalog() {
+  return (await http.get('/conditions/catalog')) || []
+}

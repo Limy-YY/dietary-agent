@@ -20,6 +20,7 @@ import {
   findRecord,
   GOAL_NAMES,
   CONDITION_IDS,
+  getConditionCatalog,
   resetState
 } from './store.js'
 
@@ -352,6 +353,13 @@ async function handle(req, res, pathname, searchParams) {
       return
     }
     await streamChat(req, res, body)
+    return
+  }
+
+  /* 病种目录 */
+  if (pathname === '/conditions/catalog' && req.method === 'GET') {
+    await sleep(30)
+    json(ok(getConditionCatalog()))
     return
   }
 

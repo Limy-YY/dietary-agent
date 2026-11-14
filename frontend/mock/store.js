@@ -27,6 +27,11 @@ export const CONDITION_NAMES = {
   gout: '痛风'
 }
 
+/** GET /conditions/catalog：病种字典（与后端一致，前端不写死） */
+export function getConditionCatalog() {
+  return CONDITION_IDS.map((id) => ({ condition_id: id, name_zh: CONDITION_NAMES[id] }))
+}
+
 function bmrTarget(p) {
   const isFemale = p.gender !== '男'
   const bmr = 10 * Number(p.weight_kg) + 6.25 * Number(p.height_cm) - 5 * Number(p.age) + (isFemale ? -161 : 5)
