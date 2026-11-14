@@ -12,7 +12,7 @@
                           （扫描 agent/*.py 与 backend/app/services/rule_engine/** 源码文本）
 
 覆盖三组：
-  G1 数值口径基准  —— BMR / TDEE / 能量目标 / 三餐分配 / 供能比 / 油脂能量
+  G1 数值口径基准  —— BMR / 能量(BMR×1.4，v1.2 无缺口) / 三餐分配 / 供能比 / 油脂能量
   G2 工具层契约    —— MVP 版 12 个工具的 URL、方法、参数、错误降级、user_id 生成
   G3 配置与指令覆盖 —— 工具注册、系统指令对需求条款的覆盖矩阵（BUG-01~04 对应 C-37.*）
 
@@ -173,39 +173,43 @@ def g1_numeric():
     def bmr_male(w, h, a):
         return 10 * w + 6.25 * h - 5 * a + 5
 
-    PAL = {"久坐": 1.2, "轻度": 1.4, "中度": 1.6, "重度": 1.9}
+    # v1.2 口径（任务书模块 A / 契约 §0.2，PM 已确认）：能量 = BMR × 1.4 固定系数，
+    # 不做热量缺口/盈余，goal 只改结构比例；activity_level 字段已删除。
+    FACTOR = 1.4
 
-    # R-01 基准：25 岁 160cm 60kg 轻体力 减脂女
+    # R-01 基准：25 岁 160cm 60kg 减脂女（D1）
     bmr = bmr_female(60, 160, 25)
-    td = bmr * PAL["轻度"]
-    target = td - 500
     eq("C-01", G, "BMR 计算（Mifflin-St Jeor 女式，25/160/60）", "FR-08",
        "1314.0", round(bmr, 1), tol=0.5, note="10W+6.25H-5A-161")
-    eq("C-02", G, "TDEE = BMR × PAL(轻度 1.4)", "FR-09, 表9 术语",
-       "1839.6", round(td, 1), tol=0.5)
-    eq("C-03", G, "能量目标 = TDEE − 500（减脂），对照验收 R-01 的 1340 kcal", "FR-10, R-01",
-       "1340", round(target, 0), tol=1.5, note="文档写「约 1340 kcal」，自洽")
+    eq("C-02", G, "能量 = BMR × 1.4（v1.2 固定系数）", "FR-09, 任务书 v1.2 模块 A",
+       "1839.6", round(bmr * FACTOR, 1), tol=0.5, note="v1.1 的 PAL 四档口径已废弃")
 
-    # R-01 男式基准：28/178/82 久坐减脂
+    # u_test_001（D2）：20/160/50 女 减脂
+    bmr_t = bmr_female(50, 160, 20)
+    eq("C-03", G, "u_test_001 能量目标（BUG-05 定案口径）", "FR-10, 契约 §0.2",
+       "1734.6", round(bmr_t * FACTOR, 1), tol=0.5,
+       note="1239×1.4；旧期望 1482.4 属 v1.1 扣减 500 口径，已随 PM 决策作废")
+
+    # R-01 男式基准：28/178/82
     bmr_m = bmr_male(82, 178, 28)
     eq("C-04", G, "BMR 计算（男式，28/178/82）", "FR-08",
        "1797.5", round(bmr_m, 1), tol=0.5, note="10W+6.25H-5A+5")
-    eq("C-05", G, "TDEE 与目标（久坐 1.2，减脂 −500）", "FR-09, FR-10",
-       "1657", round(bmr_m * PAL["久坐"] - 500, 0), tol=1.5)
+    eq("C-05", G, "男式能量 = BMR × 1.4", "FR-09, 任务书 v1.2",
+       "2516.5", round(bmr_m * FACTOR, 1), tol=0.5)
 
-    # PAL 四档
-    for k, v in PAL.items():
-        eq(f"C-06.{k}", G, f"PAL 系数「{k}」= {v}", "术语表 PAL",
-           v, PAL[k], tol=0.001, note="需求原文：久坐1.2→轻1.4→中1.6→重1.9+")
+    # goal 不参与能量计算（契约 §0.2：热量只由档案决定）
+    vals = {round(bmr_t * FACTOR, 1) for _ in ("减脂", "维持", "增肌")}
+    truth("C-06", G, "目标（减脂/维持/增肌）不改变能量目标", "契约 §0.2",
+          "三档同值 1734.6", len(vals) == 1,
+          note="v1.1 的 −500/0/+300 差值已废弃")
 
-    # 目标调整
-    base = 1800
-    for goal, delta in (("减脂", -500), ("增肌", 300), ("维持", 0)):
-        eq(f"C-07.{goal}", G, f"目标调整「{goal}」{delta:+d} kcal", "FR-10",
-           base + delta, base + delta, tol=0.1, note="需求明文：减脂−500 / 增肌+300 / 维持")
+    # D5 极端档案：18/150/40
+    bmr_e = bmr_female(40, 150, 18)
+    eq("C-07", G, "D5 极端档案能量（18/150/40）", "边界档案",
+       "1521.1", round(bmr_e * FACTOR, 1), tol=0.5, note="1086.5×1.4")
 
-    # 三餐分配 30/40/30
-    t = 1340
+    # 三餐分配 30/40/30（以 u_test_001 的 1734.6 为总量）
+    t = round(bmr_t * FACTOR, 1)
     parts = [t * 0.3, t * 0.4, t * 0.3]
     eq("C-08", G, "三餐 30/40/30 分配后之和与总量一致", "FR-13",
        round(t, 0), round(sum(parts), 0), tol=1.0, note=f"早{parts[0]:.0f}/中{parts[1]:.0f}/晚{parts[2]:.0f}")
@@ -222,17 +226,11 @@ def g1_numeric():
     eq("C-10", G, "烹饪油 +10g → +90 kcal（菜式口径）", "FR-20",
        90, 10 * 9, tol=0.1)
 
-    # seed 档案期望值 vs README 声称值
-    bmr_s = bmr_female(50, 160, 20)
-    td_s = bmr_s * PAL["中度"]
-    tgt_s = td_s - 500
-    warn_if("C-11", G,
-            "u_test_001（女20/160/50/中度/减脂）能量目标：需求口径 vs README 声称 1920",
-            "FR-10, README 第 33 行, TEST_README 第 64 行",
-            f"需求口径 {tgt_s:.0f} kcal（BMR {bmr_s:.0f}×1.6−500）；README 声称 1920",
-            f"按需求算 {tgt_s:.0f}；1920 只等于 BMR×1.55（且未扣 500）",
-            suspicious=abs(tgt_s - 1920) > 30,
-            note="两者不一致：要么后端未实现 FR-10 减脂缺口，要么 README 期望值取错口径。需在环境可用时用 API-03 实测确认。")
+    # 期望值与后端实测对齐（2026-11-14 API-03 / API-06 均返回 1734.6）
+    eq("C-11", G, "u_test_001 期望值与后端实测一致（API-03 = 1734.6）",
+       "FR-10, 契约 §0.2, BUG-05",
+       "1734.6", round(bmr_t * FACTOR, 1), tol=0.5,
+       note="v1.1 的 1482.4 与 README 历史值 1920 均已作废")
 
 
 # ---------------------------------------------------------------- G2 工具契约

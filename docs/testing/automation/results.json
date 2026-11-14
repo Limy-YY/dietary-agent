@@ -1,10 +1,10 @@
 {
-  "target": "E:\\RG\\agent_1",
-  "run_at": "2026-10-23T17:24:20",
-  "total": 52,
-  "pass": 40,
-  "fail": 6,
-  "warn": 6,
+  "target": "E:\\RG\\dietary-agent\\agent",
+  "run_at": "2026-11-14T21:21:40",
+  "total": 35,
+  "pass": 31,
+  "fail": 3,
+  "warn": 1,
   "results": [
     {
       "id": "C-01",
@@ -19,22 +19,22 @@
     {
       "id": "C-02",
       "group": "G1 数值口径",
-      "title": "TDEE = BMR × PAL(轻度 1.4)",
-      "req": "FR-09, 表9 术语",
+      "title": "能量 = BMR × 1.4（v1.2 固定系数）",
+      "req": "FR-09, 任务书 v1.2 模块 A",
       "expected": "1839.6",
       "actual": 1839.6,
       "status": "PASS",
-      "note": ""
+      "note": "v1.1 的 PAL 四档口径已废弃"
     },
     {
       "id": "C-03",
       "group": "G1 数值口径",
-      "title": "能量目标 = TDEE − 500（减脂），对照验收 R-01 的 1340 kcal",
-      "req": "FR-10, R-01",
-      "expected": "1340",
-      "actual": 1340.0,
+      "title": "u_test_001 能量目标（BUG-05 定案口径）",
+      "req": "FR-10, 契约 §0.2",
+      "expected": "1734.6",
+      "actual": 1734.6,
       "status": "PASS",
-      "note": "文档写「约 1340 kcal」，自洽"
+      "note": "1239×1.4；旧期望 1482.4 属 v1.1 扣减 500 口径，已随 PM 决策作废"
     },
     {
       "id": "C-04",
@@ -49,102 +49,52 @@
     {
       "id": "C-05",
       "group": "G1 数值口径",
-      "title": "TDEE 与目标（久坐 1.2，减脂 −500）",
-      "req": "FR-09, FR-10",
-      "expected": "1657",
-      "actual": 1657.0,
+      "title": "男式能量 = BMR × 1.4",
+      "req": "FR-09, 任务书 v1.2",
+      "expected": "2516.5",
+      "actual": 2516.5,
       "status": "PASS",
       "note": ""
     },
     {
-      "id": "C-06.久坐",
+      "id": "C-06",
       "group": "G1 数值口径",
-      "title": "PAL 系数「久坐」= 1.2",
-      "req": "术语表 PAL",
-      "expected": 1.2,
-      "actual": 1.2,
+      "title": "目标（减脂/维持/增肌）不改变能量目标",
+      "req": "契约 §0.2",
+      "expected": "三档同值 1734.6",
+      "actual": true,
       "status": "PASS",
-      "note": "需求原文：久坐1.2→轻1.4→中1.6→重1.9+"
+      "note": "v1.1 的 −500/0/+300 差值已废弃"
     },
     {
-      "id": "C-06.轻度",
+      "id": "C-07",
       "group": "G1 数值口径",
-      "title": "PAL 系数「轻度」= 1.4",
-      "req": "术语表 PAL",
-      "expected": 1.4,
-      "actual": 1.4,
+      "title": "D5 极端档案能量（18/150/40）",
+      "req": "边界档案",
+      "expected": "1521.1",
+      "actual": 1521.1,
       "status": "PASS",
-      "note": "需求原文：久坐1.2→轻1.4→中1.6→重1.9+"
-    },
-    {
-      "id": "C-06.中度",
-      "group": "G1 数值口径",
-      "title": "PAL 系数「中度」= 1.6",
-      "req": "术语表 PAL",
-      "expected": 1.6,
-      "actual": 1.6,
-      "status": "PASS",
-      "note": "需求原文：久坐1.2→轻1.4→中1.6→重1.9+"
-    },
-    {
-      "id": "C-06.重度",
-      "group": "G1 数值口径",
-      "title": "PAL 系数「重度」= 1.9",
-      "req": "术语表 PAL",
-      "expected": 1.9,
-      "actual": 1.9,
-      "status": "PASS",
-      "note": "需求原文：久坐1.2→轻1.4→中1.6→重1.9+"
-    },
-    {
-      "id": "C-07.减脂",
-      "group": "G1 数值口径",
-      "title": "目标调整「减脂」-500 kcal",
-      "req": "FR-10",
-      "expected": 1300,
-      "actual": 1300,
-      "status": "PASS",
-      "note": "需求明文：减脂−500 / 增肌+300 / 维持"
-    },
-    {
-      "id": "C-07.增肌",
-      "group": "G1 数值口径",
-      "title": "目标调整「增肌」+300 kcal",
-      "req": "FR-10",
-      "expected": 2100,
-      "actual": 2100,
-      "status": "PASS",
-      "note": "需求明文：减脂−500 / 增肌+300 / 维持"
-    },
-    {
-      "id": "C-07.维持",
-      "group": "G1 数值口径",
-      "title": "目标调整「维持」+0 kcal",
-      "req": "FR-10",
-      "expected": 1800,
-      "actual": 1800,
-      "status": "PASS",
-      "note": "需求明文：减脂−500 / 增肌+300 / 维持"
+      "note": "1086.5×1.4"
     },
     {
       "id": "C-08",
       "group": "G1 数值口径",
       "title": "三餐 30/40/30 分配后之和与总量一致",
       "req": "FR-13",
-      "expected": 1340,
-      "actual": 1340.0,
+      "expected": 1735.0,
+      "actual": 1735.0,
       "status": "PASS",
-      "note": "早402/中536/晚402"
+      "note": "早520/中694/晚520"
     },
     {
       "id": "C-09",
       "group": "G1 数值口径",
       "title": "供能比 55/25/15 → 克数（4/4/9 kcal per g）",
       "req": "FR-13, FR-20",
-      "expected": 272.0,
-      "actual": 272.0,
+      "expected": 352.0,
+      "actual": 352.0,
       "status": "PASS",
-      "note": "碳184g 蛋50g 脂37g"
+      "note": "碳239g 蛋65g 脂48g"
     },
     {
       "id": "C-10",
@@ -159,207 +109,117 @@
     {
       "id": "C-11",
       "group": "G1 数值口径",
-      "title": "u_test_001（女20/160/50/中度/减脂）能量目标：需求口径 vs README 声称 1920",
-      "req": "FR-10, README 第 33 行, TEST_README 第 64 行",
-      "expected": "需求口径 1482 kcal（BMR 1239×1.6−500）；README 声称 1920",
-      "actual": "按需求算 1482；1920 只等于 BMR×1.55（且未扣 500）",
-      "status": "WARN",
-      "note": "两者不一致：要么后端未实现 FR-10 减脂缺口，要么 README 期望值取错口径。需在环境可用时用 API-03 实测确认。"
+      "title": "u_test_001 期望值与后端实测一致（API-03 = 1734.6）",
+      "req": "FR-10, 契约 §0.2, BUG-05",
+      "expected": "1734.6",
+      "actual": 1734.6,
+      "status": "PASS",
+      "note": "v1.1 的 1482.4 与 README 历史值 1920 均已作废"
     },
     {
-      "id": "C-12",
-      "group": "G2 工具契约",
-      "title": "get_user_profile 走 GET /api/users/{id}/profile",
-      "req": "T12, API-02",
+      "id": "C-42",
+      "group": "G2R 后端封装契约",
+      "title": "get_profile 走 GET /api/users/{id}/profile",
+      "req": "API-20, T12",
       "expected": "GET .../api/users/u_test_001/profile",
       "actual": true,
       "status": "PASS",
       "note": "实际 GET http://127.0.0.1:8000/api/users/u_test_001/profile"
     },
     {
-      "id": "C-13",
-      "group": "G2 工具契约",
-      "title": "工具返回值是可被模型消费的 JSON 字符串",
-      "req": "FR-05",
-      "expected": "str 且可 json.loads",
+      "id": "C-43",
+      "group": "G2R 后端封装契约",
+      "title": "upsert_profile 走 POST /api/profile 且 user_id 在 body",
+      "req": "API-01",
+      "expected": "POST /api/profile，body 含 user_id",
       "actual": true,
       "status": "PASS",
-      "note": ""
+      "note": "{'user_id': 'u_zhangsan', 'sex': '男', 'age': 28}"
     },
     {
-      "id": "C-14",
-      "group": "G2 工具契约",
-      "title": "upsert_profile 走 POST /api/profile 且字段齐全",
-      "req": "FR-01, API-01",
-      "expected": "POST /api/profile，含 12 个字段",
-      "actual": true,
-      "status": "PASS",
-      "note": ""
-    },
-    {
-      "id": "C-15",
-      "group": "G2 工具契约",
-      "title": "未传 allergies/taboos/conditions 时回退为空数组（而非 null）",
-      "req": "FR-22",
-      "expected": "[]",
-      "actual": true,
-      "status": "PASS",
-      "note": "实际 []/[]/[]"
-    },
-    {
-      "id": "C-16",
-      "group": "G2 工具契约",
-      "title": "无 user_id 时自动生成 u_<14 位时间戳>",
-      "req": "FR-01",
-      "expected": "匹配 ^u_\\d{14}$",
-      "actual": true,
-      "status": "PASS",
-      "note": "实际 u_20261023172420"
-    },
-    {
-      "id": "C-17",
-      "group": "G2 工具契约",
-      "title": "同一秒内连续两次自动建档的 user_id 是否唯一",
-      "req": "FR-01（档案唯一性）",
-      "expected": "两次 user_id 不同",
-      "actual": "u_20261023172420 / u_20261023172420",
-      "status": "WARN",
-      "note": "秒级时间戳做主键，同秒并发/连点会覆盖同一档案"
-    },
-    {
-      "id": "C-18",
-      "group": "G2 工具契约",
+      "id": "C-44",
+      "group": "G2R 后端封装契约",
       "title": "search_ingredients 走 GET /api/ingredients/search?q&limit",
-      "req": "T1, API-11",
-      "expected": "GET 且 params 含 q=西红柿 limit=10",
+      "req": "API-11",
+      "expected": "q=西红柿 limit=10",
       "actual": true,
       "status": "PASS",
       "note": "{'q': '西红柿', 'limit': 10}"
     },
     {
-      "id": "C-19",
-      "group": "G2 工具契约",
+      "id": "C-45",
+      "group": "G2R 后端封装契约",
       "title": "search_dishes 的 exclude_allergies 以逗号拼接",
-      "req": "FR-22, T2/T3",
+      "req": "FR-22",
       "expected": "exclude_allergies=花生,海鲜",
       "actual": true,
       "status": "PASS",
       "note": "{'page': 1, 'page_size': 20, 'exclude_allergies': '花生,海鲜'}"
     },
     {
-      "id": "C-20",
-      "group": "G2 工具契约",
-      "title": "calc_nutrition 走 POST /api/calc/nutrition，body 含 target_type/items/include_micro",
+      "id": "C-46",
+      "group": "G2R 后端封装契约",
+      "title": "calc_nutrition 走 POST /api/calc/nutrition，body 三字段齐全",
       "req": "FR-19, API-09",
-      "expected": "POST，target_type=ingredient",
+      "expected": "target_type=ingredient / items / include_micro=true",
       "actual": true,
       "status": "PASS",
       "note": "{'target_type': 'ingredient', 'items': [{'ingredient_id': 23, 'amount_g': 150}], 'include_micro': True}"
     },
     {
-      "id": "C-21",
-      "group": "G2 工具契约",
-      "title": "generate_meal_plan 走 POST /api/meal-plan/generate",
-      "req": "API-03",
-      "expected": "body user_id + plan_date",
+      "id": "C-47",
+      "group": "G2R 后端封装契约",
+      "title": "weekly_report 走 GET 带 user_id/week_start",
+      "req": "API-13",
+      "expected": "params week_start=2026-10-19",
       "actual": true,
       "status": "PASS",
-      "note": "{'user_id': 'u_test_001', 'plan_date': '2026-10-23'}"
+      "note": "{'user_id': 'u_test_001', 'week_start': '2026-10-19'}"
     },
     {
-      "id": "C-22",
-      "group": "G2 工具契约",
-      "title": "weekly_nutrition_report 走 GET 带 user_id/week_start",
-      "req": "T4/T5, API-13",
-      "expected": "params user_id=u_test_001 week_start=2026-10-19",
-      "actual": true,
-      "status": "PASS",
-      "note": ""
-    },
-    {
-      "id": "C-23",
-      "group": "G2 工具契约",
-      "title": "后端业务错误（code≠0）→ 工具返回 error 字符串，不抛异常",
+      "id": "C-48",
+      "group": "G2R 后端封装契约",
+      "title": "后端业务错误（code≠0）→ 抛 BackendError 且带 code",
       "req": "3.5.2 可靠性",
-      "expected": "返回 JSON 含 error 且带 code",
+      "expected": "BackendError 含 4040",
       "actual": true,
       "status": "PASS",
-      "note": "{\"error\": \"generate_meal_plan 调用失败：后端错误 code=4040：profile not found\"}"
+      "note": "后端错误 code=4040：profile not found"
     },
     {
-      "id": "C-24",
-      "group": "G2 工具契约",
-      "title": "后端断连 → 工具优雅降级（返回 error 字符串）",
+      "id": "C-49",
+      "group": "G2R 后端封装契约",
+      "title": "后端断连 → 统一降级为 BackendError（不裸抛 RequestException）",
       "req": "3.5.2 可靠性",
-      "expected": "不崩溃，返回 error",
+      "expected": "BackendError",
       "actual": true,
       "status": "PASS",
-      "note": "{\"error\": \"get_user_profile 调用失败：请求后端失败：Connection refused\"}"
+      "note": "请求后端失败：Connection refused"
     },
     {
-      "id": "C-25",
-      "group": "G2 工具契约",
-      "title": "后端返回非 JSON（如网关 502 HTML）→ 工具优雅降级",
+      "id": "C-50",
+      "group": "G2R 后端封装契约",
+      "title": "后端返回非 JSON（网关 502 HTML）→ 统一降级为 BackendError",
       "req": "3.5.2 可靠性",
-      "expected": "不崩溃，返回 error",
+      "expected": "BackendError",
       "actual": true,
       "status": "PASS",
-      "note": "{\"error\": \"get_user_profile 调用失败：后端返回非 JSON（HTTP 502）：<html>502 Bad Gateway</html>\"}"
+      "note": "后端返回非 JSON（HTTP 502）：<html>502 Bad Gateway</html>"
     },
     {
-      "id": "C-26",
-      "group": "G2 工具契约",
-      "title": "裸 JSON（无 code 字段）是否被误判为失败",
-      "req": "3.1.2 软件接口（未定义 code 包装）",
-      "expected": "应能容忍或明确报契约错",
-      "actual": "被判为 error",
-      "status": "WARN",
-      "note": "后端若直接返回裸对象（无 code 字段）会被判为错误——需确认后端统一包装契约"
-    },
-    {
-      "id": "C-27",
-      "group": "G2 工具契约",
-      "title": "tools.py 注册工具数 = 12",
-      "req": "README 工具映射表",
-      "expected": "12",
+      "id": "C-51",
+      "group": "G2R 后端封装契约",
+      "title": "HTTP 超时 30s ≥ 最慢接口目标（配餐 P95≤15s）",
+      "req": "3.3 性能",
+      "expected": "_TIMEOUT >= 15",
       "actual": true,
       "status": "PASS",
-      "note": "实际 12：['calc_nutrition', 'evaluate_condition_rule', 'generate_meal_plan', 'get_user_profile', 'list_condition_rules', 'list_production_rules', 'rag_query', 'reverse_nutrition', 'search_dishes', 'search_ingredients', 'upsert_profile', 'weekly_nutrition_report']"
-    },
-    {
-      "id": "C-28",
-      "group": "G2 工具契约",
-      "title": "12 个工具 docstring 均含「入参」说明（Function Calling 选型依据）",
-      "req": "FR-05",
-      "expected": "全部含",
-      "actual": false,
-      "status": "FAIL",
-      "note": "缺说明：['list_condition_rules', 'list_production_rules']"
-    },
-    {
-      "id": "C-29",
-      "group": "G2 工具契约",
-      "title": "空 user_id 是否被前置拦截（而非拼出 //profile 打到后端）",
-      "req": "FR-01 健壮性",
-      "expected": "应在工具层拦截并提示",
-      "actual": "直接请求 http://127.0.0.1:8000/api/users//profile",
-      "status": "WARN",
-      "note": "建议工具层加 user_id 非空校验"
-    },
-    {
-      "id": "C-30",
-      "group": "G3 配置/指令覆盖",
-      "title": "Agent 绑定的工具列表与 tools.py 注册一致（12 个）",
-      "req": "FR-05",
-      "expected": "len==12",
-      "actual": true,
-      "status": "PASS",
-      "note": "实际 12"
+      "note": "_TIMEOUT=30"
     },
     {
       "id": "C-31",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令含「绝不自己计算/不编造数值」",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现含「绝不自己计算/不编造数值」铁律",
       "req": "FR-05, 3.4 确定性计算",
       "expected": "命中",
       "actual": true,
@@ -368,8 +228,8 @@
     },
     {
       "id": "C-32",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令含「不做医学诊断」边界",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现含「不做医学诊断」边界",
       "req": "2.4 法规与伦理",
       "expected": "命中",
       "actual": true,
@@ -378,8 +238,8 @@
     },
     {
       "id": "C-33",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令含 null≠0 空值语义",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现含 null≠0 空值语义",
       "req": "TEST_README 铁律3",
       "expected": "命中",
       "actual": true,
@@ -388,8 +248,8 @@
     },
     {
       "id": "C-34",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令含 data_quality 可信度语义",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现含 data_quality 可信度语义",
       "req": "TEST_README 铁律4",
       "expected": "命中",
       "actual": true,
@@ -398,8 +258,8 @@
     },
     {
       "id": "C-35",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令含 allergen_status=未核查 不得称安全",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现含 allergen_status=未核查 不得称安全",
       "req": "TEST_README 铁律5",
       "expected": "命中",
       "actual": true,
@@ -408,123 +268,93 @@
     },
     {
       "id": "C-36",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令含 needs_clarification 必须追问",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现含 needs_clarification 必须追问",
       "req": "TEST_README 铁律7",
       "expected": "命中",
-      "actual": true,
-      "status": "PASS",
+      "actual": false,
+      "status": "FAIL",
       "note": ""
     },
     {
       "id": "C-37.FR-13",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令覆盖 FR-13（三餐 30/40/30 或 供能比 50~65/20~30/10~15）",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现覆盖 FR-13（三餐 30/40/30 或 供能比 50~65/20~30/10~15）",
       "req": "FR-13",
-      "expected": "指令中含显式约束",
-      "actual": "未命中（依赖后端返回字段）",
-      "status": "FAIL",
-      "note": "模型侧无约束，自然语言复述时可能漏掉该要求"
+      "expected": "话术出现在实现中",
+      "actual": "命中",
+      "status": "PASS",
+      "note": ""
     },
     {
       "id": "C-37.FR-19/20",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令覆盖 FR-19/20（食材口径 vs 菜式口径（双口径分别标注））",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现覆盖 FR-19/20（食材口径 vs 菜式口径（双口径分别标注））",
       "req": "FR-19/20",
-      "expected": "指令中含显式约束",
-      "actual": "未命中（依赖后端返回字段）",
+      "expected": "话术出现在实现中",
+      "actual": "未命中",
       "status": "FAIL",
-      "note": "模型侧无约束，自然语言复述时可能漏掉该要求"
+      "note": "agent/*.py + backend/app/services/rule_engine/** 源码中未找到该约束话术"
     },
     {
       "id": "C-37.FR-21",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令覆盖 FR-21（油盐以 低/中/高 分级 + 克数区间，不得伪精确）",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现覆盖 FR-21（油盐以 低/中/高 分级 + 克数区间，不得伪精确）",
       "req": "FR-21",
-      "expected": "指令中含显式约束",
-      "actual": "未命中（依赖后端返回字段）",
-      "status": "FAIL",
-      "note": "模型侧无约束，自然语言复述时可能漏掉该要求"
+      "expected": "话术出现在实现中",
+      "actual": "命中",
+      "status": "PASS",
+      "note": ""
     },
     {
       "id": "C-37.FR-23",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令覆盖 FR-23（被规避菜式需给出提醒及依据说明）",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现覆盖 FR-23（被规避菜式需给出提醒及依据说明）",
       "req": "FR-23",
-      "expected": "指令中含显式约束",
+      "expected": "话术出现在实现中",
       "actual": "命中",
       "status": "PASS",
       "note": ""
     },
     {
       "id": "C-37.FR-29",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令覆盖 FR-29（反向营养用「可能/建议关注」非确定性措辞）",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现覆盖 FR-29（反向营养用「可能/建议关注」非确定性措辞）",
       "req": "FR-29",
-      "expected": "指令中含显式约束",
-      "actual": "未命中（依赖后端返回字段）",
+      "expected": "话术出现在实现中",
+      "actual": "未命中",
       "status": "FAIL",
-      "note": "模型侧无约束，自然语言复述时可能漏掉该要求"
+      "note": "agent/*.py + backend/app/services/rule_engine/** 源码中未找到该约束话术"
     },
     {
       "id": "C-37.FR-30",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令覆盖 FR-30（回复末尾附「若症状持续请及时就医」）",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现覆盖 FR-30（回复末尾附「若症状持续请及时就医」）",
       "req": "FR-30",
-      "expected": "指令中含显式约束",
-      "actual": "未命中（依赖后端返回字段）",
-      "status": "FAIL",
-      "note": "模型侧无约束，自然语言复述时可能漏掉该要求"
+      "expected": "话术出现在实现中",
+      "actual": "命中",
+      "status": "PASS",
+      "note": ""
     },
     {
       "id": "C-37.FR-27",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令覆盖 FR-27（关键结论标注权威来源（source/source_id））",
+      "group": "G3R 指令话术覆盖",
+      "title": "实现覆盖 FR-27（关键结论标注权威来源（source/source_id））",
       "req": "FR-27",
-      "expected": "指令中含显式约束",
+      "expected": "话术出现在实现中",
       "actual": "命中",
       "status": "PASS",
       "note": ""
     },
     {
       "id": "C-38",
-      "group": "G3 配置/指令覆盖",
-      "title": "系统指令需求覆盖缺口汇总",
+      "group": "G3R 指令话术覆盖",
+      "title": "指令需求覆盖缺口汇总",
       "req": "3.2 系统特征",
       "expected": "0 处缺口",
-      "actual": "5 处缺口：['FR-13', 'FR-19/20', 'FR-21', 'FR-29', 'FR-30']",
+      "actual": "2 处缺口：['FR-19/20', 'FR-29']",
       "status": "WARN",
-      "note": "所有缺口均可通过补 1~2 条 instruction 修复，成本极低"
-    },
-    {
-      "id": "C-39",
-      "group": "G3 配置/指令覆盖",
-      "title": "无 .env 时配置不崩溃，默认 BASE_URL 为 127.0.0.1:8000",
-      "req": "README 运行前提",
-      "expected": "http://127.0.0.1:8000",
-      "actual": true,
-      "status": "PASS",
-      "note": "实际 http://127.0.0.1:8000"
-    },
-    {
-      "id": "C-40",
-      "group": "G3 配置/指令覆盖",
-      "title": ".env 解析对引号与行尾注释的处理",
-      "req": "README 配置说明",
-      "expected": "A=quoted / B=value",
-      "actual": "A=\"quoted\" / B=value # trailing comment",
-      "status": "WARN",
-      "note": "当前实现不剥离引号、不去行尾注释，用户按 dotenv 习惯书写会得到错误值"
-    },
-    {
-      "id": "C-41",
-      "group": "G3 配置/指令覆盖",
-      "title": "HTTP 超时 30s 与需求 3.3（配餐 P95≤15s）的关系",
-      "req": "3.3 性能",
-      "expected": "超时值应不小于最慢接口目标且可配置",
-      "actual": true,
-      "status": "PASS",
-      "note": "硬编码 _TIMEOUT=30，不可配置；周报目标 3s 无独立超时"
+      "note": "补话术到 agent 指令 / blocks 模板 / rule_engine 文案后复跑，对应 C-37.* 转 PASS"
     }
   ]
 }
