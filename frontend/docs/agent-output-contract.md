@@ -1,320 +1,249 @@
-# Agent 输出契约（前端对接版 · v1 草案）
+# 前端 Agent 输出契约（v1.2 对齐版）
 
-> 状态：**v1 草案**。字段以原型与 `mock/` 的产出为准，待与 Agent 同学对齐后升版。
-> 前端实现位置：`src/api/agent.js`（SSE）、`src/utils/schema.js`（归一化）、`src/components/renderer/RendererHost.vue`（注册表）。
+> 本文件是前端侧**唯一字段源**。字段名、枚举、`null` 语义一律以团队《Agent 输出契约 v1.2-r2》与《后端接口契约 v1.2》为准；本文件只记录前端如何消费，不再维护第二套字段。
+>
+> 版本：v1.2（2026-11-14 改造）
+> 对应代码：`src/utils/schema.js`（唯一适配层）、`src/api/*`、`src/stores/chat.js`、`mock/*`
 
-## 1. 传输：一个 SSE + 一组 REST
+---
 
-| 场景 | 方式 |
-| --- | --- |
-| 用户发消息、卡片按钮触发的动作 | `POST /api/agent/chat`，`text/event-stream` |
-| 档案、当前方案、历史方案、食材清单、膳食报告 | 普通 REST，统一 `{code, message, data}` |
+## 1. 总则
 
-卡片按钮**不调 REST**，一律发固定话术进入对话流（见 §6），由 Agent 决定写库，前端随后回读 REST 拿服务端真状态。
+### 1.1 SSE 事件
 
-### 1.1 请求
+`POST /api/agent/chat`，`Content-Type: text/event-stream`。请求体：
 
-```http
-POST /api/agent/chat
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{ "conversation_id": "conv_xxx 或 null", "message": "今天吃什么" }
+```json
+{ "conversation_id": "conv_xxx | null", "message": "生成一周食谱", "context": { "meal_plan_id": 101 } }
 ```
 
-### 1.2 事件
+事件类型固定四类 + 结束事件：
 
-| event | 时机 | data |
-| --- | --- | --- |
-| `message` | 正文流式增量，多次 | `{ "delta": "已按你的" }` |
-| `message` | 正文结束后**一次**下发结构化边车 | `{ "meta": { "blocks": [...] }, "conversation_id": "conv_xxx" }` |
-| `done` | 流结束 | `{ "conversation_id", "message_id", "finish_reason": "stop", "suggestions": ["看完整食谱"] }` |
-| `error` | 生成中失败 | `{ "code": 2003, "message": "生成失败，请重试" }` |
-| `ping` | 心跳 | `{}`，前端忽略 |
+| event | data | 前端处理 |
+|---|---|---|
+| `message` | `{"type":"text","content":"…"}` | `type === 'text'` 时把 `content` 追加到当前 AI 气泡；空内容不建气泡 |
+| `artifact` | `{"type":"meal_card\|shopping_list\|current_plan\|nutrition_report","payload":{…}}` | 立即归一化并渲染/更新；同 `type + raw_id` 原位替换，不重复追加 |
+| `clarify` | `{"question":"…","missing_fields":["gender","age"]}` | 在气泡内渲染追问与缺失字段，不新增 assistant 轮次 |
+| `error` | `{"code":2001,"message":"…"}` | 气泡内提示错误码语义；`2001~2004` 可重试，其余不自动重试 |
+| `done` | `{"conversation_id":"…","meal_plan_id":101,"finish_reason":"stop"}` | 记录会话与方案 id，刷新右侧面板，结束当前流 |
 
 约束：
 
-- 正文只能靠 `delta` 累加，前端不做任何拼接假设；`meta` 一定在正文之后、`done` 之前。
-- `meta.blocks` 允许为空数组；为空时前端只渲染正文。
-- `done.suggestions` 仅作为话术提示返回；底部固定 5 个快捷与 main.html 原型一致（生成一日三餐 / 生成一周食谱 / 推荐一餐搭配 / 生成周膳食报告 / 生成月膳食报告），不把 suggestions 叠加进快捷区。
-- 响应头必须是 `text/event-stream`；否则前端按 JSON 错误处理（`src/api/agent.js` 有校验）。
-- 断开由前端 `AbortController` 发起，服务端应停止生成。
+- 一次对话可下发多个 `artifact`；`done` 必发且只发一次。
+- 前端**只认这四个 artifact type**；未知 type 进入 `{type:'unknown', raw_type, payload}` 兜底，按纯文本/原始 JSON 提示，不白屏。
+- 流式文本按服务端切片到达，前端自行拼接，不做二次切分。
 
-### 1.3 统一响应与错误码
+### 1.2 数值三条硬规则
 
-```json
-{ "code": 0, "message": "success", "data": {} }
-```
+| 规则 | 前端落地 |
+|---|---|
+| 数值只读 | 不重算热量、蛋白、油盐、微量；`macro_estimate` / `macro_summary` 原样展示 |
+| `null` 语义 | `null` / 缺字段 / 空串 → 显示「—」或「数据不足」，**绝不回落 0**，不标「已达标」 |
+| 溯源可查 | 候选 `sources`、报告 `sources`、`summary.reference_hints` / `data_quality_notes` 必须可见（报告底部常驻，不折叠） |
 
-| code | 含义 | 前端行为 |
-| --- | --- | --- |
-| 0 | 成功 | 取 `data` |
-| 1002 | 登录态失效 | 清 token、派发 `sz:unauthorized`、提示重新登录 |
-| 1004 | 空态（没有数据） | resolve 成 `null`，组件渲染空态，不弹错误 |
-| 2002 | 参数不合法 | 提示 `message` |
-| 2003 | 生成失败 | 提示 + 可重试（对话消息显示「重试」） |
-| 其他 | — | 提示 `message`，抛 `ApiError` |
+### 1.3 7 个关键微量键（固定顺序）
 
-## 2. REST 清单
+`calcium → iron → zinc → vitamin_a → vitamin_b1 → vitamin_b2 → vitamin_c`
 
-| 方法 | 路径 | 参数 | data |
-| --- | --- | --- | --- |
-| GET | `/api/profile` | — | `{ profile }` |
-| PUT | `/api/profile` | 档案字段（见 §2.1） | `{ profile }`（重新计算 `extras.target_energy_kcal`） |
-| GET | `/api/meal-plan/current` | — | `{ plan }`；无方案 → 1004 |
-| GET | `/api/meal-plan/list` | — | `{ plans: [planSummary] }` |
-| GET | `/api/meal-plan/:id` | — | `{ plan }`；不存在 → 1004 |
-| GET | `/api/shopping-list` | `meal_plan_id`（可选，缺省为当前方案） | `{ shopping_list }`；方案未确认 → 1004 |
-| GET | `/api/nutrition/report` | `meal_plan_id`（可选）；`scope=week\|month`（**扩展，待后端确认**） | `{ report }`；无可复盘方案 → 1004 |
+- 中文名只读 `name_zh`，单位只读 `unit`，目标只读 `target`；前端不维护「键 → 中文名」映射表。
+- 前端 `MICRO_KEYS` 仅用于按契约顺序遍历 `key_micro_summary`，不用于翻译。
+- `status`：`达标 → ok`、`不足 → warn`、`参考提示 → neutral`；`neutral` 用中性色 +「提示」标签，不用红色错误态。
+- `intake === null` → 数值显示「—」，说明文案「数据不足」。
 
-`planSummary`：`{ plan_id, title, plan_type, range_text, status, executed, kcal, created_at }`。
+---
 
-### 2.1 档案字段（PUT 可只传变化的字段）
+## 2. MealCard（`type: "meal_card"`）
 
-```json
-{
-  "sex": "女",
-  "age": 26,
-  "height_cm": 158,
-  "weight_kg": 58,
-  "activity_level": "light",
-  "goal": "减脂",
-  "allergies": ["花生"],
-  "taboos": [],
-  "extras": { "name": "小膳", "avatar": "🍃", "goals": ["减脂"], "cookware": ["灶具", "电饭煲"] }
-}
-```
+### 2.1 字段（前端读取）
 
-## 3. Block 通用约定
+| 字段 | 类型 | 前端用途 |
+|---|---|---|
+| `meal_plan_id` | integer | 方案 id；`raw_id`，同 id 的卡原位替换 |
+| `plan_type` | `餐\|日\|多日\|周\|自定义` | 标题：一餐搭配 / 今日三餐 / 多日方案 / 一周食谱 / 膳食方案 |
+| `status` | `draft\|candidates\|fixed` | `candidates` 显示「待确认」+ 换候选/确认入口；`fixed` 只读、隐藏换候选 |
+| `start_date` / `end_date` | `YYYY-MM-DD` | 卡头日期范围 |
+| `goal_code` | enum / null | 仅透传，展示不自行翻译 |
+| `goal_energy_kcal` | number / null | 「目标 N kcal」，null 显示「—」 |
+| `macro_ratio` | object / null | 早/午/晚占比，仅展示，不参与计算 |
+| `slots[]` | array | 餐位；按 `slot_date` + `display_order` 排序 |
+| `slots[].meal_slot_id` | integer | 换候选、固定时的餐位标识 |
+| `slots[].slot_date` | string | 分组日期 |
+| `slots[].meal_type` | `早\|午\|晚` | 餐次文案（早餐/午餐/晚餐，时间 07:30 / 12:00 / 18:30 为前端展示常量） |
+| `slots[].display_order` | integer | 同日展示顺序 |
+| `slots[].target_macro` | object / null | 目标热量/蛋白；缺省时热量显示「—」 |
+| `slots[].selected_candidate_id` | integer / null | 当前选中候选 |
+| `slots[].candidates[].candidate_id` | integer | 候选 id |
+| `slots[].candidates[].rank` | 1~3 | 候选排序 |
+| `slots[].candidates[].why_text` | string | 逐候选展示「为什么这样搭」，不合并 |
+| `slots[].candidates[].reason_codes` | string[] | 结构判定码，仅透传 |
+| `slots[].candidates[].macro_estimate` | `{kcal, protein_g, fat_g, carb_g, fiber_g}` | 热量与宏量；`fiber_g` 归宏量，不进微量达标 |
+| `slots[].candidates[].micro_estimate` | 7 键数值 / null | 该候选对微量的贡献量，非百分比 |
+| `slots[].candidates[].oil_salt_estimate` | `{oil_g, salt_g}` / null | 油盐单独口径，不与宏量混排 |
+| `slots[].candidates[].eating_order_advice` | string / null | 进食顺序，轻提示样式单独一行 |
+| `slots[].candidates[].sources` | object[] | 溯源 |
+| `slots[].candidates[].dishes[]` | array | 菜品 |
+| `dishes[].dish_id` | **string**（`DISH-001`） | 菜品编码，禁止按数字处理 |
+| `dishes[].name` | string | 菜名 |
+| `dishes[].role` | `主食\|菜` | 角色 |
+| `dishes[].servings` | number | 份数 |
+| `dishes[].estimated_g` | number / null | 估算克数 |
+| `dishes[].portion_text` | string / null | 份量描述（如「1 碗（熟重 150g）」）；null 显示「—」 |
+| `dishes[].method_override` | string / null | 做法覆盖 |
+| `dishes[].display_order` | integer | 菜内顺序 |
+| `why_summary` | string | 整份方案说明 |
+| `reference_hints` | string[] | 提示条，中性色 |
+| `data_quality_notes` | string[] | 数据说明 |
 
-- 每个 block 必须有 `type`；建议带一个稳定 id（`card_id` / `plan_id` / `report_id`），前端用作 `v-for` key。
-- **前端不认识 `type` 时不会白屏**：`FallbackBlock` 显示 type 名 + 原始 JSON。
-- 字段允许 snake_case 或 camelCase，`schema.js` 都认；缺字段给默认值，不抛错。
-- 已注册的 type：`meal_card`、`meal_plan`、`recipe_detail`、`nutrition`、`report`、`sources`、`medical_hint`、`anchor`、`shopping_list`。
-- 类型别名（后端换名也能接）：`recipe_card→meal_card`、`week_plan/plan_detail→meal_plan`、`recipe→recipe_detail`、`shopping/grocery→shopping_list`、`nutrition_report→nutrition`、`meal_report→report`、`source→sources`、`health_hint→medical_hint`、`jump→anchor`。
+### 2.2 渲染规则
 
-## 4. Block schema
+- `plan_type=餐`：只渲染 1 个餐位，2~3 个候选竖排，点选候选发「选用第 N 个候选」；`日`：3 餐竖排；`多日/周/自定义`：按 `slot_date` 折叠成天，默认展开今天/首日。
+- 每餐位热量只取选中候选 `macro_estimate.kcal`；该值为 null 时显示「— kcal」，不得用 `target_macro` 冒充实际值。
+- 换候选按钮 → 发送「换一换 + 餐次」；`status=fixed` 时禁用。
+- 确认按钮 → 发送「确认当前方案」；成功后卡变 `fixed`，右侧「当前规划」「食材清单」同步刷新。
+- `why_text`、`oil_salt_estimate`、`eating_order_advice` 各自独立展示，不折叠进「为什么这样搭」一段里。
 
-### 4.1 `meal_card`（餐卡：单餐 / 一日三餐 / 一周）
+---
 
-```json
-{
-  "type": "meal_card",
-  "plan_id": "plan_1731..._1",
-  "card_id": "card_plan_...",
-  "title": "🗓️ 今日食谱",
-  "subtitle": "11-13 周四 · 全天约 1680 kcal",
-  "scope": "day | meal | week",
-  "status": "draft | candidates | fixed",
-  "goal_text": "减脂 · 目标 1850 kcal",
-  "target_kcal": 1850,
-  "total_kcal": 1680,
-  "range_text": "11-13 周四",
-  "action_scope_label": "当前方案",
-  "slots": [slotView],
-  "days": [{ "date": "11-13", "weekday": "周四", "is_today": true, "kcal": 1680, "slots": [slotView] }],
-  "reason": { "summary": "按档案与近期微量摄入平衡排出这套方案", "points": ["三餐 30/40/30 分配…"] }
-}
-```
+## 3. ShoppingList（`type: "shopping_list"`）
 
-- `scope=week` 用 `days`，`slots` 留空；`scope=meal` 的 `slots` 只放这一餐，其 `candidates` 用于候选单选。
-- `slotView`：
+| 字段 | 类型 | 用途 |
+|---|---|---|
+| `shopping_list_id` | integer / null | 清单 id |
+| `meal_plan_id` | integer | 归属方案 |
+| `total_items` | integer | 总项数（卡头） |
+| `groups[].category` | `蔬菜\|肉类\|水产\|蛋奶\|豆制品\|主食谷物\|水果\|坚果\|调料\|粮油\|其他` | 分组标题；前端只做顺序展示，不自行归类 |
+| `groups[].items[].ingredient_id` | string（`CN-1032`） | 勾选键 |
+| `groups[].items[].name` | string | 名称 |
+| `groups[].items[].estimated_quantity` | number / null | 估算数量；null → 显示「估算量待补」 |
+| `groups[].items[].unit` | string / null | g / ml / 个 / 份 等 |
+| `generated_at` | string / null | 生成时间 |
 
-```json
-{
-  "slot_id": "s-0-lunch",
-  "meal_type": "breakfast | lunch | dinner",
-  "label": "午餐",
-  "time": "12:00",
-  "color": "#4a7c59",
-  "kcal": 620,
-  "oil_g": 6,
-  "salt_g": 1.8,
-  "dish_text": "糙米饭 + 香煎鸡胸肉 + 清炒西兰花",
-  "dish_count": 4,
-  "dishes": [{ "name": "糙米饭", "amount": "1 碗", "kcal": 210, "tip": "提前泡米" }],
-  "candidates": [{ "candidate_id": "lunch-c1", "name": "方案 B · 荞麦面 + 卤鸡腿", "kcal": 640, "desc": "…", "dishes": [...] }],
-  "selected_candidate_id": "lunch-c0",
-  "micro": [microItem]
-}
-```
+规则：
 
-- `reason.points` 有值时「为什么这样搭」是**前端本地弹窗**，不发请求；没有时按钮改发 `为什么这样搭` 话术。
+- **无 `is_staple`**；常备粮油只用固定文案提示，不伪造字段。
+- 方案未固定时接口返回 `2005`，面板显示「方案还没固定」空态 + 确认入口，不渲染空清单。
+- 底部固定说明：数量为估算量，按实际采购调整；粮油等常备品类按家中存量自行增减。
 
-### 4.2 `meal_plan`（完整食谱视图）
+---
 
-```json
-{
-  "type": "meal_plan",
-  "plan_id": "plan_...",
-  "view": "week | day",
-  "title": "接下来七天食谱",
-  "subtitle": "含用量与做法",
-  "days": [{ "date": "11-13", "weekday": "周四", "is_today": true, "kcal": 1680, "slots": [slotView] }]
-}
-```
+## 4. CurrentPlan（`type: "current_plan"`）
 
-### 4.3 `recipe_detail`（详细食谱）
+| 字段 | 类型 | 用途 |
+|---|---|---|
+| `has_plan` | boolean | false 时不画空表，显示「暂无进行中的规划」引导 |
+| `meal_plan_id` | integer / null | 方案 id |
+| `plan_type` | `餐\|日\|多日\|周\|自定义` / null | 标题 |
+| `status` | `candidates\|fixed` / null | 「待确认 / 已生效」 |
+| `start_date` / `end_date` | string / null | 日期范围 |
+| `fixed_at` | string / null | 固定时间；`candidates` 时为空 |
+| `goal_energy_kcal` | number / null | 「N kcal 目标」 |
+| `slots[].meal_slot_id` / `slot_date` / `meal_type` / `display_order` | — | 按天分组展示 |
+| `slots[].selected_candidate_id` | integer / null | 透传 |
+| `slots[].dish_ids` | string[] | 菜品编码 |
+| `slots[].dish_names` | string[] | 菜品名（列表主文案） |
+| `slots[].kcal` | number / null | 该餐热量；null 显示「—」 |
 
-```json
-{
-  "type": "recipe_detail",
-  "title": "今日三餐 · 详细食谱",
-  "subtitle": "用量按身高体重估算",
-  "meals": [{
-    "label": "午餐", "time": "12:00", "kcal": 620,
-    "dishes": [{ "name": "香煎鸡胸肉", "amount": "120 g", "kcal": 200, "tip": "少油，两面各煎 3 分钟", "steps": ["…"] }]
-  }]
-}
-```
+规则：只展示生效方案摘要，不含候选；`has_plan=false` 或接口 `1004` 时为空态，不编数据。
 
-### 4.4 `nutrition`（宏观四环 / 微量 7 环）
+---
 
-> 旧称「宏观四环」，当前实现是**一个宏量环 + 7 个微量环**（蛋白/碳水/脂肪三段 + 与 `segments` 一一对应的图例）。
+## 5. NutritionReport（`type: "nutrition_report"`）
 
-```json
-{
-  "type": "nutrition",
-  "plan_id": "plan_...",
-  "scope": "day | meal | week | month",
-  "macro": {
-    "center_value": "1680",
-    "center_label": "kcal 全天",
-    "segments": [
-      { "name": "蛋白质", "percent": 22, "color": "protein", "tag": "达标", "tag_level": "ok", "desc": "约 92g / 目标 95g" },
-      { "name": "碳水", "percent": 53, "color": "carb", "tag": "达标", "tag_level": "ok", "desc": "约 208g / 目标 230g" },
-      { "name": "脂肪", "percent": 25, "color": "fat", "tag": "合理", "tag_level": "blue", "desc": "约 46g / 目标 55g" }
-    ]
-  },
-  "micro": {
-    "title": "关键微量元素覆盖",
-    "items": [{ "name": "钙", "value": "99%", "ring_percent": 99, "status": "ok", "note": "约 790 mg" }]
-  },
-  "insights": ["蛋白质达标，减脂期有助于维持肌肉。"],
-  "coverage": { "level": "ok | warn", "text": "7 项关键微量均在参考范围内" }
-```
+| 字段 | 类型 | 用途 |
+|---|---|---|
+| `nutrition_report_id` | integer / null | 报告 id |
+| `report_type` | `plan\|week\|month\|custom` | 前端只渲染 `plan`；其他类型回「仅支持方案级报告」 |
+| `meal_plan_id` | integer / null | 归属方案 |
+| `period_start` / `period_end` | string / null | 「区间」文案 |
+| `window_days` | 3~30 | 统计窗口 |
+| `macro_summary.energy_kcal` | number / null | 宏量环中心值 |
+| `macro_summary.protein_pct / fat_pct / carb_pct` | number / null | 三段供能比；null 显示「—」 |
+| `macro_summary.oil_g / salt_g / fiber_g` | number / null | 「烹调油 / 食盐 / 膳食纤维」三项独立指标 |
+| `key_micro_summary.<nutrient_id>` | 对象，固定 7 键 | 微量区；每项含 `name_zh / target / unit / intake / gap / covered_pct / status` |
+| `summary.reference_hints` | string[] | 参考口径说明（如「本期铁按普通口径，未区分经期」） |
+| `summary.data_quality_notes` | string[] | 数据质量说明 |
+| `completeness.meal_count / known_meal_count / missing_meal_count` | integer / null | 「共 N 餐 · 已知 N 餐 · 缺失 N 餐」 |
+| `sources` | object[] | 参考值来源 |
+| `generated_at` | string / null | 生成时间 |
 
-- `color` 只接受 `protein | carb | fat`；`ring_percent` 是 0–100 的数值，`value` 是展示文本（`"99%"` 或 `"5/7"`）。
-- `status` 只接受 `ok | warn | danger`。
+规则：
 
-### 4.5 `report`（膳食报告卡）
+- 微量顺序固定 7 键；`status=参考提示` 中性色 +「提示」，不得红色。
+- `intake=null` → 「—」+「数据不足」；不允许显示 0%。
+- 钠只在 `macro_summary.salt_g`，不进微量区。
+- `summary.data_quality_notes` 与 `completeness` 在面板底部常驻展示，不折叠。
+- 面板请求先取 `GET /meal-plan/current`：无方案 → 配餐引导；有方案未分析 → 「生成本方案膳食报告」（`POST /nutrition/analysis`）；已生成 → 展示报告。
 
-```json
-{
-  "type": "report",
-  "report_id": "report_...",
-  "scope": "week | month",
-  "headline": "上周膳食报告",
-  "meta": { "range_start": "11-07", "range_end": "11-13", "generated_at": "2026-11-13T08:00:00Z", "valid_days": 7, "total_meals": 20, "target_kcal": 1850 },
-  "summary_text": "共覆盖 7 天、20 餐。日均 1750 kcal…",
-  "macro": { "center_value": "1750", "center_label": "kcal 日均", "segments": [...] },
-  "micro": { "title": "关键微量周达标率（天）", "items": [{ "name": "钙", "value": "4/7", "ring_percent": 57, "status": "warn" }] },
-  "daily_trend": [{ "date": "11-07", "calories": 1720, "show_date": true, "status": "ok | over | low" }],
-  "insights": ["蛋白质占比 21%，落在合理区间"],
-  "expanded": false
-}
-```
+---
 
-### 4.6 `sources`（来源）
+## 6. REST 接口（面板与心跳用，结构与 artifact payload 一致）
 
-```json
-{
-  "type": "sources",
-  "title": "参考来源",
-  "items": [{ "title": "中国居民膳食指南（2022）", "publisher": "中国营养学会", "published_at": "2022-04-26", "url": "http://dg.cnsoc.org/", "snippet": "" }]
-}
-```
+| 方法 | 路由 | 成功 `data` | 备注 |
+|---|---|---|---|
+| GET | `/api/health` | `{contract:"v1.2", mock:true}` | 探活 |
+| GET | `/api/profile` | Profile 对象（11 字段 + `goal_name` + `target_calories`） | `target_calories` 只读，后端按 BMR×1.4 计算 |
+| PUT | `/api/profile` | 同上 | 只接受 11 个可写字段；非法值 `1001` |
+| GET | `/api/meal-plan/current` | CurrentPlan；无方案 `data:null` | 前端按空态处理 |
+| GET | `/api/meal-plan/list?page=&page_size=&status=` | `{total,page,page_size,items[]}` | `items` 为摘要，不含 `slots` |
+| GET | `/api/meal-plan/{id}` | MealCard | 历史详情 |
+| POST | `/api/meal-plan/week/generate` | MealCard（`status:"candidates"`） | 入参 `start_date`、`end_date`（跨度 ≤31）、`plan_type`、`meal_types`（默认早/午/晚）、`candidates_per_slot`（2~3）、`goal_code`；非法 `1001`，无可行解 `2006` |
+| POST | `/api/meal-plan/candidate/swap` | `{meal_plan_id, meal_slot_id, selected_candidate_id, candidate, macro_delta}` | 入参 `meal_plan_id`、`meal_slot_id`、`candidate_id?`（缺省同餐下一个未选）；已固定 `2005`；无可行 `2006` |
+| POST | `/api/meal-plan/week/fix` | MealCard（`status:"fixed"`） | 有未选餐位 `2005` |
+| GET | `/api/shopping-list?meal_plan_id=` | ShoppingList | 未固定 `2005` |
+| POST | `/api/nutrition/analysis` | NutritionReport | `window_days` 3~30 |
+| GET | `/api/nutrition/report?meal_plan_id=` | NutritionReport | 未生成 `1004` |
 
-### 4.7 `medical_hint`（就医提示）
+响应统一 `{ code, message, data }`；`code=0` 时 `data` 直接是对象（无 `profile` / `plan` / `shopping_list` / `report` 包裹）；列表接口才用 `{total,page,page_size,items}`。
 
-```json
-{
-  "type": "medical_hint",
-  "level": "warn",
-  "title": "这不是医学诊断",
-  "text": "营养建议只作饮食参考，不能替代检查与诊断。",
-  "action_label": "查看参考来源"
-}
-```
+---
 
-`action_label` 有值时点击会作为用户消息发回对话流。
+## 7. 错误码与前端行为
 
-### 4.8 `anchor`（跳转定位）
+| code | 语义 | 前端 |
+|---|---|---|
+| 0 | 成功 | 使用 `data` |
+| 1001 | 参数校验失败 | 错误提示，停在本轮 |
+| 1002 | 未登录/登录失效 | 提示 + 清 token + 广播登录失效 |
+| 1003 | 无权限 / 资源不属于当前用户 | 提示，不重试 |
+| 1004 | 资源不存在 / 报告未生成 | 面板空态；不弹全局错误 |
+| 2001 | 确定性计算失败（BMR / 宏量 / 微量 / 油盐异常） | 可重试（提示重试） |
+| 2002 | 智能体调用失败（LLM 失败或超时） | 可重试 |
+| 2003 | 结构化输出校验失败（重试后降级纯文本） | 可重试，保留文本 |
+| 2004 | 数据源不可用（成分库 / 知识库查询失败） | 可重试 |
+| 2005 | 方案状态非法（fixed 换候选/固定、候选不匹配、清单未固定） | 提示并刷新面板 |
+| 2006 | 约束不可满足（过敏/疾病/宗教下无可行候选） | 提示，禁用按钮 |
+| 3001 | 内容安全拦截 | 提示调整表述，不自动重试 |
 
-```json
-{ "type": "anchor", "items": [{ "panel": "grocery", "label": "打开食材清单" }] }
-```
+`RETRYABLE_CODES = [2001, 2002, 2003, 2004]`。
 
-`panel` 只接受 `grocery | current_plan | history | report`，未知值前端忽略。
+---
 
-### 4.9 `shopping_list`（食材清单卡）
+## 8. 前端适配层与不变量
 
-```json
-{
-  "type": "shopping_list",
-  "title": "食材清单",
-  "summary": "共 32 项，分 6 组",
-  "groups": [{
-    "group_id": "g-0-🥬 蔬菜类",
-    "day": "周四", "day_date": "11-13",
-    "category": "🥬 蔬菜类",
-    "items": [{ "item_id": "it-0-0-西兰花", "name": "西兰花", "amount": "150 g", "is_staple": false, "checked": false }]
-  }]
-}
-```
+`src/utils/schema.js` 是唯一适配入口：
 
-## 5. 前端渲染规则
+- `numOrNull`：`null` / 缺字段 / 空串 → `null`，**绝不回落 0**。
+- `fmtNum` / `fmtPct`：`null` → 「—」。
+- `normalizeMealCard` → 视图模型 `{title, subtitle, slots, days, status_label, reason, reference_hints, data_quality_notes}`；`days` 按 `slot_date` 分组，天热量用 `sumKnown`（全空则为 null）。
+- `normalizeSlot`：以 `selected_candidate_id` 命中候选，输出 `dishes / kcal / oil_g / salt_g`；未命中回退第一个候选。
+- `normalizeCurrentPlan` / `normalizeGroups` / `normalizeReport`：只读契约字段，缺失即 null。
+- `normalizeArtifact(type, payload)`：`meal_card / current_plan / shopping_list / nutrition_report` 各自归一化，`type` 保持契约原名；未知 type 给 `{type:'unknown', raw_type, payload}`。
 
-1. `blocks[]` 顺序即渲染顺序；每个 block 独立渲染，一个 block 数据异常不影响其他 block。
-2. `meal_card` 的按钮：换一换禁用当 `status=fixed`；单餐候选点击即发 `选用…`，确认按钮另发 `确认当前方案`。
-3. 周视图默认展开「今天」；单日/单餐点击整行打开 `RecipeModal`。
-4. 报告卡默认折叠，`expanded=true` 时展开。
-5. 微量环颜色：`ok→var(--brand)`、`warn→#e8942c`、`danger→#c0504d`。
+不变量：
 
-## 6. 动作话术表（卡片按钮 → 用户消息）
+1. 组件层不再二次归一化已归一化的视图模型（否则 kcal 会被再次读成 null）。
+2. 组件不自行维护「键 → 中文名 / goal_code → 中文」业务映射；`goal_name`、`name_zh` 由服务端提供。表单选项里的中文仅作为 UI 兜底文案（review 待确认项）。
+3. 旧 `nutrition` / `meal_plan` / `sources` / `medical_hint` 等 v1 草案 block 已删除；渲染注册表只保留契约四类 type，其余一律 `FallbackBlock`。
+4. mock 的 `POST /api/__reset` 仅用于联调重置，不属于契约。
 
-| 按钮 | 发送文本 | 说明 |
-| --- | --- | --- |
-| 换一换 | `更换{早餐\|午餐\|晚餐}候选` | 服务端切到下一个候选，方案退回草稿 |
-| 候选单选 | `选用{餐次}{候选名}`，如 `选用午餐方案 B · 荞麦面 + 卤鸡腿` | 服务端设为该候选 |
-| 确认 | `确认当前方案` | 方案置 fixed，同步生成食材清单 |
-| 固定 | `固定当前方案` | 与确认同义，保留给多轮场景 |
-| 为什么这样搭 | `为什么这样搭` | 仅当 `reason.points` 为空时发送 |
-| 食材清单 | `看看食材清单` | 触发 shopping_list 卡 |
-| 详细食谱 | `看完整食谱` | 触发 meal_plan + nutrition + sources |
-| 周报告 | `生成周膳食报告` | 触发 report 卡 |
-| 月报告 | `生成月膳食报告` | 触发 month 范围 report 卡 |
+---
 
-## 7. 空态契约
+## 9. 验证
 
-| 位置 | 触发条件 | 展示 |
-| --- | --- | --- |
-| 当前规划面板 | `GET /meal-plan/current` 返回 1004 | EmptyState：「还没有生效的方案」+ 两个快捷话术 |
-| 历史方案面板 | 列表为空 | EmptyState：「还没有历史方案」 |
-| 食材清单面板 | 返回 1004（方案未确认） | EmptyState：「清单还是空的」+ 引导确认 |
-| 膳食报告面板 | 返回 1004 | EmptyState：「还没有可复盘的方案」 |
-| 卡片内 | `blocks` 为空 | 只显示正文，不显示空卡片 |
-| 单餐候选为空 | `candidates=[]` | 卡内提示「这一餐暂无候选」 |
+| 命令 | 覆盖 |
+|---|---|
+| `npm run build` | 产物构建（0 error） |
+| `npm run e2e` | 15 项：health / 1002 / profile / SSE 四事件 / 换候选 / 固定 / 清单 / 报告 1004+analysis / 分页 / 单餐 / 生成可选参数 / 档案重算 / 1001 / 2005 |
+| `npm run e2e:ui` | 19 项：空态 → 生成 → 换候选 → 食谱弹窗 → 确认 → 四面板 → 周视图 / 单餐 / 症状边界 / 报告同步 / 档案查看；截图输出 `docs/screenshots/` |
 
-## 8. 自测清单
-
-在 `npm run dev` 下按顺序操作（`npm run e2e` 覆盖 1–6 的接口断言）：
-
-1. **对话生成**：发「今天吃什么」→ 正文逐字出现；正文结束后出现今日餐卡 + 营养卡 + 来源卡 + 跳转条。
-2. **换候选**：点午餐行「换一换」→ 新消息出现，午餐菜品变了，方案标签仍是「待确认」。
-3. **确认**：点「确认当前方案」→ 餐卡变「已生效」，附加食材清单卡与跳转条。
-4. **面板同步**：右侧「当前规划」显示刚确认方案；「食材清单」有分组和条目；「历史方案」多出一条已确认。
-5. **报告**：发「生成周膳食报告」→ 报告卡折叠态；展开后可见宏量环、7 微量环、每日热量柱、结论；「膳食报告」面板可复查。
-6. **单餐**：发「推荐一餐搭配」→ 出现 3 个候选；点候选 → 新消息 + 「待选定」；再确认。
-7. **档案**：点左下角用户菜单 → 个人档案 → 编辑档案 → 改体重保存 → 能量目标变化；保存后回查看态。
-8. **空态**：刷新页面（Mock 内存态清空）→ 四个面板全部为空态，点击面板里的快捷按钮能重新拉起对话。
-9. **异常**：浏览器断网后发送 → 消息气泡显示错误 + 「重试」；点重试能重新发一次。
-10. **未知类型**：临时把某个 `type` 改成 `foobar` → 显示兜底 JSON，其他卡片正常。
-
-自测结论（2026-11-13，Mock 环境）：
-
-- 契约级 `npm run e2e`：11/11 通过（含第 1–6 条的接口断言、档案写回、2002 参数校验）。
-- 真浏览器 `npm run e2e:ui`：18/18 通过（第 1–4、6–8 条的界面断言，另加首屏问候语、新对话欢迎页、底部 5 快捷、四面板空态、周视图、单餐候选、就医提示卡、对话生成报告后报告面板同步与控制台零报错），截图见 `docs/screenshots/`。
-- 第 5 条报告卡与报告面板：由 UI 冒烟第 8 项覆盖（宏量环 + 7 微量环 + 结论）；每日热量柱依赖报告里的 `daily_trend`，单日方案的报告没有该字段，故只在对周/月报告时出现。
-- 第 9 条断网重试、第 10 条未知类型兜底：代码路径已实现（`ChatMessage` 的 retry、`FallbackBlock`），未纳入自动脚本，留待真机人工点一次。
-- 真实后端联调待接口可用后复测 SSE 心跳与 `scope` 参数。
+> 与团队契约冲突时，以团队《Agent 输出契约 v1.2-r2》原文为准；本文件只描述前端消费方式，不新增字段。
