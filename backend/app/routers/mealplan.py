@@ -37,7 +37,25 @@ class WeeklyRequest(BaseModel):
     hard_constraints: dict | None = None
 
 
+# 活动系数（需求 FR-09：久坐 1.2 / 轻度 1.4 / 中度 1.6 / 重度 1.8；档案未填时按轻度 1.4）
+_PAL = {"久坐": 1.2, "轻度": 1.4, "中度": 1.6, "重度": 1.8}
+
+# 目标能量缺口（需求 FR-10：减脂 −500 / 增肌 +300 / 维持 0；兼容 v1.2 英文目标码）
+_GOAL_DELTA = {
+    "减脂": -500, "fat_loss": -500,
+    "增肌": 300, "muscle_gain": 300,
+    "维持": 0, "maintain": 0,
+    "控糖": 0, "glucose_control": 0,
+    "养胃": 0, "digestive_health": 0,
+}
+
+
 def _goal_energy(db: Session, user_id: str, override: dict | None) -> float:
+    """能量目标 = BMR(Mifflin-St Jeor) × 活动系数 + 目标缺口（FR-09 / FR-10）。
+
+    BUG-05 修复：此前 PAL 误用 1.2/1.375/1.55/1.725 且未实现目标缺口，
+    u_test_001 因此返回 1920.5（= BMR×1.55）；按需求口径应为 BMR×1.6−500≈1482.4。
+    """
     if override and override.get("goal_energy_kcal"):
         return float(override["goal_energy_kcal"])
     row = db.execute(
@@ -52,8 +70,9 @@ def _goal_energy(db: Session, user_id: str, override: dict | None) -> float:
     height = float(row["height_cm"] or 165)
     age = int(row["age"] or 20)
     bmr = 10 * weight + 6.25 * height - 5 * age + sex_factor
-    pal = {"久坐": 1.2, "轻度": 1.375, "中度": 1.55, "重度": 1.725}.get(row["activity_level"], 1.4)
-    return round(bmr * pal, 1)
+    pal = _PAL.get((row["activity_level"] or "").strip(), 1.4)
+    delta = _GOAL_DELTA.get((row["goal"] or "").strip(), 0)
+    return round(bmr * pal + delta, 1)
 
 
 def _select_dishes(db: Session, user_id: str, goal: float) -> list[dict]:
