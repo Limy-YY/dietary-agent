@@ -1,6 +1,12 @@
 \set ON_ERROR_STOP on
 \pset pager off
 
+-- =============================================================================
+-- 04_数据库整体验收.sql（v1.2r1）
+-- 执行前提：01 备份已恢复，且已执行 12_数据库整改_v1.2_to_v1.2r1.sql
+-- 与 v1.2 版本相比新增：r1 整改项断言（P1-1 / P2-3 / P3）、被删测试视图的替代分支验收
+-- =============================================================================
+
 -- 1. 结构与基础数据断言
 DO $$
 DECLARE
@@ -58,6 +64,121 @@ BEGIN
 END
 $$;
 
+-- 1b. v1.2r1 整改项断言（对应评审 P1-1 / P2-3 / P3）
+DO $$
+DECLARE
+    v_count integer;
+    v_cols integer;
+BEGIN
+    -- P3：staging 暂存层不应出现在生产库
+    IF to_regclass('staging.food_raw') IS NOT NULL THEN
+        RAISE EXCEPTION 'staging schema is still present in production database';
+    END IF;
+
+    -- P3：硬编码虚构数据的测试视图不得留在生产库
+    IF to_regclass('app.v_condition_rule_branch_acceptance') IS NOT NULL THEN
+        RAISE EXCEPTION 'test view app.v_condition_rule_branch_acceptance is still present';
+    END IF;
+
+    -- r1 整改标记必须存在
+    IF NOT EXISTS (
+        SELECT 1 FROM audit.schema_migration
+        WHERE migration_id = '2026-11-13-review-r1'
+    ) THEN
+        RAISE EXCEPTION 'r1 migration marker is missing; run 12_数据库整改 first';
+    END IF;
+
+    -- P1-1：conditions 契约函数与约束必须存在
+    IF to_regprocedure('app.is_condition_map_valid(jsonb)') IS NULL THEN
+        RAISE EXCEPTION 'app.is_condition_map_valid(jsonb) is missing';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'app.profile'::regclass
+          AND conname = 'profile_conditions_contract_check'
+    ) THEN
+        RAISE EXCEPTION 'profile_conditions_contract_check is missing';
+    END IF;
+
+    -- P1-1：契约函数必须真的拦住 text[] 语义的取值
+    IF app.is_condition_map_valid('["HTN"]'::jsonb) THEN
+        RAISE EXCEPTION 'conditions contract does not reject array shape';
+    END IF;
+    IF app.is_condition_map_valid('{"HTN":{"status":"maybe"}}'::jsonb) THEN
+        RAISE EXCEPTION 'conditions contract does not reject illegal status';
+    END IF;
+    IF NOT app.is_condition_map_valid('{"HTN":{"status":"confirmed","sodium_mg_target":1500}}'::jsonb) THEN
+        RAISE EXCEPTION 'conditions contract rejects a legal condition map';
+    END IF;
+
+    -- P1-1：旧字段兜底读取视图必须存在
+    IF to_regclass('app.v_profile_effective') IS NULL THEN
+        RAISE EXCEPTION 'app.v_profile_effective is missing';
+    END IF;
+
+    -- P2-3：食材检索视图 25 列，且包含 4 个补列
+    SELECT count(*) INTO v_cols
+    FROM information_schema.columns
+    WHERE table_schema = 'app' AND table_name = 'v_ingredient_search';
+    IF v_cols <> 25 THEN
+        RAISE EXCEPTION 'expected 25 columns on app.v_ingredient_search, found %', v_cols;
+    END IF;
+
+    SELECT count(*) INTO v_count
+    FROM information_schema.columns
+    WHERE table_schema = 'app' AND table_name = 'v_ingredient_search'
+      AND column_name IN ('data_quality', 'source_note', 'iodine_ug', 'sfa_g');
+    IF v_count <> 4 THEN
+        RAISE EXCEPTION 'v_ingredient_search is missing r1 columns, found % of 4', v_count;
+    END IF;
+
+    -- P2-3 + R1：食材检索函数 18 个出参
+    SELECT count(*) INTO v_cols
+    FROM information_schema.parameters
+    WHERE specific_schema = 'app'
+      AND specific_name LIKE 'search_ingredients%'
+      AND parameter_mode = 'OUT';
+    IF v_cols <> 18 THEN
+        RAISE EXCEPTION 'expected 18 OUT parameters on app.search_ingredients, found %', v_cols;
+    END IF;
+
+    SELECT count(*) INTO v_count
+    FROM information_schema.parameters
+    WHERE specific_schema = 'app'
+      AND specific_name LIKE 'search_ingredients%'
+      AND parameter_mode = 'OUT'
+      AND parameter_name IN ('data_quality', 'source_note', 'iodine_ug', 'sfa_g', 'has_missing_macro');
+    IF v_count <> 5 THEN
+        RAISE EXCEPTION 'search_ingredients is missing r1 OUT columns, found % of 5', v_count;
+    END IF;
+
+    -- R1：函数必须带出 purine_level（视图与 v1.1 field_expose 都有这一列）
+    SELECT count(*) INTO v_count
+    FROM information_schema.parameters
+    WHERE specific_schema = 'app'
+      AND specific_name LIKE 'search_ingredients%'
+      AND parameter_mode = 'OUT'
+      AND parameter_name = 'purine_level';
+    IF v_count <> 1 THEN
+        RAISE EXCEPTION 'search_ingredients is missing purine_level (R1)';
+    END IF;
+
+    -- R1/R2 二轮整改标记
+    IF NOT EXISTS (
+        SELECT 1 FROM audit.schema_migration
+        WHERE migration_id = '2026-11-13-review-r1b'
+    ) THEN
+        RAISE EXCEPTION 'r1b migration marker is missing (R1/R2); run 12_数据库整改 first';
+    END IF;
+END
+$$;
+
+-- 1c. P1-1 存量数据提示项（不抛错，只报告需要人工处理的旧数据）
+SELECT count(*) AS conditions_存量总行数,
+       count(*) FILTER (WHERE NOT app.is_condition_map_valid(conditions)) AS 形状不合规待修行数
+FROM app.profile;
+
 -- 2. 原数据保留与兼容迁移断言
 DO $$
 DECLARE
@@ -71,6 +192,50 @@ BEGIN
     SELECT count(*) INTO v_count FROM app.nutrition_report WHERE source_weekly_report_id IS NOT NULL;
     IF v_count < 1 THEN
         RAISE EXCEPTION 'legacy weekly nutrition report was not migrated';
+    END IF;
+END
+$$;
+
+-- 2b. R2 断言：50–64 岁女性铁参考已并回单行取 12，且不再触发追问
+DO $$
+DECLARE
+    v_count integer;
+    v_value numeric;
+    v_menstrual text;
+BEGIN
+    SELECT count(*), min(value), min(menstrual_status)
+      INTO v_count, v_value, v_menstrual
+      FROM core.nutrient_reference
+     WHERE nutrient_id = 'iron'
+       AND sex = 'female'
+       AND age_group = '50-64'
+       AND life_stage = '普通';
+
+    IF v_count = 0 THEN
+        RAISE EXCEPTION '50-64 岁女性铁参考行缺失；请确认 nutrient_reference 已导入并重跑 12_数据库整改';
+    END IF;
+    IF v_count <> 1 THEN
+        RAISE EXCEPTION '50-64 岁女性铁参考应并回 1 行，实际 % 行（R2 未生效）', v_count;
+    END IF;
+    IF v_value <> 12 THEN
+        RAISE EXCEPTION '50-64 岁女性铁参考值应为 12（保守侧），实际 %', v_value;
+    END IF;
+    IF nullif(v_menstrual, '') IS NOT NULL THEN
+        RAISE EXCEPTION '50-64 岁女性铁参考应为通用行（menstrual_status 为空），实际 %', v_menstrual;
+    END IF;
+
+    SELECT count(*) INTO v_count
+      FROM app.match_nutrient_reference('female', 660)
+     WHERE nutrient_id = 'iron';
+    IF v_count <> 1 THEN
+        RAISE EXCEPTION '55 岁女性匹配铁参考应得 1 行，实际 % 行', v_count;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM app.match_nutrient_reference('female', 660)
+        WHERE nutrient_id = 'iron' AND needs_clarification
+    ) THEN
+        RAISE EXCEPTION '55 岁女性未给月经状态时仍在追问（needs_clarification=true），R2 未生效';
     END IF;
 END
 $$;
@@ -198,6 +363,109 @@ FROM app.recent_micro_balance(
 )
 ORDER BY nutrient_id;
 
+-- 3b. P2-3 食材检索 5 字段实测（事务内插入 → 校验 → 随 ROLLBACK 清除）
+DO $$
+DECLARE
+    v_batch bigint;
+    v_source bigint;
+    v_rows integer;
+    v_iodine numeric;
+    v_note text;
+    v_dq text;
+BEGIN
+    INSERT INTO audit.import_batch (dataset_name, original_file_name, original_sha256)
+    VALUES ('r1-acceptance', 'r1-acceptance.csv', 'acceptance')
+    RETURNING import_batch_id INTO v_batch;
+
+    INSERT INTO core.data_source (source_name, source_url, version, notes)
+    VALUES ('r1-acceptance-source', 'https://example.org', 'acceptance', '来源表备注：验收用')
+    RETURNING source_id INTO v_source;
+
+    INSERT INTO core.ingredient
+        (food_id, name, category, state, edible_portion_pct, energy_kcal, protein_g, fat_g,
+         carbohydrate_g, sodium_mg, calcium_mg, sfa_g, micro_nutrients, source_url, source_id,
+         source_row, import_batch_id, allergen_status, data_quality)
+    VALUES
+        ('R1-ACC-1', '验收西兰花', '蔬菜类', '生', 100, 34, 1.0, 0.5, 5.0, 10, 50, 0.1,
+         '{"iodine_ug":"2.5"}', 'https://example.org/1', v_source,
+         '{"source_note":"逐行来源备注"}', v_batch, '未核查', 'official');
+
+    SELECT count(*) INTO v_rows FROM app.search_ingredients('验收西兰花', 5);
+    IF v_rows <> 1 THEN
+        RAISE EXCEPTION 'search_ingredients should return 1 row, got %', v_rows;
+    END IF;
+
+    SELECT r.iodine_ug, r.source_note, r.data_quality
+    INTO v_iodine, v_note, v_dq
+    FROM app.search_ingredients('验收西兰花', 5) r;
+
+    IF v_dq IS DISTINCT FROM 'official' THEN
+        RAISE EXCEPTION 'search_ingredients data_quality wrong: %', v_dq;
+    END IF;
+    IF v_iodine IS DISTINCT FROM 2.5::numeric THEN
+        RAISE EXCEPTION 'search_ingredients iodine_ug wrong: %', v_iodine;
+    END IF;
+    IF v_note IS DISTINCT FROM '逐行来源备注' THEN
+        RAISE EXCEPTION 'search_ingredients source_note wrong: %', v_note;
+    END IF;
+END
+$$;
+
+-- 3c. 疾病规则分支验收（替代已删除的 v_condition_rule_branch_acceptance 测试视图）
+--     用真实规则 + 真实 profile 走一遍"已确诊 / 疑似不启用"分支。
+DO $$
+DECLARE
+    v_rule_id text;
+    v_condition_id text;
+    v_status text;
+BEGIN
+    SELECT rule_id, condition_id INTO v_rule_id, v_condition_id
+    FROM core.condition_nutrient_rule
+    WHERE rule_kind IN ('nutrient_limit', 'nutrient_target')
+    ORDER BY rule_id
+    LIMIT 1;
+
+    IF v_rule_id IS NULL THEN
+        RAISE WARNING '条件规则表为空，跳过疾病规则分支验收';
+        RETURN;
+    END IF;
+
+    -- confirmed：有规则但当天无摄入 → no_intake_data
+    INSERT INTO app.profile (user_id, name, conditions)
+    VALUES (
+        'TEST-R1-BRANCH-CONFIRMED', '分支验收-已确诊',
+        jsonb_build_object(v_condition_id, '{"status":"confirmed"}'::jsonb)
+    );
+
+    SELECT p.evaluation_status INTO v_status
+    FROM app.preview_daily_condition_nutrient_rule(
+        'TEST-R1-BRANCH-CONFIRMED', DATE '2026-11-12', v_rule_id
+    ) p;
+
+    IF v_status IS DISTINCT FROM 'no_intake_data' THEN
+        RAISE EXCEPTION 'expected no_intake_data for confirmed condition without intake, got %', v_status;
+    END IF;
+
+    -- suspected：未确诊 → condition_not_active（规则不得启用）
+    INSERT INTO app.profile (user_id, name, conditions)
+    VALUES (
+        'TEST-R1-BRANCH-SUSPECTED', '分支验收-疑似',
+        jsonb_build_object(v_condition_id, '{"status":"suspected"}'::jsonb)
+    );
+
+    SELECT p.evaluation_status INTO v_status
+    FROM app.preview_daily_condition_nutrient_rule(
+        'TEST-R1-BRANCH-SUSPECTED', DATE '2026-11-12', v_rule_id
+    ) p;
+
+    IF v_status IS DISTINCT FROM 'condition_not_active' THEN
+        RAISE EXCEPTION 'expected condition_not_active for suspected condition, got %', v_status;
+    END IF;
+
+    RAISE NOTICE 'branch acceptance passed with rule % / condition %', v_rule_id, v_condition_id;
+END
+$$;
+
 ROLLBACK;
 
 -- 4. 输出验收摘要
@@ -205,6 +473,10 @@ SELECT 'schema_migration' AS check_item,
        count(*)::text AS result
 FROM audit.schema_migration
 WHERE migration_id = '2026-11-12-product-v2'
+UNION ALL
+SELECT 'r1_migration', count(*)::text FROM audit.schema_migration WHERE migration_id = '2026-11-13-review-r1'
+UNION ALL
+SELECT 'r1b_migration', count(*)::text FROM audit.schema_migration WHERE migration_id = '2026-11-13-review-r1b'
 UNION ALL
 SELECT 'ingredients', count(*)::text FROM core.ingredient WHERE NOT is_deleted
 UNION ALL
@@ -216,7 +488,11 @@ SELECT 'goal_mappings', count(*)::text FROM core.goal_structure_map WHERE is_act
 UNION ALL
 SELECT 'key_micronutrients', count(*)::text FROM app.v_key_micronutrient
 UNION ALL
-SELECT 'test_rows_after_rollback', count(*)::text FROM app.profile WHERE user_id = 'TEST-V2-MIGRATION-ROLLBACK'
+SELECT 'staging_schema_removed', (to_regclass('staging.food_raw') IS NULL)::text
+UNION ALL
+SELECT 'test_view_removed', (to_regclass('app.v_condition_rule_branch_acceptance') IS NULL)::text
+UNION ALL
+SELECT 'test_rows_after_rollback', count(*)::text FROM app.profile WHERE user_id LIKE 'TEST-%'
 ORDER BY check_item;
 
 

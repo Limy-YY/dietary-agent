@@ -1,3 +1,163 @@
+Database acceptance result — diet_agent v1.2r1
+验收对象：v1.2 修订版（v1.2 基线 + 12 整改脚本）
+验收日期：2026-11-13
+验收环境：PostgreSQL 18.6 (x86_64-windows)，本地临时实例 127.0.0.1:55433，trust 认证，库名 diet_agent
+
+说明：本文件是 v1.2r1 的验收结果。文件末尾附上 v1.2 基线在正式库上的原始验收输出（附录 A），
+两者是不同环境、不同时间点的两次运行，不再拆成两个文件（原来 05 与 08 两份文件内容完全相同，
+那是复制造成的，见 08 的说明）。
+
+============================================================
+一、本轮验收是怎么做的
+============================================================
+
+本机没有现成的 PostgreSQL 服务，也没有 psql / pg_dump / pg_restore。01 是 PG18 custom 归档，
+只能由 pg_restore 18 读取，本机缺这个二进制，所以本轮没走"还原备份"，走的是"结构脚本重建"：
+
+  1) 用 PostgreSQL 18.6 官方二进制 initdb 起临时实例（版本与 01 dump 一致）；
+  2) 用 02_数据库结构_diet_agent_v1.2.sql 重建 5 个 schema 与全部函数/视图/触发器；
+  3) 在重建出来的库上执行 12_数据库整改_v1.2_to_v1.2r1.sql，得到 v1.2r1 结构；
+  4) 执行 03_应用账号与权限.sql，创建 diet_app 并授权；
+  5) 执行 04_数据库整体验收.sql（r1b 版），另加一套针对整改项的专项断言。
+
+02 与 12 都是逐条执行、逐条计数的，不是整体回显成功。
+
+============================================================
+二、结构重建实测
+============================================================
+
+  02_数据库结构_diet_agent_v1.2.sql      执行 247 条语句，0 报错
+  12_数据库整改_v1.2_to_v1.2r1.sql       执行  23 条语句，0 报错
+  12 再执行一遍                          执行  23 条语句，0 报错（幂等：约束/函数/视图/索引/数据修订均带存在性判断）
+  03_应用账号与权限.sql                  执行成功，diet_app 建立并授权
+
+重建后的 schema 与对象集合与 02 一致，无额外残留对象。
+
+============================================================
+三、整改项专项断言：27 / 27 通过（含二轮 R1 / R2）
+============================================================
+
+二轮评审又提了两条 P1（R1：search_ingredients 出参漏 purine_level；R2：50–64 岁女性铁参考
+按月经状态拆两行导致每次算铁都追问）。这两条一并写进 12（12 由 21 条增至 23 条，
+新增 R2 数据修订块与 r1b 迁移登记），以及 04 的 1b / 2b 断言（04 由 30 条增至 31 条）。
+
+以下是脚本真实控制台输出，未做删改：
+
+== 环境 ==
+PostgreSQL 18.6 on x86_64-windows
+
+== P3：清理项 ==
+PASS  staging 暂存层已移出生产库
+PASS  测试视图 v_condition_rule_branch_acceptance 已删除
+PASS  r1 整改已在 audit.schema_migration 登记
+
+== P1-1：conditions 契约 ==
+PASS  契约函数存在
+PASS  CHECK 约束存在（NOT VALID：新写入强制）
+PASS  合法映射通过
+PASS  status 非法被拒
+PASS  text[] 数组形状被拒
+PASS  值为标量被拒
+PASS  合法 conditions 可实际写入
+PASS  非法 conditions 被约束拦截   [23514]
+
+== P1-1：旧字段兜底视图 ==
+PASS  旧字段 sex/goal 被新视图兜底读取并标记来源   [('male', 'lose_weight', True, True)]
+
+== P2-3 / R1：食材检索字段 ==
+PASS  v_ingredient_search 共 25 列
+PASS  search_ingredients 共 18 个出参
+PASS  R1：函数出参含 purine_level（视图与函数口径一致）
+PASS  data_quality / source_note(逐行优先) / iodine_ug(micro优先) 取值正确
+      [V1-A:official,逐行来源备注,2.5,0.1 | V1-B:approx,来源表备注：验收,2.8,None | V1-C:check,来源表备注：验收,None,None]
+PASS  source_note 回退到 data_source.notes，iodine_ug 回退到 source_row
+PASS  缺失值保持 NULL，不补 0（source_note 允许回退到来源表备注）
+PASS  search_ingredients 返回同口径的 5 个新字段
+PASS  R1：函数把 purine_level 一并返回（低 / 中 / 缺失为 NULL）   [{'V1-A': '低', 'V1-B': '中', 'V1-C': None}]
+
+== 疾病规则分支（替代已删除的测试视图）==
+PASS  conditions.status=confirmed → no_intake_data
+PASS  conditions.status=suspected → condition_not_active
+
+== R2：50–64 岁女性铁参考并回单行 ==
+PASS  改造前：两行同时命中并标记需要追问   [(10, True), (12, True)]
+PASS  改造后：并回单行且取 12   [(1, 12, '')]
+PASS  改造后：档案未给月经状态也能唯一命中、不再追问   [(12, False)]
+PASS  改造留痕写入 source_row   [R2-merge-50-64-female-iron]
+PASS  R2 块重复执行幂等（不删行、值不变）   [(1, 12)]
+
+== 汇总 ==
+通过 27 / 27
+ROLLBACK 后残留测试行: 0
+
+几点说明：
+
+  - P2-3 三条断言用的是造出来的三条食材：一条字段齐全、一条只有 source_row 与来源表备注、
+    一条两项都缺。所以"逐行优先 / 回退来源表 / 保持 NULL"三条取值口径是真跑过的，不是只看列名。
+  - R1 的 purine_level 也是拿造出来的食材验的（低 / 中 / 未填），不是只看参数名在不在。
+  - R2 是先把"无月经 10 / 有月经 12"两行原样造回库里，确认改造前确实两行同时命中且都标了
+    needs_clarification=true，再跑整改块，确认并成一行取 12、匹配唯一且不再追问；同一块连跑两次
+    也不会把剩下的那行删掉（幂等）。18-29 岁女性 18、65 岁以上 10 两格单独复查，未受影响。
+  - 疾病分支用的是真的 core.condition_nutrient_rule 规则行（事务内插入，结尾 ROLLBACK），
+    confirmed 走"无摄入数据"、suspected 走"条件未激活"，替代了原来硬编码
+    TEST-RULE-BASE / TEST-RULE-OVERRIDE 的虚构视图。
+  - 全部断言在事务内执行并 ROLLBACK，库内未留测试行（末行计数 0）。
+
+============================================================
+四、04 验收脚本（r1b 版）的执行情况
+============================================================
+
+  04_数据库整体验收.sql 共 31 条语句，PG18 语法解析 0 错误，逐条执行结果分三类：
+
+  1) 结构类断言（第 1 段、1b 整改断言段、1c 存量 conditions 提示、2b R2 数据断言）——结构部分通过。
+     为了排除"整脚本一跑就挂、后面全跳过"的干扰，1b 段还被单独抽出来跑了一遍，结果：
+         1b 段执行通过（无 RAISE）
+     1b 覆盖：契约函数 to_regprocedure、profile_conditions_contract_check 存在性、旧字段 COMMENT、
+     v_profile_effective 兜底列、v_ingredient_search 25 列、search_ingredients 18 出参且含 purine_level、
+     测试视图不存在、staging schema 不存在、audit.schema_migration 中 r1 与 r1b 两个标记都已登记。
+
+     2b 是 R2 的数据断言，临时库没有 nutrient_reference 业务数据，单独验法：先造"无月经 10 / 有月经 12"
+     两行，未跑整改块时断言如期报错"应并回 1 行，实际 2 行"；跑完 12 的 R2 块后同一段断言通过。
+     也就是说这段断言既能在数据不对时拦住，也不会在数据对了之后误报。
+
+  2) 计划流程段（建档案→建计划→建餐位→候选→选餐→调整→固定→购物清单→固定后只读反例→微量余额）
+     ——在临时库上停在第 6 条：profile 插入时 goal_code='maintain' 撞 profile_goal_code_fkey，
+     因为临时库 core.goal_structure_map 是空的（业务数据都在 01 dump 里，本机无法 pg_restore）。
+     这是数据前置条件不满足，不是脚本缺陷；在含 60 道菜与 5 条目标映射的正式库上该段会继续往下跑。
+
+  3) 数据计数断言（5 条目标映射、7 种关键微量、60 道菜、新增 30 道、新增 127 条配料关系等）
+     ——同样因临时库无业务数据未通过（报"实际为 0"）。这类断言需在含数据库上执行，
+     本轮不作为通过依据。
+
+============================================================
+五、本轮没有验证到的部分（如实说明）
+============================================================
+
+  1) pg_restore 还原 01 dump：本机没有 pg_restore 18，未执行。01 dump 未改动（sha256 见 09）。
+  2) pgvector：14_RAG向量化_v1.2r1.sql 引用 vector 类型，Windows 无可用 pgvector 二进制，
+     本机装不了扩展。该脚本只做了 PG18 语法解析校验（22 条语句 0 语法错误），
+     未在实例上执行、未建索引、未灌向量。前提与替代方案见 16。
+  3) 15_RAG灌库脚本.py：验证了取数、分批、维度校验、JSONL 落盘（本地假嵌入后端，3 条文档跑通）；
+     写库路径依赖 apply_document_embedding 与 vector 类型，同样因缺 pgvector 未执行；
+     真实模型（bge-m3 / 1024 维）尚未调用。
+
+============================================================
+六、结论
+============================================================
+
+  P1-1（conditions 定 jsonb + 写入契约）、P2-3（食材检索 5 字段）、P3 四项清理，
+  加上二轮评审的 R1（函数补 purine_level）、R2（50–64 岁女性铁参考并回单行取 12），
+  在真实 PG18.6 上结构生效、行为可复现、脚本幂等，27/27 断言通过。
+  P1-2（pgvector RAG）随 14/15/16 交付，受本机环境限制未实测，需 DBA 装扩展后执行。
+  P2-1（升级路径）、P2-2（文件编号）以文档交付，见 13、17。
+
+  R2 只改了库内数据，源文件 rni_reference.json 的 iron 仍是"无月经 10 / 有月经 12"两行，
+  需数据岗下次整理时同步，否则重新灌库会把这次修订覆盖回去（12 头部注释已写明）。
+
+============================================================
+附录 A：v1.2 基线在正式库上的原始验收输出（2026-11-13，原样保留）
+============================================================
+
 Pager usage is off.
 DO
 DO
@@ -17,7 +177,7 @@ UPDATE 1
 INSERT 0 1
 INSERT 0 1
 DO
- nutrient_id |   nutrient_name    |  unit  | total_value | selected_meal_count | known_meal_count | missing_meal_count 
+ nutrient_id |   nutrient_name    |  unit  | total_value | selected_meal_count | known_meal_count | missing_meal_count
 -------------+--------------------+--------+-------------+---------------------+------------------+--------------------
  calcium     | 钙                 | mg     |         220 |                   1 |                1 |                  0
  iron        | 铁                 | mg     |           5 |                   1 |                1 |                  0
@@ -29,7 +189,7 @@ DO
 (7 rows)
 
 ROLLBACK
-        check_item        | result 
+        check_item        | result
 --------------------------+--------
  dishes                   | 60
  goal_mappings            | 5
@@ -41,12 +201,12 @@ ROLLBACK
 (7 rows)
 
 DO
- 有效菜式总数 | 本批新增菜式 
+ 有效菜式总数 | 本批新增菜式
 --------------+--------------
            60 |           30
 (1 row)
 
-   类别   | 新增数量 
+   类别   | 新增数量
 ----------+----------
  主食     |        6
  水产类   |        2
@@ -56,14 +216,14 @@ DO
  蛋豆类   |        2
 (6 rows)
 
-    来源编号     | 菜式数量 
+    来源编号     | 菜式数量
 -----------------+----------
  NHC-GROWTH-2023 |       10
  NHC-HL-2023     |        2
  NHC-HTN-2023    |       18
 (3 rows)
 
- dish_id  |       name       | ingredient_count | energy_kcal | protein_g | sodium_mg | strict_allergens | unverified_food_ids 
+ dish_id  |       name       | ingredient_count | energy_kcal | protein_g | sodium_mg | strict_allergens | unverified_food_ids
 ----------+------------------+------------------+-------------+-----------+-----------+------------------+---------------------
  DISH-031 | 清蒸鲈鱼         |                4 |       109.6 |      18.8 |     381.0 | {鱼类}           | {}
  DISH-032 | 白萝卜炖牛肉     |                5 |       117.2 |      16.7 |     389.1 | {}               | {}
@@ -96,4 +256,3 @@ DO
  DISH-059 | 酸奶燕麦片       |                2 |       334.2 |      12.5 |      81.5 | {牛奶}           | {CN-1274}
  DISH-060 | 醋溜土豆丝       |                5 |       129.3 |       2.7 |     345.1 | {}               | {}
 (30 rows)
-
