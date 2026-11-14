@@ -19,6 +19,19 @@ class Settings(BaseSettings):
     APP_HOST: str = "127.0.0.1"
     APP_PORT: int = 8000
 
+    # Embedding / RAG（依据 Agent 岗 2026-11-14 定稿：bge-m3 / 1024 维，维度定后不改）
+    # 方案 A 云端（默认）：EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1, EMBEDDING_MODEL=BAAI/bge-m3
+    # 方案 B 本地：EMBEDDING_BASE_URL=http://127.0.0.1:11434, EMBEDDING_MODEL=bge-m3, EMBEDDING_API_KEY=ollama
+    EMBEDDING_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    EMBEDDING_API_KEY: str = ""
+    EMBEDDING_DIM: int = 1024
+    EMBEDDING_TIMEOUT_S: int = 30
+    # RRF 混合检索：融合常数与召回池写死，与 knowledge.search_documents 默认值对齐
+    RAG_TOP_K: int = 5
+    RAG_RRF_K: int = 60
+    RAG_CANDIDATE_K: int = 20
+
 
 @lru_cache
 def get_settings() -> Settings:
