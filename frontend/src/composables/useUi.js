@@ -4,6 +4,7 @@ import { reactive } from 'vue'
 const state = reactive({
   profileOpen: false,
   profileMode: 'view', // view | edit
+  profileHighlight: [], // clarify 补录引导：需要高亮的缺失字段键
   recipeOpen: false,
   recipePayload: null
 })

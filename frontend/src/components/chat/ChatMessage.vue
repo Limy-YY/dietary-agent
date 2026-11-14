@@ -5,7 +5,12 @@
     </template>
 
     <template v-else>
-      <div v-if="message.text" class="bubble">
+      <ClarifyBlock
+        v-if="message.clarify"
+        :question="message.clarify.question || message.text"
+        :missing-fields="message.clarify.missing_fields || []"
+      />
+      <div v-else-if="message.text" class="bubble">
         {{ message.text }}<span v-if="message.status === 'streaming'" class="caret"></span>
       </div>
       <div v-else-if="message.status === 'streaming'" class="typing"><i></i><i></i><i></i></div>
@@ -31,6 +36,7 @@
 
 <script setup>
 import RendererHost from '@/components/renderer/RendererHost.vue'
+import ClarifyBlock from './ClarifyBlock.vue'
 
 defineProps({ message: { type: Object, required: true } })
 defineEmits(['phrase', 'retry'])

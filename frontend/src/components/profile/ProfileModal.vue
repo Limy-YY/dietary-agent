@@ -105,7 +105,7 @@
 
         <el-row :gutter="12">
           <el-col :span="8">
-            <el-form-item label="性别">
+            <el-form-item label="性别" :class="{ 'pf-hl': isHl('gender') }">
               <el-select v-model="form.gender" style="width: 100%">
                 <el-option label="女" value="女" />
                 <el-option label="男" value="男" />
@@ -113,12 +113,12 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="年龄">
+            <el-form-item label="年龄" :class="{ 'pf-hl': isHl('age') }">
               <el-input-number v-model="form.age" :min="10" :max="100" :controls="false" style="width: 100%" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="健康目标">
+            <el-form-item label="健康目标" :class="{ 'pf-hl': isHl('goal_code') }">
               <el-select v-model="form.goal_code" style="width: 100%">
                 <el-option v-for="g in GOAL_OPTIONS" :key="g.value" :label="g.label" :value="g.value" />
               </el-select>
@@ -128,23 +128,23 @@
 
         <el-row :gutter="12">
           <el-col :span="12">
-            <el-form-item label="身高（cm）">
+            <el-form-item label="身高（cm）" :class="{ 'pf-hl': isHl('height_cm') }">
               <el-input-number v-model="form.height_cm" :min="120" :max="220" :controls="false" style="width: 100%" />
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="体重（kg）">
+            <el-form-item label="体重（kg）" :class="{ 'pf-hl': isHl('weight_kg') }">
               <el-input-number v-model="form.weight_kg" :min="30" :max="200" :controls="false" style="width: 100%" />
             </el-form-item>
           </el-col>
         </el-row>
 
-        <div class="pf-group">
+        <div class="pf-group" :class="{ 'pf-hl-group': isHl('cooking_equipment') }">
           <span class="field-label">烹饪设备</span>
           <PillGroup v-model="form.cooking_equipment" :options="COOKWARE_OPTIONS" allow-custom />
         </div>
 
-        <div class="pf-group">
+        <div class="pf-group" :class="{ 'pf-hl-group': isHl('conditions') }">
           <span class="field-label">疾病情况（三态）</span>
           <div v-for="id in conditionIds" :key="id" class="cond-row">
             <span class="cond-name">{{ conditionLabels[id] }}</span>
@@ -155,12 +155,12 @@
           <div v-if="!conditionIds.length" class="cond-empty">疾病项目录加载中或为空，暂无法编辑疾病限制</div>
         </div>
 
-        <div class="pf-group">
+        <div class="pf-group" :class="{ 'pf-hl-group': isHl('allergies') }">
           <span class="field-label">过敏原 / 忌口</span>
           <PillGroup v-model="form.allergies" :options="ALLERGY_OPTIONS" allow-custom />
         </div>
 
-        <div class="pf-group">
+        <div class="pf-group" :class="{ 'pf-hl-group': isHl('religious_ethical') }">
           <span class="field-label">宗教伦理限制</span>
           <PillGroup v-model="form.religious_ethical" :options="ETHICAL_OPTIONS" allow-custom />
         </div>
@@ -193,6 +193,9 @@ import { fetchConditionCatalog } from '@/api/profile.js'
 const ui = useUi()
 const profile = useProfileStore()
 
+const highlightFields = computed(() => new Set(ui.profileHighlight || []))
+const isHl = (field) => highlightFields.value.has(field)
+
 /** 展示层文案：中文名称不落业务映射表，仅用于表单选项与兜底展示 */
 const GOAL_OPTIONS = [
   { value: 'maintain', label: '维持' },
@@ -219,7 +222,10 @@ const COOKWARE_OPTIONS = ['灶具', '电饭煲', '空气炸锅', '微波炉', '�
 
 const open = computed({
   get: () => ui.profileOpen,
-  set: (v) => (ui.profileOpen = v)
+  set: (v) => {
+    ui.profileOpen = v
+    if (!v) ui.profileHighlight = []
+  }
 })
 const mode = computed({
   get: () => ui.profileMode,
@@ -369,6 +375,26 @@ onMounted(loadConditionCatalog)
 .cond-name {
   font-size: 13px;
   color: var(--text-main, #333);
+}
+
+/* clarify 补录引导：缺失字段高亮 */
+.pf-hl :deep(.el-form-item__label) {
+  color: #4a7c59;
+  font-weight: 700;
+}
+.pf-hl :deep(.el-form-item__label)::before {
+  content: '待补 · ';
+  color: #e8942c;
+  font-weight: 600;
+}
+.pf-hl-group .field-label {
+  color: #4a7c59;
+  font-weight: 700;
+}
+.pf-hl-group .field-label::before {
+  content: '待补 · ';
+  color: #e8942c;
+  font-weight: 600;
 }
 
 .cond-empty {

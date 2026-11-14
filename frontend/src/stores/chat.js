@@ -29,6 +29,7 @@ function loadSessions() {
             status: m.status || 'done',
             error: m.error || '',
             suggestions: Array.isArray(m.suggestions) ? m.suggestions : [],
+            clarify: m.clarify || null,
             createdAt: m.createdAt || new Date().toISOString()
           }))
         : []
@@ -183,6 +184,7 @@ export const useChatStore = defineStore('chat', () => {
       status: 'streaming',
       error: '',
       suggestions: [],
+      clarify: null,
       createdAt: new Date().toISOString()
     })
 
