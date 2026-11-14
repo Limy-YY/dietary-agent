@@ -1,0 +1,5 @@
+# 真实 key 与运行产物不入库
+.env
+__pycache__/
+*.pyc
+.venv/
