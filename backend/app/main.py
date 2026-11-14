@@ -21,6 +21,7 @@ from app.routers import (
     mealplan,
     nutrition,
     profile,
+    shopping,
     users,
 )
 
@@ -41,6 +42,7 @@ app.include_router(conditions.router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(mealplan.router, prefix="/api")
+app.include_router(shopping.router, prefix="/api")
 
 
 @app.exception_handler(BizError)

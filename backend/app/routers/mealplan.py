@@ -451,39 +451,59 @@ def swap_candidate(
 
 
 def _shopping_items(db: Session, plan: MealPlan) -> list[dict]:
-    """按选中候选汇总食材（库内平铺，分组留给返回层）。"""
-    agg: dict[str, dict] = {}
+    """按选中候选展开到食材级（库内平铺，分组留给返回层）。
+
+    契约 §3.6：清单项是食材（`ingredient_id / name / estimated_quantity / unit`），
+    不是菜品。数量为估算值：菜品每份用量 × 该菜在方案内累计份数。
+    可选配料（`is_optional`）不计入采购。
+    """
+    servings_by_dish: dict[str, float] = {}
     for slot in plan.slots:
         cand = _selected_candidate(slot)
         if cand is None:
             continue
         for d in cand.dishes:
-            item = agg.setdefault(
-                d.dish_id,
-                {"dish_id": d.dish_id, "servings": 0.0, "meal_types": set()},
+            servings_by_dish[d.dish_id] = servings_by_dish.get(d.dish_id, 0.0) + float(
+                d.servings or 1
             )
-            item["servings"] += float(d.servings or 0)
-            item["meal_types"].add(slot.meal_type)
+
+    if not servings_by_dish:
+        return []
 
     rows = db.execute(
-        text("SELECT dish_id, name, category FROM core.dish WHERE dish_id = ANY(:ids)"),
-        {"ids": list(agg)},
+        text(
+            "SELECT di.dish_id, di.ingredient_id, di.amount_g, di.is_optional, "
+            "       i.food_id, i.name, i.category "
+            "FROM core.dish_ingredient di "
+            "JOIN core.ingredient i ON i.ingredient_id = di.ingredient_id "
+            "WHERE di.dish_id = ANY(:ids)"
+        ),
+        {"ids": list(servings_by_dish)},
     ).mappings().all()
-    meta = {r["dish_id"]: r for r in rows}
 
-    items = []
-    for dish_id, item in agg.items():
-        info = meta.get(dish_id, {})
-        items.append(
+    agg: dict[int, dict] = {}
+    for r in rows:
+        if r["is_optional"]:
+            continue
+        key = r["ingredient_id"]
+        item = agg.setdefault(
+            key,
             {
-                "dish_id": dish_id,
-                "name": info.get("name") or dish_id,
-                "category": info.get("category") or "未分类",
-                "servings": round(item["servings"], 2),
-                "meal_types": sorted(item["meal_types"]),
-            }
+                "ingredient_id": r["food_id"] or str(key),
+                "name": r["name"],
+                "category": r["category"] or "未分类",
+                "estimated_quantity": 0.0,
+                "unit": "g",
+            },
         )
-    return sorted(items, key=lambda x: (x["category"], x["dish_id"]))
+        item["estimated_quantity"] += float(r["amount_g"] or 0) * servings_by_dish.get(
+            r["dish_id"], 0.0
+        )
+
+    items = list(agg.values())
+    for it in items:
+        it["estimated_quantity"] = round(it["estimated_quantity"], 1)
+    return sorted(items, key=lambda x: (x["category"], x["name"]))
 
 
 @router.post("/week/fix")
