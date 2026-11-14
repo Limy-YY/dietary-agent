@@ -1,11 +1,15 @@
 --
 -- 14_RAG向量化_v1.2r1.sql
 -- 用途：补齐评审 P1-2 缺失的 RAG 向量化整项（pgvector 扩展 + embedding 列 + 索引 + 混合检索函数）。
+-- 目标环境：pgvector/pgvector:pg18 容器，库 diet_agent_v12_check，执行账号 postgres（超级用户）。
+--   容器数据卷必须挂 /var/lib/postgresql——pgvector 官方的 pg18 镜像挂在 /data 上起不来。
 -- 执行前提：
---   1) 目标 PG18 实例已安装 pgvector（Windows 无官方预编译包，需按 16 说明编译或用带 pgvector 的镜像）；
---   2) 已与 Agent 岗（林郑嘉）对齐嵌入模型与维度。默认按 bge-m3 / 1024 维落地。
---   3) 先执行过 12_数据库整改_v1.2_to_v1.2r1.sql。
--- 维度变更方式：把本文件中所有 1024 一并改成对齐后的维度，并重建 embedding 列与索引。
+--   1) 镜像自带 pgvector；若 pg_available_extensions 里查不到 vector，说明镜像不对，先换镜像（第 0 段会拦下并提示）；
+--   2) 库里已有 knowledge.knowledge_doc：先还原 01 备份，再跑 12_数据库整改_v1.2_to_v1.2r1.sql；
+--   3) 建议在 03 之后执行：diet_app 需要 SELECT knowledge 的权限，否则它调 search_documents 会报 permission denied；
+--   4) 模型与维度已按 Agent 岗 2026-11-14 的 Embedding 契约定稿：bge-m3 / 1024 维 / cosine，定后不改；
+--      档案行 knowledge.embedding_profile.default 的 decision_status 记为 aligned。
+-- 维度变更方式：把本文件中所有 1024 一并改成对齐后的维度，并重建 embedding 列与索引（步骤见 16 第五节）。
 -- 本脚本不写入任何向量数据；向量由 15_RAG灌库脚本.py 灌入。
 --
 
@@ -13,12 +17,41 @@
 \pset pager off
 
 -- ---------------------------------------------------------------------------
--- 0. 前置校验：扩展可用性（缺失时给出可操作的报错，而不是让 CREATE EXTENSION 直接失败）
+-- 0. 前置校验：镜像对不对、账号够不够、库对不对（顺序即优先级，报错都能照着做）
 -- ---------------------------------------------------------------------------
 DO $$
+DECLARE
+    v_super boolean;
+    v_available boolean;
+    v_installed boolean;
+    v_has_doc boolean := false;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
-        RAISE EXCEPTION '当前实例未安装 pgvector（pg_available_extensions 中没有 vector）。请先安装扩展后重跑本脚本，安装方式见 16_RAG对齐与灌库说明.md';
+    SELECT r.rolsuper INTO v_super FROM pg_roles r WHERE r.rolname = current_user;
+    v_available := EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector');
+    v_installed := EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector');
+
+    RAISE NOTICE '目标库 %，执行用户 %（超级用户=%）',
+        current_database(), current_user, coalesce(v_super, false);
+
+    IF NOT v_available THEN
+        RAISE EXCEPTION '当前实例没有 pgvector（pg_available_extensions 里查不到 vector），下一句 CREATE EXTENSION 必然失败。处理办法：把容器镜像换成 pgvector/pgvector:pg18，数据卷挂 /var/lib/postgresql（不是 /data），重启容器后重跑本脚本；自建 Linux 实例按 16 说明编译安装。';
+    END IF;
+
+    IF NOT v_installed AND NOT coalesce(v_super, false) THEN
+        RAISE EXCEPTION 'pgvector 可用，但当前用户 % 不是超级用户，CREATE EXTENSION 会被拒绝。请换 postgres 执行：psql -U postgres -d % -f 本脚本',
+            current_user, current_database();
+    END IF;
+
+    BEGIN
+        v_has_doc := to_regclass('knowledge.knowledge_doc') IS NOT NULL;
+    EXCEPTION WHEN insufficient_privilege THEN
+        RAISE EXCEPTION '当前用户 % 没有 schema knowledge 的访问权限，读不到 knowledge.knowledge_doc。请换 postgres 执行本脚本',
+            current_user;
+    END;
+
+    IF NOT v_has_doc THEN
+        RAISE EXCEPTION '当前库 % 里没有 knowledge.knowledge_doc：先还原 01 备份、并在本库跑完 12_数据库整改_v1.2_to_v1.2r1.sql，再跑本脚本',
+            current_database();
     END IF;
 END
 $$;
@@ -36,7 +69,7 @@ CREATE TABLE IF NOT EXISTS knowledge.embedding_profile (
     dimension integer NOT NULL,
     distance_metric text NOT NULL DEFAULT 'cosine',
     is_active boolean NOT NULL DEFAULT true,
-    decision_status text NOT NULL DEFAULT 'pending_alignment',
+    decision_status text NOT NULL DEFAULT 'aligned',
     note text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT embedding_profile_dimension_check CHECK (dimension = 1024),
@@ -48,9 +81,17 @@ COMMENT ON TABLE knowledge.embedding_profile IS
     '嵌入配置档案：一行一个模型/维度组合。dimension 约束与 embedding 列维度绑定，改维度需同时改脚本与重建列。';
 
 INSERT INTO knowledge.embedding_profile (profile_id, model_name, dimension, distance_metric, decision_status, note)
-VALUES ('default', 'bge-m3', 1024, 'cosine', 'pending_alignment',
-        '默认方案：bge-m3 / 1024 维 / cosine。执行前须与 Agent 岗林郑嘉确认；确认后把 decision_status 改为 aligned')
+VALUES ('default', 'bge-m3', 1024, 'cosine', 'aligned',
+        '定稿口径：bge-m3 / 1024 维 / cosine，依据 Agent 岗 2026-11-14 的 Embedding 契约；模型与维度定后不改，改维度需重建列与索引')
 ON CONFLICT (profile_id) DO NOTHING;
+
+-- 跑过旧版 14 的库，档案行还停在 pending_alignment；这里把它收敛到 aligned，
+-- 免得出现"脚本说已对齐、表里状态还说没对齐"这种自相矛盾。
+UPDATE knowledge.embedding_profile
+   SET decision_status = 'aligned',
+       is_active = true
+ WHERE profile_id = 'default'
+   AND decision_status = 'pending_alignment';
 
 -- ---------------------------------------------------------------------------
 -- 2. knowledge_doc 增补向量列（评审指出 v1.2 完全没有 embedding 列）
@@ -64,7 +105,7 @@ ALTER TABLE knowledge.knowledge_doc
 
 COMMENT ON COLUMN knowledge.knowledge_doc.embedding IS '文档级向量，维度绑定 knowledge.embedding_profile.default 的 dimension（1024）。';
 COMMENT ON COLUMN knowledge.knowledge_doc.embedding_model IS '实际生成该向量的模型名；与 embedding_profile 不一致时视为待重灌。';
-COMMENT ON COLUMN knowledge.knowledge_doc.embedding_hash IS '生成向量时的内容 sha256；内容变更后 hash 变化即触发重灌（幂等去重依据）。';
+COMMENT ON COLUMN knowledge.knowledge_doc.embedding_hash IS '生成向量时 content 的 md5；与当前 md5(content) 不一致即触发重灌（幂等去重依据）。';
 COMMENT ON COLUMN knowledge.knowledge_doc.embedding_dim IS '向量维度，必须与列维度一致，用于交叉校验。';
 COMMENT ON COLUMN knowledge.knowledge_doc.embedded_at IS '最后一次灌入向量的时间。';
 
@@ -96,6 +137,7 @@ CREATE INDEX IF NOT EXISTS knowledge_doc_embedding_hnsw
 -- ---------------------------------------------------------------------------
 -- 4. 混合检索（API-15）：向量召回 + 文本召回，RRF 融合
 --    说明：中文无分词扩展时，文本召回退化为"子串命中 + 出现次数"打分，不引入额外扩展依赖。
+--    口径按 Agent 岗契约：top_k 默认 5、RRF k=60、两路等权 1:1、每路召回池 20（本函数取 4×top_k，top_k=5 时正好 20）。
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION knowledge.search_documents(
     p_query text,
@@ -235,7 +277,8 @@ SELECT d.knowledge_doc_id,
        d.embedding_model,
        d.embedded_at,
        (d.embedding IS NULL) AS never_embedded,
-       (d.embedding IS NOT NULL AND d.embedding_hash IS DISTINCT FROM md5(d.content)) AS content_changed
+       (d.embedding IS NOT NULL AND d.embedding_hash IS DISTINCT FROM md5(d.content)) AS content_changed,
+       d.content            -- 15 灌库脚本按这一列算 md5，视图必须自己带上，别让调用方再回表
 FROM knowledge.knowledge_doc d
 WHERE NOT d.is_deleted
   AND (
@@ -244,7 +287,7 @@ WHERE NOT d.is_deleted
   );
 
 COMMENT ON VIEW knowledge.v_embedding_backlog IS
-    '待灌库清单：从未灌过，或 content 的 md5 与 embedding_hash 不一致（内容已变更需重灌）。';
+    '待灌库清单：从未灌过，或 content 的 md5 与 embedding_hash 不一致（内容已变更需重灌）。content 列供 15 脚本算 md5，同时给出待灌文本本身。';
 
 -- ---------------------------------------------------------------------------
 -- 6. 权限：应用侧只读检索，不授予写 knowledge
@@ -264,11 +307,19 @@ $$;
 SELECT 'vector_extension' AS check_item,
        (SELECT extversion FROM pg_extension WHERE extname = 'vector')::text AS result
 UNION ALL
+SELECT 'extension_schema',
+       (SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'vector')
+UNION ALL
 SELECT 'embedding_column', format_type(a.atttypid, a.atttypmod)
   FROM pg_attribute a
  WHERE a.attrelid = 'knowledge.knowledge_doc'::regclass AND a.attname = 'embedding'
 UNION ALL
+SELECT 'hnsw_index',
+       (to_regclass('knowledge.knowledge_doc_embedding_hnsw') IS NOT NULL)::text
+UNION ALL
 SELECT 'backlog_rows', count(*)::text FROM knowledge.v_embedding_backlog
 UNION ALL
 SELECT 'search_function', (to_regprocedure('knowledge.search_documents(text,vector,integer,numeric,integer)') IS NOT NULL)::text
+UNION ALL
+SELECT 'database_name', current_database()
 ORDER BY check_item;

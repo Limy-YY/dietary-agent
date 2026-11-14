@@ -135,11 +135,13 @@ ROLLBACK 后残留测试行: 0
 
   1) pg_restore 还原 01 dump：本机没有 pg_restore 18，未执行。01 dump 未改动（sha256 见 09）。
   2) pgvector：14_RAG向量化_v1.2r1.sql 引用 vector 类型，Windows 无可用 pgvector 二进制，
-     本机装不了扩展。该脚本只做了 PG18 语法解析校验（22 条语句 0 语法错误），
+     本机装不了扩展。该脚本只做了 PG18 语法解析校验（当时 22 条语句 0 语法错误），
      未在实例上执行、未建索引、未灌向量。前提与替代方案见 16。
+     → 2026-11-14 已在云主机 PG14 + pgvector 0.8.0 上执行通过（23 条语句、自检 7/7），见附录 B。
   3) 15_RAG灌库脚本.py：验证了取数、分批、维度校验、JSONL 落盘（本地假嵌入后端，3 条文档跑通）；
      写库路径依赖 apply_document_embedding 与 vector 类型，同样因缺 pgvector 未执行；
      真实模型（bge-m3 / 1024 维）尚未调用。
+     → 2026-11-14 写库路径已在真实 pgvector 上跑通（灌入、幂等、改内容只重灌 1 条），见附录 B。
 
 ============================================================
 六、结论
@@ -149,10 +151,12 @@ ROLLBACK 后残留测试行: 0
   加上二轮评审的 R1（函数补 purine_level）、R2（50–64 岁女性铁参考并回单行取 12），
   在真实 PG18.6 上结构生效、行为可复现、脚本幂等，27/27 断言通过。
   P1-2（pgvector RAG）随 14/15/16 交付，受本机环境限制未实测，需 DBA 装扩展后执行。
+  → 2026-11-14 已在真实 pgvector 0.8.0 上实测通过（见附录 B）；PG18 容器首次运行仍待回填。
   P2-1（升级路径）、P2-2（文件编号）以文档交付，见 13、17。
 
   R2 只改了库内数据，源文件 rni_reference.json 的 iron 仍是"无月经 10 / 有月经 12"两行，
   需数据岗下次整理时同步，否则重新灌库会把这次修订覆盖回去（12 头部注释已写明）。
+  → 2026-11-14 源数据已同步（json / 核查表 csv、xlsx / 说明 md 四处并回单行取 12），见附录 B。
 
 ============================================================
 附录 A：v1.2 基线在正式库上的原始验收输出（2026-11-13，原样保留）
@@ -256,3 +260,45 @@ DO
  DISH-059 | 酸奶燕麦片       |                2 |       334.2 |      12.5 |      81.5 | {牛奶}           | {CN-1274}
  DISH-060 | 醋溜土豆丝       |                5 |       129.3 |       2.7 |     345.1 | {}               | {}
 (30 rows)
+
+============================================================
+附录 B：2026-11-14 补充实测（pgvector 真实环境 + 病种字典）
+============================================================
+
+运行环境：云主机 Ubuntu 22.04，PostgreSQL 14.24（源码编译），pgvector 0.8.0 源码编译安装；
+库 diet_agent_v12_check（knowledge schema + 3 条测试文档），应用角色 diet_app（NOLOGIN）。
+与 2026-11-13 那轮的主要差别：这轮真的有 vector 扩展，14 不再只是语法解析。
+
+  B-1  14_RAG向量化_v1.2r1.sql（改后 23 条语句）
+       · 干净库连跑两遍，各 23 条语句、0 报错，幂等成立
+       · 末尾 7 项自检：backlog_rows=3、database_name=diet_agent_v12_check、
+         embedding_column=vector(1024)、extension_schema=public、hnsw_index=true、
+         search_function=true、vector_extension=0.8.0
+       · 旧库状态收敛：手工把档案行改回 pending_alignment 再跑，自动收敛为 aligned（0 报错）
+       · 三类前置错误各触发一次：库内无 vector → 提示换 pgvector/pgvector:pg18；
+         用非超级用户跑 → 提示换 postgres；knowledge_doc 不存在 → 提示先还原 01 再跑 12
+       · 语句数用 pglast 复核 = 23（与逐条执行计数一致）
+
+  B-2  15_RAG灌库脚本.py
+       · 假嵌入后端跑通写库链路：3 条文档灌入；再跑幂等（0 条重灌）；改一条 content 后重灌仅 1 条
+       · 修掉一处真 bug：视图 v_embedding_backlog 缺 content 列，15 一跑就报
+         column "content" does not exist；14 已补 d.content 与 md5 比对
+
+  B-3  18_病种字典补齐_v1.2r1.sql（新文件，4 条语句）
+       · 本机 PostgreSQL 18.6：连跑两遍各 4 条语句、0 报错；4 行字典齐全，
+         missing_condition_ids 为空
+       · 失败路径：以 diet_app 身份跑 → "没有 INSERT 权限"；空库跑 → "没有 core.health_condition"
+
+  B-4  二轮评审"三、轻点"四条的修正
+       · 14 注释与 decision_status 矛盾 → 按契约改：默认 aligned、插行 aligned，并加一条
+         UPDATE 把旧库的 pending_alignment 收敛为 aligned
+       · hash 注释写 sha256、实际算 md5 → 注释改为 md5，与 md5(d.content)、15 的 hashlib.md5 一致
+       · R2 源数据未同步 → rni_reference.json / 核查表 csv / 核查表 xlsx / 说明 md 四处并回单行取 12
+       · 09 可能漏 17 → 09 全量重算，现为 17 行（01–18，覆盖除自身与 .gitattributes 外的全部文件）
+
+  B-5  仍未验证
+       · PG18 容器（pgvector/pgvector:pg18）里的首次执行：上述实测在 PG14 + pgvector 0.8.0 上完成，
+         容器第一次跑完请把 7 项自检输出贴到本节
+       · 真实嵌入模型（bge-m3）仍未调用，灌库用的是假后端
+
+注：14 的 23 条语句里有 1 条是新增的旧库收敛 UPDATE，上一轮语法解析时的 22 条不含它。
