@@ -80,7 +80,7 @@ backend/
 > 实现落点：`rule_engine/targets.py` 的 `bmr × goal_structure_map.activity_factor`（库内五条目标均为 1.4）、`profile.py` 的 `target_calories`、`mealplan` 直接取引擎 `targets.energy_kcal`——三处同源同值，接口层不再自算热量。
 > 营养口径：多日方案一律折日均后与每日参考量比较；任一餐位缺值的指标返 null，不判「不足/达标」。
 
-## RAG（API-15）待接入说明
+## RAG（API-15）现状
 
 向量侧参数已按 Agent 岗 `11.14/embedding-contract.md`（2026-11-14 定稿）**定死，不再改**：
 
@@ -91,8 +91,13 @@ backend/
 | 检索函数 | `knowledge.search_documents(p_query, p_query_embedding, p_limit=5, p_min_similarity=0.5, p_rrf_k=60)` |
 | RRF | `k=60`；关键词 : 向量 = 1 : 1；每路池 20；融合后取 `top_k=5` |
 
-**当前阻塞**：容器镜像为 `postgres:18`，`pg_available_extensions` 无 `vector`，`14_RAG向量化_v1.2r1.sql` 首段即抛异常，导致 `knowledge_doc.embedding` 列、HNSW 索引与检索函数均不存在。故 `POST /agent/rag-query` 暂时保留关键词兜底。
-**解除后改动**：仅需在 `routers/agent.py` 把查询词送 embedding 端点取 1024 维向量，再调用上述函数；请求与出参结构不变，前端无需改动。
+**数据库已就绪**：`pgvector 0.8.7` + `knowledge_doc.embedding vector(1024)` + HNSW 索引 + 检索函数均已落地（14 脚本已跑，验收自检 7 项全绿）。
+`postgres:18` 官方镜像装扩展不必换镜像，容器内 `apt-get install -y postgresql-18-pgvector` 即可；**注意该包会连带把 PostgreSQL 18.6 升到 18.7，装完必须 `docker restart` 容器**，否则报 `plpgsql.so: undefined symbol: heap_datum_update_type`。
+
+**接口已接入**：`POST /api/agent/rag-query` 调用上述函数，`method` 三态如实反映实际路径——`hybrid_rrf`（有向量）、`rrf_text_only`（无 key，仅关键词 RRF）、`keyword_fallback`（函数不可用或零命中）。
+
+**仍需一步**：填 `EMBEDDING_API_KEY` 后跑 `database/15_RAG灌库脚本.py` 灌向量（当前 26 条文档待向量化，`backlog_rows=26`）；灌完 `method` 自动变 `hybrid_rrf`。
+**数据边界**：知识库现只有 26 条营养素条目（维生素 / 矿物质 / 脂肪酸 / 纤维），不含疾病饮食、食物嘌呤、烹饪方法等主题，故此类自然语言长句检索会 0 命中并回落，属内容覆盖问题而非检索缺陷。
 
 ## 数据库恢复（一次性）
 

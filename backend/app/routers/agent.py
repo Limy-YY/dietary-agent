@@ -1,18 +1,28 @@
 """知识检索接口（T9/T10 / API-15/16）。
 
-当前实现：关键词兜底检索（knowledge_doc + nutrient_knowledge），
-向量 + 关键词 RRF 混合检索待 Agent 侧 Agno Knowledge 组件接入后替换 method。
+API-15：优先走 `knowledge.search_documents` 的 RRF 混合检索（向量路 + 关键词路，
+权重 1:1、`k=60`、`top_k=5`、每路池 20）；未配置 `EMBEDDING_API_KEY` 或函数不可用时，
+自动退化为纯关键词 RRF；再不行回落进程内关键词兜底，并在 `method` 字段如实标注。
 T10 反向营养：symptom_nutrient_map 表待数据岗补（D3），先走知识库关键词兜底。
 """
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.core.response import ApiResponse, api_success
 from app.db import get_db
 from app.schemas.agent import RagItem, RagQueryRequest, RagResult, ReverseNutritionRequest, ReverseNutritionResult
+from app.services.embedding import embed_text, to_pgvector_literal
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+logger = logging.getLogger(__name__)
+
+#: 向量路最低余弦相似度，低于此值不入融合（契约默认 0.5）
+_MIN_SIMILARITY = 0.5
 
 
 def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
@@ -91,11 +101,60 @@ def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
     return items
 
 
+def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], str]:
+    """RRF 混合检索（`knowledge.search_documents`），不可用时回落关键词兜底。
+
+    返回 `(items, method)`：`hybrid_rrf` 表示向量+关键词双路融合，
+    `rrf_text_only` 表示仅有查询向量缺失时的关键词路 RRF，
+    `keyword_fallback` 表示检索函数不存在（未跑 14 脚本）或查询为空。
+    """
+    settings = get_settings()
+    embedding = embed_text(query)
+    sql = text(
+        "SELECT knowledge_doc_id, title, category, content, score, vector_rank, text_rank "
+        "FROM knowledge.search_documents("
+        "CAST(:q AS text), CAST(:emb AS vector), "
+        "CAST(:limit AS integer), CAST(:min_sim AS numeric), CAST(:rrf_k AS integer))"
+    )
+    try:
+        rows = db.execute(
+            sql,
+            {
+                "q": query,
+                "emb": to_pgvector_literal(embedding),
+                "limit": top_k,
+                "min_sim": _MIN_SIMILARITY,
+                "rrf_k": settings.RAG_RRF_K,
+            },
+        ).mappings().all()
+    except Exception as exc:  # noqa: BLE001 —— 退化路径不能把检索接口打挂
+        # 函数未部署 / 权限不足 / 维度不符：回到进程内关键词兜底，不影响出参结构
+        logger.warning("search_documents 不可用，回落关键词兜底：%s", exc)
+        db.rollback()
+        return _search_knowledge(query, top_k, db), "keyword_fallback"
+
+    if not rows:
+        return _search_knowledge(query, top_k, db), "keyword_fallback"
+
+    items = [
+        RagItem(
+            doc_id=str(r["knowledge_doc_id"]),
+            title=r["title"] or "",
+            content=r["content"] or "",
+            category=r["category"],
+            score=float(r["score"]) if r["score"] is not None else None,
+            kind="doc",
+        )
+        for r in rows
+    ]
+    return items, ("hybrid_rrf" if embedding is not None else "rrf_text_only")
+
+
 @router.post("/rag-query")
 def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)) -> ApiResponse[RagResult]:
-    """RAG 知识库检索（关键词兜底，每条带 source 溯源）。"""
-    items = _search_knowledge(req.query, req.top_k, db)
-    return api_success(RagResult(items=items))
+    """RAG 知识库检索（RRF 混合检索，兼容关键词退化；每条带 doc_id 溯源）。"""
+    items, method = _search_hybrid(req.query, req.top_k, db)
+    return api_success(RagResult(items=items, method=method))
 
 
 @router.post("/reverse-nutrition")
