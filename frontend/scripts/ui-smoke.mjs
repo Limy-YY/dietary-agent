@@ -62,6 +62,11 @@ async function say(text) {
 try {
   console.log(`\nUI 冒烟 · ${BASE}\n`)
 
+  /* 清 mock 状态，保证空态可复现 */
+  await page.request.post(`${BASE}/api/__reset`, {
+    headers: { Authorization: 'Bearer demo-jwt-token' }
+  })
+
   await page.goto(BASE, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.msg.ai .greet-hi', { timeout: 15000 })
   await page.waitForSelector('.icon-sidebar .tool-icon', { timeout: 10000 })
@@ -78,8 +83,12 @@ try {
 
   /* 0. 四个面板的初始空态 */
   for (const key of ['grocery', 'current_plan', 'history', 'report']) {
-    await page.locator(`.tool-icon[data-key="${key}"]`).click()
-    await page.waitForSelector('.tool-panel .empty-state', { timeout: 8000 })
+    try {
+      await page.locator(`.tool-icon[data-key="${key}"]`).click()
+      await page.waitForSelector('.tool-panel .empty-state', { timeout: 8000 })
+    } catch (e) {
+      throw new Error(`面板 ${key} 初始空态异常：${e.message.split('\n')[0]}`)
+    }
     await page.locator('.panel-close').first().click()
     await page.waitForTimeout(250)
   }
@@ -93,31 +102,34 @@ try {
   /* 1. 底部快捷 chip → SSE 生成今日餐卡 */
   await page.locator('.preset-chips-wrap .chip').first().click()
   await page.waitForSelector('.meal-row', { timeout: 25000 })
-  await page.waitForSelector('.nutri-title', { timeout: 25000 })
-  await page.waitForSelector('.anchor-bar', { timeout: 25000 })
+  await page.waitForSelector('.recipe-card .card-sub', { timeout: 25000 })
   const mealRows = await page.locator('.meal-row').count()
   ok('对话 → 今日餐卡', `${mealRows} 行餐次`)
   await page.waitForTimeout(1500)
   await shot('02-day-plan.png')
 
   /* 2. 换一换（午餐） */
-  const lunchRow = page.locator('.meal-row').nth(1)
+  const lastCard = page.locator('.recipe-card').last()
+  const lunchRow = lastCard.locator('.meal-row').nth(1)
   const before = await lunchRow.locator('.meal-dish').innerText()
   await lunchRow.locator('.swap-btn').click()
   await page.waitForFunction(
     (prev) => {
-      const rows = document.querySelectorAll('.meal-row')
-      const row = rows[rows.length > 2 ? rows.length - 2 : 1]
-      return row && row.querySelector('.meal-dish') && row.querySelector('.meal-dish').textContent.trim() !== prev
+      const cards = document.querySelectorAll('.recipe-card')
+      const card = cards[cards.length - 1]
+      const rows = card ? card.querySelectorAll('.meal-row') : []
+      const dish = rows[1] && rows[1].querySelector('.meal-dish')
+      return dish && dish.textContent.trim() !== prev
     },
     before,
     { timeout: 25000 }
   )
-  ok('换候选 → 午餐菜品变化', before.slice(0, 16) + '…')
+  const after = await page.locator('.recipe-card').last().locator('.meal-row').nth(1).locator('.meal-dish').innerText()
+  ok('换候选 → 午餐菜品变化', before.slice(0, 16) + '… → ' + after.slice(0, 16) + '…')
   await shot('03-swapped.png')
 
   /* 3. 详细食谱弹窗 */
-  await page.locator('.meal-row').first().click()
+  await page.locator('.recipe-card').last().locator('.meal-row').first().click()
   await page.waitForSelector('.el-dialog', { timeout: 8000 })
   const dialogTitle = await page.locator('.el-dialog__title').innerText()
   await page.waitForTimeout(700)
@@ -143,15 +155,20 @@ try {
   await page.locator('.tool-icon', { hasText: '食材清单' }).click()
   await page.waitForSelector('.tool-panel .grocery-item', { timeout: 12000 })
   const groceryCount = await page.locator('.tool-panel .grocery-item').count()
+  const grocerySample = await page.locator('.tool-panel .grocery-item').first().innerText()
   await page.waitForTimeout(400)
-  ok('面板 · 食材清单有真实分组条目', `${groceryCount} 项`)
+  if (!/\d/.test(grocerySample)) throw new Error(`食材清单没有估算量：${grocerySample.replace(/\n/g, ' ')}`)
+  ok('面板 · 食材清单有真实分组条目', `${groceryCount} 项 · ${grocerySample.replace(/\n/g, ' ')}`)
   await shot('06-panel-grocery.png')
 
   await page.locator('.tool-icon', { hasText: '膳食报告' }).click()
-  await page.waitForSelector('.tool-panel .rp-section-title', { timeout: 12000 })
+  await page.waitForSelector('.tool-panel .empty-state', { timeout: 12000 })
+  await page.locator('.tool-panel .es-action', { hasText: '生成本方案膳食报告' }).click()
+  await page.waitForSelector('.tool-panel .rp-section-title', { timeout: 25000 })
   const reportTitle = await page.locator('.tool-panel .rp-insights h5').first().innerText()
+  await page.waitForSelector('.tool-panel .rp-quality', { timeout: 10000 })
   await page.waitForTimeout(400)
-  ok('面板 · 膳食报告（宏量 + 微量 + 趋势）', reportTitle)
+  ok('面板 · 膳食报告（方案级 CTA → 宏量 + 微量 + 数据质量）', reportTitle)
   await shot('07-panel-report.png')
 
   await page.locator('.tool-icon', { hasText: '历史方案' }).click()
@@ -181,19 +198,25 @@ try {
   await shot('11-single-meal.png')
 
   await say('最近总乏力掉发，缺什么营养')
-  await page.waitForSelector('.medical-hint', { timeout: 25000 })
-  const hintTitle = await page.locator('.medical-hint .mh-title').innerText()
-  await page.waitForTimeout(400)
-  ok('就医提示卡', hintTitle)
+  await page.waitForTimeout(1200)
+  const aiText = await page.locator('.msg.ai').last().innerText()
+  if (!aiText.includes('就医')) throw new Error('症状咨询没有给出就医边界')
+  ok('症状咨询：给出就医边界（v1.2 无 medical_hint artifact）')
   await shot('12-medical-hint.png')
 
   /* 5.1 对话里生成报告 → 右侧「膳食报告」面板必须能回看（不再是空态） */
   await say('生成周膳食报告')
   await page.waitForSelector('.report-card', { timeout: 25000 })
+  const chatReportMeta = await page.locator('.report-card .rc-meta').last().innerText()
+  if (!/\d{4}-\d{2}-\d{2}/.test(chatReportMeta)) throw new Error(`对话内报告卡缺日期区间：${chatReportMeta}`)
+  ok('对话内报告卡带日期区间与餐数', chatReportMeta.replace(/\n/g, ' '))
   await page.locator('.tool-icon[data-key="report"]').click()
   await page.waitForSelector('.tool-panel .rp-insights', { timeout: 12000 })
+  await page.waitForFunction(() => !document.querySelector('.tool-panel .sk-wrap'), null, { timeout: 12000 })
   const panelReportTitle = await page.locator('.tool-panel .rp-insights h5').first().innerText()
-  await page.waitForTimeout(400)
+  const panelQuality = await page.locator('.tool-panel .rp-quality').innerText()
+  if (!/已知\s*3\s*餐/.test(panelQuality)) throw new Error(`报告完整度与实际餐数不符：${panelQuality.replace(/\n/g, ' ')}`)
+  await page.waitForTimeout(500)
   ok('对话生成报告 → 报告面板同步', panelReportTitle)
   await shot('14-report-panel-after-gen.png')
   await page.locator('.panel-close').first().click()
