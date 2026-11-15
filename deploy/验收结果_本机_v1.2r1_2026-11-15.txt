@@ -137,3 +137,24 @@ DO
  DISH-060 | 醋溜土豆丝       |                5 |       129.3 |       2.7 |     345.1 | {}               | {}
 (30 rows)
 
+
+====================================================
+附录：test_rows_after_rollback = 3 的来源核查（2026-11-15，应测试岗复核要求）
+====================================================
+
+查询：
+  SELECT user_id FROM app.profile WHERE user_id LIKE 'TEST-%';
+
+结果（3 rows）：
+  TEST-E2E-001
+  TEST-RULE-BASE
+  TEST-RULE-OVERRIDE
+
+app.profile 全表共 3 行，即上述 3 条；created_at 均为 2026-10-22（开发期建库样本，
+早于 2026-11-13 / 11-14 的 r1 / r1b 整改，也早于本次验收）。
+
+04 在事务内插入的是 TEST-R1-BRANCH-CONFIRMED / TEST-R1-BRANCH-SUSPECTED（脚本 L434-463），
+事务结束处 ROLLBACK（L469），表中不存在这两个 id。
+
+结论：这 3 行随 01 dump 一起还原而来（开发库导出时自带），不是 04 的残留。
+05 记 test_rows_after_rollback = 0，是因为数据岗走的是 02 结构重建路径，该路径没有这批测试档案。
