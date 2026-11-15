@@ -1,5 +1,11 @@
-# QA-04 数据库验收环境：PostgreSQL 18 + pgvector，一键起库并自动还原 v1.2 dump
+# QA-04 数据库验收环境：PostgreSQL 18 + pgvector，一键起库并自动还原 v1.2r1 库
 # 用法见同目录《数据库验收执行说明.md》
+#
+# 2026-11-14 修订两处：
+#   1) 初始化流程补齐 12 整改 / 18 病种 / 14 RAG，见 db_init/01_restore.sh（交付包与 04 验收脚本均已是 v1.2r1）；
+#   2) 数据卷挂载点由 /var/lib/postgresql/data 改为 /var/lib/postgresql——
+#      PG18 官方镜像的 PGDATA 是 /var/lib/postgresql/18/docker，挂在 data 子目录会导致数据实际不落在卷里，
+#      `docker compose down -v` 也清不掉，重置重来会失效。
 services:
   db:
     image: pgvector/pgvector:pg18
@@ -9,12 +15,12 @@ services:
       POSTGRES_USER: diet_app
       POSTGRES_PASSWORD: diet_app_dev   # 仅本地验收用，正式部署必须改
     ports:
-      - "5432:5432"
+      - "5432:5432"   # 若本机已有后端容器 diet-agent-pg 占用 5432，先停它，或改成本地 5433:5432
     volumes:
-      - pgdata:/var/lib/postgresql/data
-      # 数据库交付包（01 dump / 03 权限 / 04 验收 sql），随仓库 database/ 目录挂载
+      - pgdata:/var/lib/postgresql
+      # 数据库交付包（01 dump / 03 权限 / 04 验收 sql / 12 整改 / 14 RAG / 18 病种），随仓库 database/ 目录挂载
       - ../database:/delivery:ro
-      # 首次初始化时自动建扩展 + 还原 01 dump + 跑 03 权限脚本
+      # 首次初始化时自动执行 db_init/01_restore.sh（建扩展 → 还原 → 整改 → 病种 → RAG → 权限）
       - ./db_init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U diet_app -d diet_agent"]
