@@ -6,6 +6,10 @@
   否则多日方案会被误判为大幅超标；
 - 仅 7 种关键微量参与达标判断（与库内 `app.v_key_micronutrient` 一致）；
 - `null ≠ 0`：某微量无数据时 `intake=null`、`status=参考提示`，不得判为不足或达标；
+- `daily_trend` 给按 `slot_date` 分天的实际摄入序列（当日合计，不折日均），供报告页画趋势条；
+  某天该指标有餐位缺值时同样为 `null`，`status` 按当日能量对目标能量的偏离判 `ok / over / low`；
+- `achievement` 给达标率：7 项关键微量按「达标天数 ÷ 有效天数」算百分比，
+  宏量按供能比是否落在合理区间判；有效天数为 0 时百分比为 `null`（不按 0% 论）；
 - 铁按普通口径（未区分经期），需在 `reference_hints` 注明；
 - 同时调 `app.recent_micro_balance(user_id, start, end)` 取窗口内已固定方案的累计值做回溯判断；
   落库固定 `report_type='plan'`，并写 `app.nutrition_report_plan` 关联表。
@@ -87,7 +91,7 @@ def _r(v, digits: int = 1):
 def _load_plan(db: Session, plan_id: int, user_id: str):
     plan = db.execute(
         text(
-            "SELECT meal_plan_id, user_id, status, start_date, end_date "
+            "SELECT meal_plan_id, user_id, status, start_date, end_date, goal_energy_kcal "
             "FROM app.meal_plan WHERE meal_plan_id = :pid AND NOT is_deleted"
         ),
         {"pid": plan_id},
@@ -194,9 +198,22 @@ def _aggregate(db: Session, plan_id: int, days: int):
     micro_count: dict[str, int] = {k: 0 for k in MICRO_IDS}
     meals_with_micro = 0
 
+    by_date: dict[str, dict] = {}
+
+    def _bump(drow: dict, key: str, value: float) -> None:
+        drow["sum"][key] = drow["sum"].get(key, 0.0) + value
+        drow["count"][key] = drow["count"].get(key, 0) + 1
+
     for r in rows:
+        # 按天分组的原始累计，供 daily_trend 使用（口径同日均：缺值不补 0）
+        drow = by_date.setdefault(
+            str(r["slot_date"]),
+            {"sum": {}, "count": {}, "meals": 0, "selected": 0, "micro_meals": 0},
+        )
+        drow["meals"] += 1
         if r["selected_candidate_id"] is None:
             continue
+        drow["selected"] += 1
         macro = r["macro_estimate"] if isinstance(r["macro_estimate"], dict) else {}
         micro = r["micro_estimate"] if isinstance(r["micro_estimate"], dict) else {}
         os_est = r["oil_salt_estimate"] if isinstance(r["oil_salt_estimate"], dict) else {}
@@ -211,12 +228,15 @@ def _aggregate(db: Session, plan_id: int, days: int):
             v = _num(macro.get(key))
             if v is not None:
                 bucket.append(v)
+                _bump(drow, key, v)
         ov = _num(os_est.get("oil_g"))
         if ov is not None:
             oil.append(ov)
+            _bump(drow, "oil_g", ov)
         sv = _num(os_est.get("salt_g"))
         if sv is not None:
             salt.append(sv)
+            _bump(drow, "salt_g", sv)
 
         has_micro = False
         for k in MICRO_IDS:
@@ -225,8 +245,10 @@ def _aggregate(db: Session, plan_id: int, days: int):
                 micro_values[k].append(v)
                 micro_count[k] += 1
                 has_micro = True
+                _bump(drow, "m:" + k, v)
         if has_micro:
             meals_with_micro += 1
+            drow["micro_meals"] += 1
 
     def _daily(values: list[float], digits: int) -> float | None:
         # 任一餐位缺该指标时不做「缺值当 0」的合计，直接返回 None（null ≠ 0）
@@ -252,6 +274,8 @@ def _aggregate(db: Session, plan_id: int, days: int):
             for k in MICRO_IDS
         },
         "micro_count": micro_count,
+        # 内部结构（不对外）：按 slot_date 的原始累计，仅供 daily_trend / achievement 使用
+        "_by_date": by_date,
     }
 
 
@@ -314,6 +338,115 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
             "status": status,
         }
     return summary, shortfall
+
+
+# 宏量供能比的合理区间（%），用于 achievement.macro 的区间判定
+_MACRO_ENERGY_RANGE = {
+    "protein_pct": (15.0, 25.0),
+    "carb_pct": (45.0, 65.0),
+    "fat_pct": (20.0, 30.0),
+}
+
+
+def _daily_value(drow: dict, key: str, digits: int = 1):
+    """某天某指标的合计：该天全部选中餐位都有值时才算数，否则 None（缺值不补 0）。"""
+    if drow["selected"] <= 0 or drow["count"].get(key, 0) < drow["selected"]:
+        return None
+    return round(drow["sum"][key], digits)
+
+
+def _daily_trend(agg: dict, target_kcal) -> list[dict]:
+    """按天序列（当日合计，不折日均）。status 依据当日能量对目标能量的偏离。"""
+    target = _num(target_kcal)
+    trend: list[dict] = []
+    for d in sorted(agg["_by_date"]):
+        drow = agg["_by_date"][d]
+        calories = _daily_value(drow, "kcal", 1)
+        if calories is None or not target:
+            status = "参考提示"
+        elif calories > target * 1.15:
+            status = "over"
+        elif calories < target * 0.6:
+            status = "low"
+        else:
+            status = "ok"
+        trend.append(
+            {
+                "date": d,
+                "label": d[5:],
+                "calories": calories,
+                "protein_g": _daily_value(drow, "protein_g", 1),
+                "fat_g": _daily_value(drow, "fat_g", 1),
+                "carb_g": _daily_value(drow, "carb_g", 1),
+                "fiber_g": _daily_value(drow, "fiber_g", 1),
+                "oil_g": _daily_value(drow, "oil_g", 1),
+                "salt_g": _daily_value(drow, "salt_g", 1),
+                "micro": {k: _daily_value(drow, "m:" + k, 2) for k in MICRO_IDS},
+                "meal_count": drow["meals"],
+                "known_meal_count": drow["micro_meals"],
+                "status": status,
+            }
+        )
+    return trend
+
+
+def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
+    """达标率：微量按「达标天数 ÷ 有效天数」，宏量按供能比是否落在合理区间。
+
+    有效天数只统计当天该微量有值的日子；有效天数为 0 时百分比为 null（不按 0% 论）。
+    """
+    micro: dict[str, dict] = {}
+    pct_list: list[float] = []
+
+    for k in MICRO_IDS:
+        ref = refs.get(k) or {}
+        target = _num(ref.get("reference_value"))
+        valid_days = 0
+        achieved_days = 0
+        for drow in agg["_by_date"].values():
+            v = _daily_value(drow, "m:" + k, 2)
+            if v is None or not target:
+                continue
+            valid_days += 1
+            if v >= target:
+                achieved_days += 1
+        pct = round(achieved_days / valid_days * 100, 1) if valid_days else None
+        if pct is None:
+            level = "unknown"
+        elif pct >= 80:
+            level = "ok"
+        elif pct >= 50:
+            level = "warn"
+        else:
+            level = "danger"
+        if pct is not None:
+            pct_list.append(pct)
+        micro[k] = {
+            "name_zh": ref.get("nutrient_name") or k,
+            "unit": ref.get("unit"),
+            "target": _r(target, 2),
+            "valid_days": valid_days,
+            "achieved_days": achieved_days,
+            "achieved_pct": pct,
+            "level": level,
+        }
+
+    macro_items: dict[str, dict] = {}
+    for key, (lo, hi) in _MACRO_ENERGY_RANGE.items():
+        value = macro.get(key)
+        if value is None:
+            level = "unknown"
+        elif lo <= value <= hi:
+            level = "ok"
+        else:
+            level = "warn"
+        macro_items[key] = {"value_pct": value, "range": [lo, hi], "level": level}
+
+    return {
+        "micro": micro,
+        "micro_overall_pct": round(sum(pct_list) / len(pct_list), 1) if pct_list else None,
+        "macro": macro_items,
+    }
 
 
 def _rebuild_hints(
@@ -442,11 +575,28 @@ def analyze_plan(
     if macro["energy_kcal"] is None or macro["fiber_g"] is None:
         quality_notes.append("部分宏量（能量或膳食纤维）存在缺值，聚合项返回 null，不当 0 处理")
 
+    trend = _daily_trend(agg, plan["goal_energy_kcal"])
+    achievement = _achievement(agg, refs, macro)
+    if achievement["micro_overall_pct"] is not None:
+        hints.append(
+            f"7 项关键微量达标率 {achievement['micro_overall_pct']}%"
+            f"（按每日是否达到每日参考量逐日统计，共 {len(trend)} 天）"
+        )
+    weak = [
+        f"{v['name_zh']}（{v['achieved_pct']}%）"
+        for v in achievement["micro"].values()
+        if v["level"] in ("warn", "danger")
+    ]
+    if weak:
+        hints.append("达标天数偏少：" + "、".join(weak))
+
     summary = {
         "reference_hints": hints,
         "data_quality_notes": quality_notes,
         "window_days": req.window_days,
         "basis": "daily_average",
+        "daily_trend": trend,
+        "achievement": achievement,
     }
     completeness = {
         "meal_count": agg["meal_count"],

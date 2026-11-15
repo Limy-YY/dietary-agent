@@ -1,0 +1,12 @@
+event: message
+data: {"type": "text", "content": "今日三餐已排好，"}
+
+event: message
+data: {"type": "text", "content": "按你的档案配的。"}
+
+event: artifact
+data: {"type": "meal_card", "payload": {"plan_id": "plan_20261115_1d", "title": "今日食谱"}}
+
+event: done
+data: {"conversation_id": 1, "meal_plan_id": null, "finish_reason": "stop"}
+

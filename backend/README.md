@@ -68,12 +68,11 @@ backend/
 | API-09 | POST /api/calc/nutrition | 营养核算：菜式（份量+油盐估算）/ 食材（生重×可食部）双口径 |
 | API-11 | GET /api/ingredients/search?q=&limit= | 食材搜索，含 `purine_level / sfa_g / iodine_ug / data_quality / source_note` |
 | API-12 | GET /api/dishes/search?q=&exclude_allergies= | 菜式搜索，过敏原三态判定（decision / reason） |
-| API-14 | POST /api/agent/chat（SSE） | 六事件 session / message / artifact / clarify / error / done；Agent 服务接入点待联调 |
-| API-15 | POST /api/agent/rag-query | 知识检索：当前关键词兜底，向量 + RRF 待 pgvector 与 embedding 就绪 |
+| API-14 | POST /api/agent/chat（SSE） | 五事件 message / artifact / clarify / error / done（契约 §2.7 无 `session`）；已代理 Agent 服务（`AGENT_BASE_URL`，默认 `http://127.0.0.1:8001`），Agent 不可用时降级为 clarify / 文本兜底 |
+| API-15 | POST /api/agent/rag-query | 知识检索：pgvector 向量 + 关键词 RRF 混合检索，`method` 三态如实反映实际路径（`hybrid_rrf` / `rrf_text_only` / `keyword_fallback`） |
 | API-16 | POST /api/agent/reverse-nutrition | 反向营养，附就医提示（`symptom_nutrient_map` 待数据岗补表） |
 | API-17/18/19 | GET /api/condition-rules/catalog · /production · POST /evaluate | 疾病规则目录（含审核状态）/ 正式规则 / 生产评估 |
 | 病种字典 | GET /api/conditions · /api/conditions/catalog | 档案三态选择 `condition_id` 的取值域，读 `core.health_condition`（与 `/condition-rules/catalog` 的规则目录不同）；数据由 `database/18_病种字典补齐_v1.2r1.sql` 补齐，当前 4 条：hypertension / diabetes / hyperlipidemia / gout |
-| API-20 | GET /api/users/{user_id}/profile | 用户档案，复用档案同一 SQL 与序列化 |
 
 > 鉴权：除 `/api/health` 外统一 `Authorization: Bearer <JWT>`，`user_id` 由 token 注入，不再走查询参数。
 > 能量口径：v1.2 删 `activity_level`，统一 `BMR(Mifflin-St Jeor) × 1.4`，**不做热量缺口/盈余**，健康目标只改结构比例。依据 2026-11-14 项目组裁决（按契约 §0.2）；SRS FR-09/10 的四档活动系数与减脂 −500 为旧口径，不再适用，缺口/盈余留待后期改进。
@@ -113,3 +112,62 @@ backend/
 
 交付包 `数据库交付包/` 恢复方式见 `00_数据库交付说明.md`（本机已通过 Docker 完成：
 `DATABASE DELIVERY ACCEPTED`）。
+
+## 联调上手（给测试岗）
+
+**1. 起库**：`deploy/` 一键起库（自动还原 01 + 12 整改 + 18 病种 + 14 RAG + 03 权限），
+流程见 `deploy/数据库验收执行说明.md`。容器名 `diet-agent-db`，端口 `5432`。
+
+**2. 起后端**（cwd = `backend/`，`.env` 里的 `DATABASE_URL` 需指向该库）
+
+```bash
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000   # 仅本机
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000     # 同网段其他机器/手机访问
+```
+
+`--host 0.0.0.0` 只是监听所有网卡，**端口还要放行**才能从外部访问：
+
+```powershell
+# Windows（管理员 PowerShell）
+netsh advfirewall firewall add rule name="diet-api-8000" dir=in action=allow protocol=TCP localport=8000
+# Linux
+sudo ufw allow 8000/tcp
+```
+
+用 `http://<本机局域网 IP>:8000/api/health` 验证通不通；打不开先查防火墙，不是接口问题。
+
+**3. 起 Agent 服务**（`agent/`，默认 8001）：`/agent/chat` 会代理到这里（`AGENT_BASE_URL`）
+Agent 不可达时后端降级为文本兜底 + `done`，不会 5xx。
+
+**4. 数据库只读账号**（测试岗核对数据用，不能写）
+
+```powershell
+docker cp scripts/grant_readonly.sql diet-agent-db:/tmp/grant_readonly.sql
+docker exec diet-agent-db psql -U diet_app -d diet_agent -f /tmp/grant_readonly.sql
+```
+
+账号 `diet_ro` / `diet_ro_readonly`，仅 `SELECT` on `app` / `core` / `knowledge`：
+
+```
+postgresql://diet_ro:diet_ro_readonly@localhost:5432/diet_agent
+```
+
+自检：`docker exec -e PGPASSWORD=diet_ro_readonly diet-agent-db psql -U diet_ro -h 127.0.0.1 -d diet_agent -c "SELECT count(*) FROM core.dish;"` → 60；
+任何 `INSERT` 应返回 `permission denied for table ...`。
+
+**5. 机器可读契约与真实样例**
+
+| 文件 | 内容 |
+|---|---|
+| `openapi.json` | 导出时间 2026-11-15，22 条路径（已不含下线的 `/api/users/{user_id}/profile`） |
+| `samples/api-25_nutrition_analysis_sample.json` | API-25 真实响应（3 天方案，含 `daily_trend` / `achievement`） |
+| `samples/api-14_agent_chat_sample.sse.txt` | API-14 原始 SSE 帧（4 帧：`message`×2 + `artifact` + `done`，无 `session`） |
+
+在线交互文档：服务起来后访问 `http://127.0.0.1:8000/docs`。
+
+**6. 当前限制（联调前先知道）**
+
+- Agent 侧 `blocks.py` 仍按 v1 草案输出 `nutrition / sources / medical_hint` 等已删 type，后端会丢弃并记 warning；
+  `meal_card` 的 `meal_slot_id / candidate_id / macro_estimate` 需 Agent 岗按输出契约改造并真实落库后才成立。
+- `/agent/chat` 的 `artifact` 只转四类：`meal_card / shopping_list / current_plan / nutrition_report`。
+- 档案缺失时后端先发 `clarify`，不会把空档案丢给 Agent。

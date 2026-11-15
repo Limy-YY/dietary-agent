@@ -1,0 +1,276 @@
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "nutrition_report_id": 5,
+    "user_id": "TEST-E2E-001",
+    "report_type": "plan",
+    "period_start": "2026-11-15",
+    "period_end": "2026-11-17",
+    "meal_plan_id": 9,
+    "window_days": 7,
+    "macro_summary": {
+      "oil_g": 24.0,
+      "salt_g": 4.5,
+      "fat_pct": 25.7,
+      "fiber_g": 18.0,
+      "carb_pct": 52.4,
+      "energy_kcal": 1260.0,
+      "protein_pct": 19.0
+    },
+    "key_micro_summary": {
+      "iron": {
+        "gap": 0.0,
+        "unit": "mg",
+        "intake": 12.0,
+        "status": "达标",
+        "target": 12.0,
+        "name_zh": "铁",
+        "covered_pct": 100.0
+      },
+      "zinc": {
+        "gap": 0.5,
+        "unit": "mg",
+        "intake": 9.0,
+        "status": "达标",
+        "target": 8.5,
+        "name_zh": "锌",
+        "covered_pct": 105.9
+      },
+      "calcium": {
+        "gap": 100.0,
+        "unit": "mg",
+        "intake": 900.0,
+        "status": "达标",
+        "target": 800.0,
+        "name_zh": "钙",
+        "covered_pct": 112.5
+      },
+      "vitamin_a": {
+        "gap": 540.0,
+        "unit": "μg RAE",
+        "intake": 1200.0,
+        "status": "达标",
+        "target": 660.0,
+        "name_zh": "维生素A",
+        "covered_pct": 181.8
+      },
+      "vitamin_c": {
+        "gap": -20.0,
+        "unit": "mg",
+        "intake": 80.0,
+        "status": "参考提示",
+        "target": 100.0,
+        "name_zh": "维生素C",
+        "covered_pct": 80.0
+      },
+      "vitamin_b1": {
+        "gap": 0.3,
+        "unit": "mg",
+        "intake": 1.5,
+        "status": "达标",
+        "target": 1.2,
+        "name_zh": "维生素B1（硫胺素）",
+        "covered_pct": 125.0
+      },
+      "vitamin_b2": {
+        "gap": 0.6,
+        "unit": "mg",
+        "intake": 1.8,
+        "status": "达标",
+        "target": 1.2,
+        "name_zh": "维生素B2（核黄素）",
+        "covered_pct": 150.0
+      }
+    },
+    "summary": {
+      "basis": "daily_average",
+      "achievement": {
+        "macro": {
+          "fat_pct": {
+            "level": "ok",
+            "range": [
+              20.0,
+              30.0
+            ],
+            "value_pct": 25.7
+          },
+          "carb_pct": {
+            "level": "ok",
+            "range": [
+              45.0,
+              65.0
+            ],
+            "value_pct": 52.4
+          },
+          "protein_pct": {
+            "level": "ok",
+            "range": [
+              15.0,
+              25.0
+            ],
+            "value_pct": 19.0
+          }
+        },
+        "micro": {
+          "iron": {
+            "unit": "mg",
+            "level": "ok",
+            "target": 12.0,
+            "name_zh": "铁",
+            "valid_days": 3,
+            "achieved_pct": 100.0,
+            "achieved_days": 3
+          },
+          "zinc": {
+            "unit": "mg",
+            "level": "ok",
+            "target": 8.5,
+            "name_zh": "锌",
+            "valid_days": 3,
+            "achieved_pct": 100.0,
+            "achieved_days": 3
+          },
+          "calcium": {
+            "unit": "mg",
+            "level": "ok",
+            "target": 800.0,
+            "name_zh": "钙",
+            "valid_days": 3,
+            "achieved_pct": 100.0,
+            "achieved_days": 3
+          },
+          "vitamin_a": {
+            "unit": "μg RAE",
+            "level": "ok",
+            "target": 660.0,
+            "name_zh": "维生素A",
+            "valid_days": 3,
+            "achieved_pct": 100.0,
+            "achieved_days": 3
+          },
+          "vitamin_c": {
+            "unit": "mg",
+            "level": "danger",
+            "target": 100.0,
+            "name_zh": "维生素C",
+            "valid_days": 2,
+            "achieved_pct": 0.0,
+            "achieved_days": 0
+          },
+          "vitamin_b1": {
+            "unit": "mg",
+            "level": "ok",
+            "target": 1.2,
+            "name_zh": "维生素B1（硫胺素）",
+            "valid_days": 3,
+            "achieved_pct": 100.0,
+            "achieved_days": 3
+          },
+          "vitamin_b2": {
+            "unit": "mg",
+            "level": "ok",
+            "target": 1.2,
+            "name_zh": "维生素B2（核黄素）",
+            "valid_days": 3,
+            "achieved_pct": 100.0,
+            "achieved_days": 3
+          }
+        },
+        "micro_overall_pct": 85.7
+      },
+      "daily_trend": [
+        {
+          "date": "2026-11-15",
+          "fat_g": 36.0,
+          "label": "11-15",
+          "micro": {
+            "iron": 12.0,
+            "zinc": 9.0,
+            "calcium": 900.0,
+            "vitamin_a": 1200.0,
+            "vitamin_c": 90.0,
+            "vitamin_b1": 1.5,
+            "vitamin_b2": 1.8
+          },
+          "oil_g": 24.0,
+          "carb_g": 165.0,
+          "salt_g": 4.5,
+          "status": "ok",
+          "fiber_g": 18.0,
+          "calories": 1260.0,
+          "protein_g": 60.0,
+          "meal_count": 3,
+          "known_meal_count": 3
+        },
+        {
+          "date": "2026-11-16",
+          "fat_g": 36.0,
+          "label": "11-16",
+          "micro": {
+            "iron": 12.0,
+            "zinc": 9.0,
+            "calcium": 900.0,
+            "vitamin_a": 1200.0,
+            "vitamin_c": null,
+            "vitamin_b1": 1.5,
+            "vitamin_b2": 1.8
+          },
+          "oil_g": 24.0,
+          "carb_g": 165.0,
+          "salt_g": 4.5,
+          "status": "ok",
+          "fiber_g": 18.0,
+          "calories": 1260.0,
+          "protein_g": 60.0,
+          "meal_count": 3,
+          "known_meal_count": 3
+        },
+        {
+          "date": "2026-11-17",
+          "fat_g": 36.0,
+          "label": "11-17",
+          "micro": {
+            "iron": 12.0,
+            "zinc": 9.0,
+            "calcium": 900.0,
+            "vitamin_a": 1200.0,
+            "vitamin_c": 90.0,
+            "vitamin_b1": 1.5,
+            "vitamin_b2": 1.8
+          },
+          "oil_g": 24.0,
+          "carb_g": 165.0,
+          "salt_g": 4.5,
+          "status": "ok",
+          "fiber_g": 18.0,
+          "calories": 1260.0,
+          "protein_g": 60.0,
+          "meal_count": 3,
+          "known_meal_count": 3
+        }
+      ],
+      "window_days": 7,
+      "reference_hints": [
+        "以下为日均口径：方案 3 天（2026-11-15~2026-11-17）摄入按天数折算后与每日参考量比较",
+        "铁按普通口径计算，未区分经期（本期口径）",
+        "部分微量存在数据缺口或不宜硬性补足，按参考提示处理，不作达标结论",
+        "7 项关键微量达标率 85.7%（按每日是否达到每日参考量逐日统计，共 3 天）",
+        "达标天数偏少：维生素C（0.0%）"
+      ],
+      "data_quality_notes": []
+    },
+    "completeness": {
+      "meal_count": 9,
+      "known_meal_count": 9,
+      "missing_meal_count": 0
+    },
+    "sources": [
+      {
+        "type": "nutrient_reference",
+        "version": "v1.2r1"
+      }
+    ],
+    "generated_at": "2026-11-15T05:57:29.438567+00:00"
+  }
+}

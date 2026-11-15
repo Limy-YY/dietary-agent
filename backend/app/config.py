@@ -27,10 +27,12 @@ class Settings(BaseSettings):
     EMBEDDING_API_KEY: str = ""
     EMBEDDING_DIM: int = 1024
     EMBEDDING_TIMEOUT_S: int = 30
-    # RRF 混合检索：融合常数与召回池写死，与 knowledge.search_documents 默认值对齐
-    RAG_TOP_K: int = 5
+    # RRF 混合检索的融合常数：写入 SQL 调用参数，与 knowledge.search_documents 默认值对齐
     RAG_RRF_K: int = 60
-    RAG_CANDIDATE_K: int = 20
+
+    # Agent 服务（agent/ 目录的 FastAPI，默认 8001）：/agent/chat 代理目标
+    AGENT_BASE_URL: str = "http://127.0.0.1:8001"
+    AGENT_TIMEOUT_S: float = 60.0
 
 
 @lru_cache

@@ -22,7 +22,6 @@ from app.routers import (
     nutrition,
     profile,
     shopping,
-    users,
 )
 
 app = FastAPI(
@@ -35,7 +34,6 @@ app.include_router(health.router, prefix="/api")
 app.include_router(ingredients.router, prefix="/api")
 app.include_router(dishes.router, prefix="/api")
 app.include_router(calc.router, prefix="/api")
-app.include_router(users.router, prefix="/api")
 app.include_router(profile.router, prefix="/api")
 app.include_router(nutrition.router, prefix="/api")
 app.include_router(conditions.router, prefix="/api")
