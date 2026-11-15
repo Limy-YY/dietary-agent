@@ -136,6 +136,12 @@ sudo ufw allow 8000/tcp
 
 用 `http://<本机局域网 IP>:8000/api/health` 验证通不通；打不开先查防火墙，不是接口问题。
 
+**网络可达前提**：`--host 0.0.0.0` 只解决「监听全部网卡」，外部能不能连还取决于两件事——
+① 防火墙放行（上面那条命令**需管理员权限**，普通权限执行会报 `拒绝访问`）；
+② 对方网络能路由到本机。实测本机当前在手机热点（`10.218.159.129`，Public 档），
+不同网络的同学连不上。按下面任选一种：与本机同一 Wi-Fi / 热点；或做内网穿透（cpolar / ngrok）；
+或由有环境的一方执行用例、测试岗复核执行日志与样例。
+
 **3. 起 Agent 服务**（`agent/`，默认 8001）：`/agent/chat` 会代理到这里（`AGENT_BASE_URL`）
 Agent 不可达时后端降级为文本兜底 + `done`，不会 5xx。
 
@@ -154,6 +160,8 @@ postgresql://diet_ro:diet_ro_readonly@localhost:5432/diet_agent
 
 自检：`docker exec -e PGPASSWORD=diet_ro_readonly diet-agent-db psql -U diet_ro -h 127.0.0.1 -d diet_agent -c "SELECT count(*) FROM core.dish;"` → 60；
 任何 `INSERT` 应返回 `permission denied for table ...`。
+
+> 注意：`docker compose down -v` 会删数据卷，`diet_ro` 角色随库一起消失，重置后需重跑本脚本。
 
 **5. 机器可读契约与真实样例**
 
