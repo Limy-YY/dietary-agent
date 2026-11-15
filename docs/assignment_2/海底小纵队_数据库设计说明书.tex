@@ -1,0 +1,525 @@
+\documentclass[12pt,a4paper]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\usepackage{colortbl}
+\usepackage{seqsplit}   % 让 \texttt 长串可断行
+% 配合 xltabular 的可变列：L = 左对齐自适应列（自动填满版心），P{宽} = 居中定宽列
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{P}[1]{>{\centering\arraybackslash}p{#1}}
+% 左对齐定宽列：避免中文在窄列中被两端对齐拉伸、造成字距忽大忽小
+\newcolumntype{Q}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{float}
+\PassOptionsToPackage{hyphens}{url}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc,arrows.meta,shapes.geometric}
+\usepackage{amsmath,amssymb}
+
+% 统一箭头样式
+\tikzset{ >=Stealth }
+
+\setlist{itemsep=2pt,parsep=0pt,topsep=4pt}
+\setlist[enumerate]{labelindent=0.8em, itemindent=0pt, labelsep=0.5em, leftmargin=*}
+\newlist{subbullet}{itemize}{1}
+\setlist[subbullet]{label=\textbullet, leftmargin=1em, labelindent=0.2em, itemindent=0pt, labelsep=0.3em, topsep=2pt, itemsep=1pt, parsep=0pt}
+\newlist{celllist}{itemize}{1}
+\setlist[celllist]{label=\textbullet, leftmargin=*, labelsep=0.5em, topsep=0pt, partopsep=0pt, itemsep=0pt, parsep=0pt, before={\vspace{-9.8pt}}}
+\captionsetup{font=small,labelfont=bf,skip=6pt,aboveskip=3pt}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{7pt}
+\setlength{\LTpre}{4pt}
+\setlength{\LTpost}{4pt}
+\emergencystretch=2em
+% 表内行间浅分割线
+\newcommand{\rowrule}{\arrayrulecolor[gray]{0.7}\specialrule{0.3pt}{0.4ex}{0.4ex}\arrayrulecolor[gray]{0}}
+% 标题间距
+\ctexset{
+  section = {
+    beforeskip = 2ex plus 0.5ex minus 0.2ex,
+    afterskip  = 1ex plus 0.2ex minus 0.1ex,
+  },
+  subsection = {
+    beforeskip = 1.5ex plus 0.4ex minus 0.2ex,
+    afterskip  = 1ex plus 0.2ex minus 0.1ex,
+  },
+}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{1.5cm}
+\includegraphics[width=6cm]{images/logo.jpg}\par
+\vspace{1.2cm}
+{\Huge\bfseries
+《膳食搭配智能体系统》\par
+\vspace{1em}
+ 数据库设计说明书}
+\vspace{2cm}
+
+\begin{tabular}{ll}
+\textbf{团队名称} & 海底小纵队 \\
+\textbf{数据库名称} & diet\_agent（PostgreSQL 18） \\
+\textbf{文档版本} & V1.2 \\
+\textbf{编制日期} & 2026-11-04 \\
+\textbf{编制人} & 李铭媛、陈博淇 \\
+\end{tabular}
+\vfill
+{\large 依从 GB/T 8567---2006\par}
+\end{titlepage}
+
+\pagenumbering{roman}
+
+\begin{xltabular}{\linewidth}{P{1cm}P{1.2cm}P{1.7cm}LP{2cm}}
+\caption{修订记录} \\
+\toprule
+\textbf{版本} & \textbf{日期} & \textbf{修改人} & \textbf{说明} \\
+\midrule
+\endhead
+V0.1 & 11/04 & 李铭媛 & 建立数据库设计说明书骨架（依 GB/T 8567---2006） \\
+V0.2 & 11/04 & 陈博淇 & 攥写第四节“数据库级设计决策” \\
+V0.3 & 11/04 & 李铭媛 & 攥写其余部分 \\
+V0.4 & 11/05 & 李铭媛 & 补充E-R图\\
+v0.5 & 11/05 & 陈博淇 & 审查全文，修改细节 \\
+v0.6 & 11/05 & 李铭媛 & 整理全文 \\
+V1.0 & 11/08 & 李铭媛 & 对齐改进后的原型设计 \\
+V1.1 & 11/11 & 李铭媛 & 同步 v1.2 口径（菜库、方案系列表结构） \\
+V1.2 & 11/14 & 李铭媛 & 修正 profile 字段（conditions、goal\_code）与病种目录 \\
+\bottomrule
+\end{xltabular}
+
+\newpage
+\tableofcontents
+\newpage
+
+\pagenumbering{arabic}
+
+\section{注解}
+
+本章给出理解本文档所需的术语、定义与缩略语。
+
+\subsection{术语和定义}
+
+\begin{xltabular}{\linewidth}{Q{3.0cm}L}
+\caption{术语和定义} \\
+\toprule
+\textbf{术语} & \textbf{定义} \\
+\midrule
+\endhead
+规则引擎 & 不依赖大语言模型的确定性工具链，负责候选搜索、差异化、跨日微量平衡与回溯补位，输出候选结构与营养概要 \\
+硬约束 & 硬约束指过敏、疾病、宗教等饮食禁忌，候选中不得出现 \\
+状态机 & 方案的生命周期模型，依次为 \texttt{draft}（生成中）$\rightarrow$ \texttt{candidates}（候选已生成）$\rightarrow$ \texttt{fixed}（已固定，本方案只读） \\
+跨日动态平衡 & 7 种关键微量不再按周达标，而是读取近期历史方案的营养报告，识别不足并在当前生成中补齐，实现跨日平衡 \\
+软删除 & 不物理删除数据行，而以状态字段或删除标记使其退出常规查询，保留既有引用关系 \\
+Schema（模式） & PostgreSQL 中的命名空间，用于划分数据归属；本项目分为 \texttt{core} / \texttt{knowledge} / \texttt{app} / \texttt{audit} 四个 Schema \\
+主键 / 外键 & 主键唯一标识一行；外键引用另一表的主键以维护引用完整性 \\
+事务 & 一组要么全部生效、要么全部撤销的数据库操作单元 \\
+第三范式（3NF） & 非主属性仅依赖主键、不传递依赖的关系设计规范 \\
+router（路由模块） & 后端按功能划分的接口模块，每个文件承载一组相关接口 \\
+SQLAlchemy & Python 的对象关系映射（ORM）框架，后端以此访问数据库 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{缩略语}
+
+\begin{xltabular}{\linewidth}{Q{3cm}L}
+\caption{缩略语字母序列表} \\
+\toprule
+\textbf{缩略语} & \textbf{含义} \\
+\midrule
+\endhead
+3NF & 第三范式（Third Normal Form） \\
+B-tree & 平衡树索引（balanced tree） \\
+DRIs & 膳食营养素参考摄入量（Dietary Reference Intakes） \\
+FDC & USDA 食物数据中心（FoodData Central） \\
+GB/T & 中华人民共和国国家标准（推荐性） \\
+GIN & 通用倒排索引（Generalized Inverted Index） \\
+JSON / jsonb & JavaScript 对象表示法；\texttt{jsonb} 为其二进制形式 \\
+MVP & 最小可行产品（Minimum Viable Product） \\
+ORM & 对象关系映射（Object-Relational Mapping） \\
+pg\_trgm & PostgreSQL trigram 全文索引扩展 \\
+RAG & 检索增强生成（Retrieval-Augmented Generation） \\
+SQL & 结构化查询语言（Structured Query Language） \\
+SSE & 服务器推送事件（Server-Sent Events） \\
+TOAST & PostgreSQL 大字段外置存储机制 \\
+UTC & 协调世界时（Coordinated Universal Time） \\
+\bottomrule
+\end{xltabular}
+
+\section{引言}
+
+\subsection{标识}
+
+本文档适用的数据库完整标识如下：
+
+\begin{itemize}
+\item \textbf{数据库名称}：\texttt{diet\_agent}；
+\item \textbf{标识号}：无独立编号；本课程项目以数据库名 \texttt{diet\_agent} 作为唯一标识；
+\item \textbf{版本号}：v1.2；
+\item \textbf{发行号}：第 2 版。
+\end{itemize}
+
+\subsection{数据库概述}
+
+\begin{enumerate}
+\item \textbf{用途}：为「膳食搭配智能体系统」提供权威数值基准、文本知识与业务数据的持久化与访问，支撑档案管理、方案生成、营养分析、对话咨询等全部后端读写。
+\item \textbf{一般性质}：关系型数据库；核心数值与业务关系用规范关系表存储，半结构化内容（食材清单聚合、每餐宏量区间、候选营养估算等）用 \texttt{jsonb} 存储；文本知识预留 pgvector 向量检索能力。
+\item \textbf{在系统中的位置}：数据库位于后端（FastAPI）与权威数据源之间，是系统唯一数据底座。权威数据源（《中国食物成分表》《中国居民膳食指南（2022）》《DRIs 2023》）经数据侧清洗与口径统一后离线入库，运行时不再依赖外部数据源。
+\item \textbf{数据基线}：128 种食材、60 道菜、16 条做法规则、18 种营养素 / 448 条参考值、26 条知识（知识文档 + 营养素知识）。
+\item \textbf{开发 / 使用 / 维护历史}：v1.1 首次交付（24 张表 / 5 视图 / 8 函数）；v1.2 依据产品改进方案升级——新增方案、候选等 6 张表 + 1 视图 + 1 函数，改造用户档案表（扁平 11 字段）与方案营养报告表的汇总结构，废弃旧的日 / 周方案表。
+\item \textbf{相关方}：本系统为课程项目，目标用户为有自炊条件、有意识调控饮食的人群，开发方为「海底小纵队」。
+\item \textbf{运行现场}：轻量服务器 + Docker 容器化部署，无专用硬件依赖。
+\end{enumerate}
+
+\subsection{文档概述}
+
+\begin{enumerate}
+\item \textbf{用途}：本文档依 GB/T 8567---2006 第 7.14 节《数据库（顶层）设计说明》编制，给出数据库的设计决策、概念 / 逻辑 / 物理三级设计与软件访问配置项设计，作为数据库实现、验收与后续维护的依据。
+\item \textbf{预期读者}：数据岗（实现与维护）、后端开发（ORM 与访问）、测试与交付（验收）。
+\item \textbf{保密性}：用户身高、体重、疾病、过敏、禁忌等身体数据属个人敏感信息，须加密存储、最小必要采集，且仅用于生成膳食方案，不向任何第三方提供或共享。
+\end{enumerate}
+
+\section{引用文件}
+
+\begin{enumerate}
+\item 中华人民共和国国家质量监督检验检疫总局，中国国家标准化管理委员会. GB/T 8567---2006 计算机软件文档编制规范[S].
+\item 《膳食搭配智能体系统 · 软件需求规格说明书》（本课程成果，V1.4）。
+\item 《膳食搭配智能体系统 · 系统设计说明书》（本课程成果）。
+\item 中国疾病预防控制中心营养与健康所. 中国食物成分表（标准版）（第 6 版）[M]；补充食材数据参考 USDA FoodData Central（FDC）。
+\item 中国营养学会. 中国居民膳食指南（2022）[M]；中国居民膳食营养素参考摄入量（2023 版）[M]。
+\end{enumerate}
+
+\section{数据库级设计决策}
+
+\subsection{数据库管理系统选型}
+
+项目使用 PostgreSQL 18，数据库名为 \texttt{diet\_agent}。目标联调环境使用 Docker 容器 \texttt{diet-agent-pg}。PostgreSQL 容器内部使用默认端口 5432，主机访问端口根据实际部署环境配置。
+
+PostgreSQL 同时支持关系表、数组和 \texttt{jsonb}，能够保存食材、菜式、用户档案和方案等结构化数据，也能保存规则原文、来源快照和计算摘要。主键、外键、检查约束和事务用于保证数据一致，视图和函数用于统一食材搜索、营养计算、过敏筛查和参考值匹配。数据库通过 dump 和 SQL 脚本进行交付与恢复。
+
+\subsection{Schema 划分}
+
+数据库采用单库、四个 Schema 的组织方式。
+
+\begin{xltabular}{\linewidth}{P{1.8cm}Q{3.4cm}L}
+\caption{四个 Schema 的职责与主要数据} \\
+\toprule
+\textbf{Schema} & \textbf{职责} & \textbf{主要数据} \\
+\midrule
+\endhead
+\texttt{core} & 保存规则引擎使用的基础数据和规则参数 & 食材、菜式、菜式配料、做法规则、营养素、参考值、疾病规则、症状营养映射、健康目标结构映射和数据来源 \\
+\texttt{knowledge} & 保存营养解释和咨询所需的知识资料 & 营养知识、知识文档和检索字段 \\
+\texttt{app} & 保存用户操作和规则引擎生成的业务数据 & 用户档案、方案、餐位、候选、候选菜式、食材清单、营养分析结果、方案营养报告、会话和消息 \\
+\texttt{audit} & 保存数据导入和审核记录 & 导入批次、数据问题和规则审核记录 \\
+\bottomrule
+\end{xltabular}
+
+core 和 knowledge 由数据维护流程更新，应用运行时只读；app 由后端按业务接口读写；audit 用于记录数据来源、导入过程和审核结果。原始 CSV 或 JSON 先完成字段检查、类型转换和单位统一，再写入正式 Schema。
+
+\subsection{账号、权限与隐私保护}
+
+数据库访问划分为两类账号：后端应用统一使用非超级用户 \texttt{diet\_app} 连接数据库；疾病 / 营养规则的审核另设独立的审核角色，两者权限分开。
+
+\textbf{应用账号的 Schema 级权限}（\texttt{diet\_app}）：
+\begin{itemize}
+\item core、knowledge 只开放查询权限；
+\item app 开放业务所需的查询、新增和更新权限；
+\item audit 开放必要的记录写入和查询权限。
+\end{itemize}
+
+\textbf{规则审核角色}：疾病 / 营养规则在启用前须经人工审核。审核由区别于 \texttt{diet\_app} 的独立数据库角色完成，其调用权限只授予审核后台；审核资格由组织流程核实，数据库仅保存审核记录，不允许绕过审核直接修改规则的启用状态。
+
+\textbf{Agent 的访问边界}：对话 Agent 不直接连接数据库，一律经后端访问。Agent 经后端读取档案、方案与知识，并经确定性工具写入生成、换候选、固定等方案数据与会话消息；所有写方案的操作均由确定性工具执行，Agent 自身不直接写库。
+
+\textbf{敏感数据与隐私}：身体参数、疾病、过敏信息、健康目标与对话内容按敏感数据管理。业务表以 \texttt{user\_id} 区分用户，后端在读写时校验数据归属；测试数据与真实用户数据分离；日志不记录完整个人资料。
+
+\textbf{安全基线}：现有安全脚本已关闭 PUBLIC 的默认访问权限；v1.2 新增表建立后补充 \texttt{diet\_app} 的对象级授权，并在数据库验收中检查权限。
+
+\subsection{空值语义}
+
+\texttt{NULL} 表示未知、未提供、未核查或当前不适用，0 表示数据来源确认后的实际零值。
+
+例如，某食材的维生素 C 为 \texttt{NULL}，表示当前数据源没有提供该数值。营养计算和结果展示保留原始空值，同时返回完整性状态或缺失项目。过敏原状态为「未核查」时，按未核查处理。用户尚未填写的档案字段同样保存为 \texttt{NULL}，只有业务规则明确规定时才使用默认值。
+
+\subsection{数据质量与过敏原口径}
+
+食材表（\texttt{core.ingredient}）以 \texttt{data\_quality} 字段记录每条食材数值的数据质量等级（来源可信度），取值分三态，见下表。
+
+\begin{xltabular}{\linewidth}{P{1.8cm}Q{4.0cm}L}
+\caption{数据质量三态取值与使用方式} \\
+\toprule
+\textbf{取值} & \textbf{含义} & \textbf{使用方式} \\
+\midrule
+\endhead
+\texttt{official} & 与官方或项目认可的权威资料直接对应 & 用于正常计算，并保留具体来源 \\
+\texttt{approx} & 根据相近食材或既定方法估算 & 用于量级估计，展示时标明估算属性 \\
+\texttt{check} & 数据仍需核查 & 暂不用于确定性的安全判断 \\
+\bottomrule
+\end{xltabular}
+
+过敏原使用「已确认含、确认不含、未核查」三种状态。候选生成时，命中用户过敏原的食材或菜式直接排除；未核查食材不向相关过敏用户标记为安全。
+
+用户疾病信息需要保留疾病名称和确认状态。MVP 暂沿用 \texttt{jsonb}，记录「确诊、疑似、未知」等状态。后端进行规则判断时只使用符合执行条件的记录。
+
+\subsection{一致性与完整性}
+
+\textbf{结构关系与基数}：v1.2 的逻辑结构围绕用户、方案、餐位、候选和菜式建立，实体间关系与基数约定如下：
+
+\begin{itemize}
+\item 一个用户可以拥有多份历史方案；
+\item 餐位数由生成范围决定，餐位数量与类型由智能体按需编排；生成范围可为一餐、一日、数日或更长；
+\item 每个餐位保存 2$\sim$3 个候选，每个候选由主食和 1$\sim$2 道菜组成；候选通过更换主食材或做法形成差异；
+\item 方案关联食材清单和方案营养报告；方案食材清单根据固定后的方案汇总生成；
+\item 对话消息可以引用当前或历史方案，引用关系只读。
+\end{itemize}
+
+\textbf{完整性约束}：数据库以外键、唯一约束和检查约束保证表间引用与取值合法。用户约束为硬约束——过敏、疾病、宗教等饮食禁忌在候选中不得出现。MVP 不记录辅料接受程度，辅料按可用处理。
+
+\textbf{状态机与一致性}：方案状态为 \texttt{draft} $\rightarrow$ \texttt{candidates} $\rightarrow$ \texttt{fixed}：
+
+\begin{itemize}
+\item \texttt{draft}：规则引擎正在生成；
+\item \texttt{candidates}：候选已经生成，用户可以选择或更换候选；
+\item \texttt{fixed}：方案已经固定，本方案内只读。
+\end{itemize}
+
+固定方案时，系统校验各餐位的候选与选择结果，并在同一事务内写入选定候选、固定时间与最终状态；任一步失败则整体回滚，不产生部分固定的中间状态。食材、菜式与历史方案采用状态字段或软删除（标记删除而非物理删除）管理，以保持既有方案的引用关系；候选解释、营养分析与方案结果保存所依据的数据版本与来源标识，供结论回溯。
+
+\textbf{业务规则（营养口径）}：规则引擎负责候选搜索、差异化、跨日微量平衡和回溯补位，同时输出候选结构、营养概要和微量覆盖进度；对话 Agent 负责调用这些工具、处理生成过程中的冲突，并补充搭配解释和来源；候选调整通过重新调用确定性工具完成，营养数值以工具输出为准。营养口径按 v1.2 方案执行：
+
+\begin{itemize}
+\item 能量目标按基础代谢率乘固定系数 1.4 估算，用于确定份量量级；
+\item 宏量营养按餐控制，默认分配为早餐 30\%、午餐 40\%、晚餐 30\%；
+\item 钙、铁、锌、维生素 A、维生素 B1、维生素 B2 和维生素 C 跨日动态平衡（读取近期历史方案），目标以人群参考值为基础；
+\item 其他微量营养素用于参考提示；
+\item 五类健康目标的结构规则存于 core 的映射表 \texttt{goal\_structure\_map}，先录入已明确的区间与倾向。
+\end{itemize}
+
+疾病营养规则经过专业审核并启用后进入规则计算，待审核规则保留在数据库中，供后续核对和完善。
+
+\textbf{范围界定}：MVP 支持生成与换候选（均可由对话触发，经确定性工具执行），方案固定后本方案内只读；不做实际执行追踪、偏离再平衡、外食或跳过标记，相关能力留待后续版本设计。
+
+\subsection{备份与恢复}
+
+现有数据库中的食材、菜式、营养素、参考值、知识和来源数据通过迁移脚本纳入 v1.2 数据库。v1.2 结构完成后，重新导出结构脚本、基础数据、字段字典、外键关系和完整备份，并进行恢复测试。
+
+建表和基础数据初始化脚本采用可重复执行的方式编写，用于新环境部署和数据库恢复。pgvector 启用后，知识文档的首次向量化纳入初始化流程。
+
+\subsection{可扩展性}
+
+食材、菜式、健康目标与疾病规则等基础数据以稳定标识为键，并记录版本号、来源与导入批次，使每条数值均可追溯其出处与入库批次；数据更新时保留旧来源与版本记录，供变更历史追溯。
+
+知识库的目标存储方案为 PostgreSQL 与 pgvector。本期先使用关键词检索，确定嵌入模型和向量维度后，再增加向量字段和索引，与关键词结果组成混合检索。
+
+\subsection{设计约定}
+
+\begin{enumerate}
+\item \textbf{命名}：表名、列名统一小写 + 下划线；主键列 \texttt{xx\_id}；时间戳 \texttt{created\_at} / \texttt{updated\_at} / \texttt{fixed\_at}；外键列以「被引用表名\_id」命名。
+\item \textbf{主键类型}：业务流水表用 \texttt{bigserial}；核心字典表（dish / ingredient / nutrient）用 \texttt{text} 主键，便于与权威数据源 ID 对齐。
+\item \textbf{时间类型}：日期用 \texttt{date}，时间戳用 \texttt{timestamptz}（UTC 存储、应用层转本地时区）。
+\item \textbf{半结构化}：候选宏量区间、食材清单聚合等用 \texttt{jsonb}，schema 由应用侧约定。
+\end{enumerate}
+
+\section{数据库详细设计}
+
+本章按「概念结构设计 $\rightarrow$ 逻辑结构设计 $\rightarrow$ 物理结构设计」三个级别逐级细化。
+
+\subsection{概念结构设计}
+
+\subsubsection{实体清单}
+
+系统核心实体分为三层，共 23 个实体；本清单仅列业务主实体，关联表与导入、审核等辅助表从略，完整表清单见逻辑结构设计的「关系表总览」。
+
+\renewcommand{\arraystretch}{1.2}
+\begin{xltabular}{\linewidth}{p{2.3cm}L}
+\caption{核心实体清单} \\
+\toprule
+\textbf{层次} & \textbf{实体} \\
+\midrule
+\endhead
+业务层（app） & 用户档案 profile、方案 meal\_plan、餐位 meal\_slot、候选 meal\_candidate、候选菜式 meal\_candidate\_dish、食材清单 shopping\_list、营养报告 nutrition\_report、会话 conversation、消息 message、营养结果 nutrition\_result \\
+权威层（core） & 食材 ingredient、菜式 dish、配料 dish\_ingredient、做法规则 cooking\_rule、营养素 nutrient、营养素参考值 nutrient\_reference、健康状况 health\_condition、疾病规则 condition\_nutrient\_rule、症状映射 symptom\_nutrient\_map、目标结构映射 goal\_structure\_map \\
+知识层（knowledge） & 知识文档 knowledge\_doc、营养素知识 nutrient\_knowledge \\
+\bottomrule
+\end{xltabular}
+
+\subsubsection{实体—联系图（ER）}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{E-R图.png}
+  \caption{核心实体关系图}
+  \label{fig:er}
+\end{figure}
+
+\subsection{逻辑结构设计}
+
+\subsubsection{关系表总览}
+
+{\small\setlength{\tabcolsep}{4pt}\begin{xltabular}{\linewidth}{p{2.2cm}Q{5.4cm}Lp{2.4cm}}
+\caption{关系表总览（v1.2，含新增 / 改造标记）} \\
+\toprule
+\textbf{Schema} & \textbf{表 / 视图 / 函数} & \textbf{职责} & \textbf{变更} \\
+\midrule
+\endhead
+core & ingredient / dish / dish\_ingredient / cooking\_rule / nutrient / nutrient\_reference / health\_condition / condition\_nutrient\_rule / condition\_rule\_source / dietary\_rule\_set / symptom\_nutrient\_map / data\_source / food\_id\_mapping & 权威数值基准 & 保留（补数据） \\
+core & goal\_structure\_map & 健康目标 $\rightarrow$ 结构映射 & 新增 \\
+knowledge & knowledge\_doc / nutrient\_knowledge & 文本知识 & 保留 \\
+app & profile & 用户档案（扁平 11 字段） & 改造 \\
+app & meal\_plan / meal\_slot / meal\_candidate / meal\_candidate\_dish & 方案状态机 & 新增 \\
+app & shopping\_list & 方案食材清单 & 新增 \\
+app & conversation / message / nutrition\_result & 会话 / 消息 / 营养结果 & 保留（message 微改） \\
+app & nutrition\_report & 方案营养报告 & 改造 \\
+app & v\_key\_micronutrient（视图） & 标出 7 种关键微量 & 新增 \\
+app & recent\_micro\_balance（函数） & 跨近期历史方案汇总 7 种关键微量缺口 & 新增 \\
+audit & import\_batch / import\_issue / condition\_rule\_review & 导入批次 / 导入问题 / 规则审核 & 保留 \\
+\bottomrule
+\end{xltabular}}
+
+\subsubsection{范式说明}
+
+关系表设计满足第三范式（3NF）：非主属性仅依赖主键、不传递依赖；候选、餐位等通过外键逐级引用，无冗余的跨表字段。半结构化维度（候选宏量区间、食材清单聚合）刻意以 \texttt{jsonb} 承载，属反范式取舍：以放弃规范化换取查询与序列化便利，其内部结构由应用层约定。
+
+\subsubsection{新增表结构与状态机}
+
+{\footnotesize\setlength{\tabcolsep}{3pt}\begin{xltabular}{\linewidth}{Q{4cm}Q{3.6cm}Q{4.6cm}L}
+\caption{方案系列新增表结构} \\
+\toprule
+\textbf{表} & \textbf{主键} & \textbf{关键字段} & \textbf{外键} \\
+\midrule
+\endhead
+meal\_plan & meal\_plan\_id\textsuperscript{1} & user\_id、start\_date、end\_date、status、macro\_ratio、fixed\_at & --- \\
+meal\_slot & meal\_slot\_id\textsuperscript{1} & slot\_date、meal\_type\textsuperscript{4}、target\_macro、selected\_candidate\_id & meal\_plan\_id $\rightarrow$ meal\_plan \\
+meal\_candidate & candidate\_id\textsuperscript{1} & rank\textsuperscript{5}、why\_text、macro\_estimate & meal\_slot\_id $\rightarrow$ meal\_slot \\
+meal\_candidate\_dish & (candidate\_id, dish\_id)\textsuperscript{3} & role\textsuperscript{6}、servings & candidate\_id $\rightarrow$ meal\_candidate；dish\_id $\rightarrow$ core.dish \\
+shopping\_list & shopping\_list\_id\textsuperscript{1} & items\textsuperscript{7} & meal\_plan\_id $\rightarrow$ meal\_plan \\
+goal\_structure\_map & goal\textsuperscript{2} & macro\_ratio、oil\_salt\_sugar、food\_tendency & --- \\
+\bottomrule
+\end{xltabular}}
+
+{\footnotesize 注：\textsuperscript{1} 主键类型 bigserial，自增 8 字节整数；\textsuperscript{2} 主键类型 text，字符串；\textsuperscript{3} 复合主键以元组 (字段1, 字段2) 表示；\textsuperscript{4} meal\_type 取值不固定（如 早/午/晚/加餐 等），由智能体编排；\textsuperscript{5} rank 取值 1$\sim$3；\textsuperscript{6} role 取值 主食/菜；\textsuperscript{7} items 为 jsonb，按分类分组并含 is\_staple 标记；外键列「字段 $\rightarrow$ 表」表示字段引用该表的主键。}
+
+\textbf{方案状态机}：\texttt{meal\_plan.status} 取值 \texttt{draft}（生成中）$\rightarrow$ \texttt{candidates}（候选可换）$\rightarrow$ \texttt{fixed}（已固定，本方案锁定只读），由状态字段显式表达，不靠时间推断。
+\vspace{-1em}
+\subsubsection{profile 字段}
+\vspace{-1em}
+% 允许在 \_ 处断行（对 \texttt 内的下划线有效）
+\begin{xltabular}{\linewidth}{Q{3.2cm}Q{4cm}L}
+\caption{profile 扁平字段} \\
+\toprule
+\textbf{字段} & \textbf{关键字段} & \textbf{语义} \\
+\midrule
+\endhead
+身份 & \texttt{name / avatar} & 昵称、头像 \\
+身体参数 & \texttt{gender / age / height\_cm / weight\_kg} & 算 BMR（Mifflin-St Jeor） \\
+健康目标 & \texttt{goal\_code} & 英文主键 \texttt{maintain / fat\_loss / muscle\_gain / glucose\_control / digestive\_health}；中文名（\texttt{goal\_name}）维持 / 减脂 / 增肌 / 控糖 / 改善肠胃 \\
+烹饪条件 & \texttt{cooking\_equipment[]} & 灶具 / 烤箱 / 微波炉 / 电饭煲 / 空气炸锅 \\
+疾病限制（硬） & \texttt{conditions}（\texttt{jsonb}） & 对象 \{\texttt{condition\_id}: \texttt{\{status: confirmed|suspected|unknown\}}\}，key 取 \texttt{core.health\_condition.condition\_id}；仅 \texttt{confirmed} 参与规则，\texttt{suspected/unknown} 需追问 \\
+过敏原（硬） & \texttt{allergies[]} & 无 / 花生 / 牛奶 / 鸡蛋 / 海鲜 / 小麦 \\
+宗教禁忌（硬） & \texttt{religious\_ethical[]} & 无 / 清真 / 素食 / 不吃猪肉 / 不吃牛肉 \\
+目标热量（派生） & \texttt{target\_calories} & BMR $\times$ 1.4，系统计算，非用户填写 \\
+\bottomrule
+\end{xltabular}
+
+{\footnotesize 注：字段名后的 \texttt{[]} 表示 PostgreSQL 数组类型，即该字段一列存一组值（如 \texttt{allergens[]} 存多个过敏原）；不带 \texttt{[]} 的字段为单值；\texttt{conditions} 为 \texttt{jsonb} 对象（非数组），结构见上表。}
+
+\textbf{关键语义}：疾病限制、过敏原、宗教禁忌三类均为硬排除（绝不出现）；目标热量由系统按 BMR $\times$ 1.4 派生。
+
+\subsubsection{健康目标结构映射}
+
+\begin{xltabular}{\linewidth}{P{3.4cm}Q{5cm}Q{2.2cm}L}
+\caption{goal\_structure\_map 映射数值} \\
+\toprule
+\textbf{\texttt{goal\_code}} & \textbf{宏量供能比倾向} & \textbf{油盐糖} & \textbf{食材 / 做法倾向} \\
+\midrule
+\endhead
+\texttt{maintain}（维持） & 碳水 50--65\% / 蛋白 10--20\% / 脂肪 20--30\% & 常规 & 均衡多样 \\
+\texttt{fat\_loss}（减脂） & 蛋白 18--25\%、脂肪压至 20\% 下限 & 收紧、控添加糖 & 低 GI 主食、高纤蔬菜、清淡做法 \\
+\texttt{muscle\_gain}\newline（增肌） & 蛋白 20--25\%、优质蛋白占比 $\uparrow$ & 常规 & 肉蛋奶豆足量、主食保能量 \\
+\texttt{glucose\_control}（控糖） & 碳水压至 $\sim$50\% 下限 & 收紧、严格控糖 & 全谷 / 豆 / 薯代精米面 \\
+\texttt{digestive\_health}（改善肠胃） & 纤维 $\uparrow$、发酵食物 $\uparrow$ & 油与辛辣 $\downarrow$ & 易消化、少油炸 \\
+\bottomrule
+\end{xltabular}
+
+默认餐次宏量分配：三餐时参考 \textbf{早 30\% / 午 40\% / 晚 30\%}；餐位数与宏量按餐由智能体按实际编排灵活调整。能量目标 = BMR $\times$ 1.4（活动系数固定），只作「份量量级」参考，不做热量缺口 / 盈余；健康目标只改「结构」。
+
+\subsubsection{Schema 划分与权限边界}
+
+四个 Schema 位于同一数据库 \texttt{diet\_agent}，按数据归属与授权边界分组：\texttt{core}、\texttt{knowledge} 对应用账号只读；\texttt{app} 承载业务表、视图与函数，为应用账号读写区域；\texttt{audit} 承载导入与审核记录，仅追加写入。按 Schema 整体授权，使「权威数据只读、业务数据读写、审计数据只增」的权限规则落在清晰的命名空间边界上。
+
+\subsubsection{数据元素特性（字段字典）}
+
+全库 376 字段的「名称 / 类型 / 大小 / 单位 / 取值范围 / 精度 / 约束 / 保密性 / 来源」见交付包 \texttt{05\_数据库字段字典.csv}；新增表的字段字典在 v1.2 补充。
+
+\subsection{物理结构设计}
+
+\begin{enumerate}
+\item \textbf{存储引擎与存储结构}：PostgreSQL 默认堆存储（heap），\texttt{jsonb} / 长 \texttt{text} 字段由 TOAST 自动外置存储；\texttt{jsonb} 内部二进制 JSON，支持 GIN 索引。
+\item \textbf{索引}：主键自动建唯一 B-tree 索引；外键列建 B-tree 索引以支撑关联查询；食材 / 菜式搜索列按需建 GIN（\texttt{jsonb} / 数组）与 pg\_trgm 全文索引；\texttt{search\_ingredients} 等函数内联过滤。
+\end{enumerate}
+
+\section{用于数据库访问或操纵的软件配置项的详细设计}
+
+后端为 FastAPI 应用，接口按功能划分为若干路由模块（router），采用 SQLAlchemy 2.x 与原生 SQL（\texttt{text()}）访问数据库。各 router 访问的库对象映射如下：
+\vspace{-0.3em}
+\begin{xltabular}{\linewidth}{Q{3.4cm}L}
+\caption{Router 与库表 / 视图 / 函数映射} \\
+\toprule
+\textbf{Router} & \textbf{访问的表 / 视图 / 函数} \\
+\midrule
+\endhead
+profile.py / users.py & app.profile \\
+ingredients.py & app.search\_ingredients、app.v\_ingredient\_search \\
+dishes.py & app.v\_dish\_live\_nutrition、app.screen\_dishes\_for\_allergens \\
+calc.py & app.v\_dish\_live\_nutrition、core.dish\_ingredient、core.ingredient \\
+mealplan.py（新） & app.meal\_plan、app.meal\_slot、app.meal\_candidate、app.meal\_candidate\_dish、core.dish、core.ingredient、core.goal\_structure\_map、app.v\_key\_micronutrient、app.recent\_micro\_balance \\
+nutrition.py & app.match\_nutrient\_reference、app.evaluate\_weekly\_ul、app.nutrition\_result \\
+conditions.py & core.health\_condition、app.v\_condition\_rule\_catalog、app.v\_production\_condition\_rules、app.evaluate\_daily\_condition\_nutrient\_rule \\
+agent.py & knowledge.knowledge\_doc、knowledge.nutrient\_knowledge \\
+chat.py & app.conversation、app.message \\
+\bottomrule
+\end{xltabular}
+
+新接口与数据表的读写映射如下：
+
+{\small\setlength{\tabcolsep}{4pt}\begin{xltabular}{\linewidth}{Q{3.0cm}LQ{6.4cm}}
+\caption{接口与数据表读写映射} \\
+\toprule
+\textbf{接口} & \textbf{读（只读）} & \textbf{写} \\
+\midrule
+\endhead
+P-01 / P-02 / P-03 档案 & app.profile & app.profile \\
+P-04 食材目录 & core.ingredient & --- \\
+M-01 生成候选 & profile、dish、dish\_ingredient、ingredient、cooking\_rule、goal\_structure\_map、nutrient\_reference、近期历史方案（meal\_plan + nutrition\_report） & meal\_plan、meal\_slot、meal\_candidate、meal\_candidate\_dish \\
+M-02 换候选 & meal\_plan、meal\_slot、meal\_candidate & meal\_slot.selected\_candidate\_id \\
+M-03 固定 & meal\_plan、meal\_slot & meal\_plan.status / fixed\_at、meal\_slot.selected\_candidate\_id \\
+M-04 / M-05 查方案 & meal\_plan、meal\_slot、meal\_candidate、meal\_candidate\_dish、dish & --- \\
+M-06 营养分析 & meal\_plan、nutrition\_report、nutrient\_reference、v\_key\_micronutrient、recent\_micro\_balance & nutrition\_report \\
+M-07 食材清单 & meal\_plan、meal\_candidate\_dish、dish\_ingredient、ingredient & shopping\_list \\
+C-01 对话（SSE） & profile（硬约束）、meal\_plan（引用）、knowledge & conversation、message \\
+C-02 RAG & knowledge\_doc、nutrient\_knowledge & --- \\
+C-03 反向营养 & core.symptom\_nutrient\_map & --- \\
+K-01 营养核算 & ingredient、dish、dish\_ingredient & nutrition\_result \\
+\bottomrule
+\end{xltabular}}
+
+M-01 是唯一「跨 core + app 大量读、写 app」的重接口，其读表清单即生成引擎的数据依赖，数据岗须保证这些表数据完整、字段可查。
+
+\section*{附录}
+
+\subsection*{A. 支撑素材}
+
+\begin{enumerate}
+\item 空库恢复测试结果与数据库验收脚本：见交付包 \texttt{08\_数据库验收.sql}。
+\item 字段字典（376 字段）与外键关系（18 条）：见交付包 \texttt{05\_数据库字段字典.csv}、\texttt{06\_数据库外键关系.csv}，可单独成册。
+\end{enumerate}
+
+\end{document}

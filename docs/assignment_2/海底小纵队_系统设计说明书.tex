@@ -1,0 +1,1152 @@
+\documentclass[12pt,a4paper]{ctexart}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{pdfpages}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{xltabular}
+\usepackage{colortbl}
+\usepackage{enumitem}
+% 配合 xltabular 的可变列：L = 左对齐自适应列（自动填满版心），P{宽} = 居中定宽列
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\newcolumntype{P}[1]{>{\centering\arraybackslash}p{#1}}
+% 左对齐定宽列：避免中文在窄列中被两端对齐拉伸、造成字距忽大忽小
+\newcolumntype{Q}[1]{>{\raggedright\arraybackslash}p{#1}}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\PassOptionsToPackage{hyphens}{url}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc,arrows.meta,shapes.geometric}
+\usepackage{amsmath,amssymb}
+% 统一箭头样式（活动图 / 时序图）
+\tikzset{ >=Stealth }
+% 架构图 / 流程图共用图元样式（沿用架构方案 v3.0）
+\tikzset{
+  arr/.style={-{Stealth[length=2.2mm]}, thick},
+  darr/.style={-{Stealth[length=2.2mm]}, thick, dashed},
+  layerbox/.style={draw, thick, rectangle, rounded corners=2pt, align=center,
+                   font=\small, minimum width=11.5cm, minimum height=0.9cm},
+  flowuser/.style={draw, dashed, rectangle, rounded corners=2pt, align=center,
+                   font=\small, minimum width=6.5cm, minimum height=0.85cm},
+  flowsys/.style={draw, thick, rectangle, rounded corners=2pt, align=center,
+                  font=\small, minimum width=6.5cm, minimum height=0.85cm},
+  flowstore/.style={draw, thick, rectangle, rounded corners=2pt, fill=gray!12,
+                    align=center, font=\small, minimum width=6.5cm, minimum height=0.85cm},
+  flowside/.style={draw, rectangle, rounded corners=2pt, fill=gray!6,
+                   align=center, font=\footnotesize, minimum width=3.8cm, minimum height=0.7cm},
+}
+
+\setlist{itemsep=2pt,parsep=0pt,topsep=4pt}
+% 一级列表（enumerate）：左缩进设为 0，编号顶格，条目文字紧随其后
+\setlist[enumerate]{labelindent=0.8em, itemindent=0pt, labelsep=0.5em, leftmargin=*}
+% 嵌套在有序列表内的紧凑无序列表（subbullet）：收紧左缩进与条目间距，避免层级缩进过长
+\newlist{subbullet}{itemize}{1}
+\setlist[subbullet]{label=\textbullet, leftmargin=1em, labelindent=0.2em, itemindent=0pt, labelsep=0.3em, topsep=2pt, itemsep=1pt, parsep=0pt}
+% 表格单元格内的紧凑无序列表：当单元格含多条内容时，用项目符号逐条罗列，且不留额外空隙
+\newlist{celllist}{itemize}{1}
+\setlist[celllist]{label=\textbullet, leftmargin=*, labelsep=0.5em, topsep=0pt, partopsep=0pt, itemsep=0pt, parsep=0pt, before={\vspace{-9.8pt}}}
+% 表格单元格内的紧凑编号列表：用于逐条罗列检查点，编号为 1. 2. 3.
+\newlist{cellenum}{enumerate}{1}
+\setlist[cellenum]{label=\arabic*., leftmargin=*, labelsep=0.5em, topsep=0pt, partopsep=0pt, itemsep=2pt, parsep=0pt, before={\vspace{-9.8pt}}}
+\captionsetup{font=small,labelfont=bf,skip=6pt,aboveskip=3pt}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
+% 表格整体排版：适当加宽行距与单元格左右内边距
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{7pt}
+% 收紧长表格（xltabular/longtable）与前后文的纵向间距
+\setlength{\LTpre}{4pt}
+\setlength{\LTpost}{4pt}
+\emergencystretch=2em
+% 表内行间浅分割线（比 \midrule 更细、颜色更浅，用于区分各行）
+\newcommand{\rowrule}{\arrayrulecolor[gray]{0.7}\specialrule{0.3pt}{0.4ex}{0.4ex}\arrayrulecolor[gray]{0}}
+% 标题与上下文的间距：收紧 section / subsection 的上下留白
+\ctexset{
+  section = {
+    beforeskip = 2ex plus 0.5ex minus 0.2ex,
+    afterskip  = 1ex plus 0.2ex minus 0.1ex,
+  },
+  subsection = {
+    beforeskip = 1.5ex plus 0.4ex minus 0.2ex,
+    afterskip  = 1ex plus 0.2ex minus 0.1ex,
+  },
+  paragraph = {
+    runin = false,
+    beforeskip = 1.5ex plus 0.4ex minus 0.2ex,
+    afterskip  = 0.8ex plus 0.2ex minus 0.1ex,
+  },
+}
+
+% 正文编号到第三级（\subsubsection），第四级起用（1）（2）（3）编号
+\setcounter{secnumdepth}{4}
+\setcounter{tocdepth}{3}
+
+\newcommand{\numitem}[2]{%
+  \par\noindent\hangindent=0.55cm\hangafter=1
+  \makebox[0.55cm][l]{#1.}#2\par
+}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{1.5cm}
+% 提示：logo 路径按「从本目录编译」给出；若编译报找不到图片，请改为 ../..\需求分析文档成果\images\logo.jpg 或复制 logo.jpg 到本目录 images\ 下
+\includegraphics[width=6cm]{images/logo.jpg}\par
+\vspace{1.2cm}
+{\Huge\bfseries
+《膳食搭配智能体系统》\par
+\vspace{1em}
+ 系统设计说明书}
+\vspace{2cm}
+
+\begin{tabular}{p{2.6cm}p{10cm}}
+\textbf{团队名称} & 海底小纵队 \\
+\textbf{团队成员} & 052401304 李思淇、102301228 林郑嘉同、102401108 李铭媛、102401202 洪雅琳、102401307 陈媛、102401402 冯安娜、102401405 王怡婷、102401406 陈婉凤、102401409 陈宝荣、102401411 陈博淇、102401604 马英慧 \\
+\textbf{文档版本} & V1.2 \\
+\textbf{编制日期} & 2026-11-08 \\
+\textbf{编制人} & 海底小纵队 \\
+\end{tabular}
+\vfill
+{\large 依从 GB/T 8567---2006\par}
+\end{titlepage}
+
+% 前置部分（迭代记录表、目录）采用罗马数字页码，正文从第一章起改用阿拉伯数字
+\pagenumbering{roman}
+
+\begin{xltabular}{\linewidth}{P{1cm}P{2cm}p{2.5cm}LP{2cm}}
+\caption{迭代记录表} \\
+\toprule
+\textbf{版本} & \textbf{日期} & \textbf{修改人} & \textbf{修改内容} \\
+\midrule
+\endhead
+V0.1 & 2026-11-04 & 李铭媛 & 建立文档骨架 \\
+V0.2 & 2026-11-04 & 海底小纵队 & 根据产品方案v1.0攥写初稿 \\
+V0.3 & 2026-11-08 & 海底小纵队 & 根据产品改进设想调整系统设计 \\
+V1.0 & 2026-11-08 & 李铭媛 & 全文去重与结构梳理 \\
+V1.1 & 2026-11-11 & 李铭媛 & 同步 v1.2 口径（工具清单、活动系数、路由、饮食顺序） \\
+V1.2 & 2026-11-14 & 海底小纵队 & 修正 SSE 协议、错误码 2006、补病种目录端点 \\
+\bottomrule
+\end{xltabular}
+
+% ============ 目录 ============
+\newpage
+\tableofcontents
+\newpage
+
+% 正文页码从第一章开始（阿拉伯数字，重新从 1 计数）
+\pagenumbering{arabic}
+
+\section{注解}
+\label{sec:glossary}
+
+缩略语按字母序见表~\ref{tab:glossary-abbr}，术语与定义见表~\ref{tab:glossary-term}。
+
+\begin{xltabular}{\linewidth}{p{3.0cm}L}
+\caption{缩略语（按字母序）\label{tab:glossary-abbr}} \\
+\toprule
+\textbf{缩略语} & \textbf{含义} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{缩略语} & \textbf{含义} \\
+\midrule
+\endhead
+BMR & 基础代谢率 \\
+DBDD & 数据库（顶层）设计说明 \\
+DRIs & 膳食营养素参考摄入量 \\
+MVP & 最小可行产品 \\
+PAL & 身体活动水平系数 \\
+RAG & 检索增强生成（领域知识库检索辅助大模型回答） \\
+RNI & 推荐摄入量 \\
+RRF & 倒数排名融合：按多路检索排名合并结果 \\
+SSDD & 系统/子系统设计（结构）说明 \\
+SSE & 服务器推送事件（流式传输） \\
+UL & 可耐受最高摄入量 \\
+\bottomrule
+\end{xltabular}
+
+\begin{xltabular}{\linewidth}{p{3.2cm}L}
+\caption{术语与定义\label{tab:glossary-term}} \\
+\toprule
+\textbf{术语} & \textbf{定义} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{术语} & \textbf{定义} \\
+\midrule
+\endhead
+Function Calling & 工具调用：智能体调用外部函数完成确定性计算 \\
+data\_quality & 数据可信度：official（官方实测）/ approx（估算）/ check（待核查） \\
+宏量/微量营养素 & 宏量：碳水、蛋白质、脂肪；微量：维生素、矿物质 \\
+意图路由 & 将用户请求分流至询问 / 配餐 / 调整三类路径 \\
+候选 & 每餐的多个候选方案 \\
+反向营养 & 由症状推测可能缺乏的营养素 \\
+生重/成品口径 & 食材按未烹饪生重计 / 菜式按烹饪后成品计 \\
+IF-INT-T01～T18 & 后端与 Agent 间的 18 个工具接口 \\
+接口标识 & 三段式：IF-UI（用户）/ IF-EXT（外部）/ IF-INT（内部） \\
+错误码分段 & 0 成功 / 10xx 参数权限 / 20xx 计算依赖 / 3001 内容安全 \\
+存活/就绪探针 & \texttt{/health/live} 仅证进程存活；\texttt{/health/ready} 要求依赖全就绪 \\
+\bottomrule
+\end{xltabular}
+
+\section{引言}
+
+\subsection{标识}
+
+本文档适用的系统为「膳食搭配智能体系统」，软件版本为 V1.0（MVP 最小可行产品）。本文档为该系统的系统/子系统设计（结构）设计说明书（SSDD），文档版本 V1.2。
+
+\subsection{系统概述}
+
+膳食搭配智能体系统以用户自定范围为规划单位，面向有意识调控饮食、以自行烹饪为主的用户。系统以「营养素配比平衡」为核心，采用「营养搭配 $\rightarrow$ 菜式转化」两步模型，将食材层的个性化营养方案转化为菜式层的可执行家常菜菜单，并标注依据来源。
+
+系统以\textbf{对话为唯一入口}，用户以自然语言表达需求，智能体通过意图路由理解「询问 / 配餐 / 调整」三类意图，编排确定性工具生成个性化食谱，并以餐卡、食材清单等结构化形态呈现结果。对话右侧设工具栏，作为 Agent 输出的结构化视图。档案为轻量可选项，可随对话逐步补全。
+
+本项目为福州大学软件工程课程作业，由「海底小纵队」团队开发；系统为首次开发（无历史版本），运行于本地部署环境，经现代浏览器访问。
+
+\subsection{文档概述}
+
+本文档为系统级（概要）设计说明书，描述系统的设计基线、设计决策、体系结构、运行与出错处理、维护与可追踪性等，作为后续详细设计与编码实现的对齐依据。预期读者为课程教师、助教与项目组全体成员。
+
+本系统涉及健康数据（过敏原、疾病史、饮食禁忌等），属私密信息，其访问控制与权限设计须单独关注。
+
+
+\section{引用文件}
+
+本文档引用的文件及其版本见表~\ref{tab:refs}。
+
+\begin{xltabular}{0.9\linewidth}{p{1.2cm}L}
+\caption{引用文件\label{tab:refs}} \\
+\toprule
+\textbf{编号} & \textbf{文件} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{编号} & \textbf{文件} \\
+\midrule
+\endhead
+1 & GB/T 8567---2006 计算机软件文档编制规范 \\
+2 & GB/T 9385---2008 计算机软件需求规格说明规范 \\
+3 & GB/T 11457---2006 信息技术 软件工程术语 \\
+4 & 膳食搭配智能体系统软件需求规格说明书（内部文档） \\
+5 & 膳食搭配智能体系统数据库设计说明书（DBDD，内部文档） \\
+6 & 中国居民膳食指南（2022版） \\
+7 & 中国居民膳食营养素参考摄入量（2023版） \\
+8 & 中国食物成分表（标准版，2018版） \\
+\bottomrule
+\end{xltabular}
+
+\section{系统级设计决策}
+
+\subsection{设计决策}
+
+\begin{enumerate}
+\item \textbf{输入/输出形态}：以对话为唯一入口；输出结构化结果与正文解释，并附来源标注与就医提示。
+\item \textbf{生成主体}：候选食谱由\textbf{确定性工具}计算生成，Agent 负责理解需求、编排工具、决策与解释。
+\item \textbf{生成单位}：以用户自定范围生成；每餐 = 主食 + 1--2 道菜；每餐 2--3 候选，固定后本方案内锁定只读。
+\item \textbf{营养口径}：能量目标 = BMR $\times$ 1.4（固定活动系数），仅作份量量级参考、\textbf{不做热量缺口/盈余}；7 关键微量跨日动态平衡；宏量按餐灵活分配（口径详见 5.1.3）。
+\item \textbf{约束分级}：饮食禁忌作为硬约束予以排除；候选从全量食材库中生成。
+\item \textbf{数据存储}：采用 PostgreSQL + pgvector；数据按 core / knowledge / app / audit 四 schema 组织；档案为轻量结构、可随对话补全。
+\item \textbf{安全保密}：JWT 鉴权；数据库四 schema 权限分离（应用连接非超级用户，core/knowledge 只读、app 读写）；健康数据仅授权用户可见。
+\item \textbf{写入边界}：所有会修改数据的操作必须经确定性工具执行；Agent 不得自行计算数值、亦不得直接写库；反向营养仅作推测、附就医提示。
+\end{enumerate}
+
+\subsection{设计约定}
+
+本系统统一遵循以下设计约定，作为多人协作与前后端对齐的口径：
+
+\begin{xltabular}{\linewidth}{p{1.8cm}L}
+\caption{设计约定\label{tab:convention}} \\
+\toprule
+\textbf{类别} & \textbf{约定} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{类别} & \textbf{约定} \\
+\midrule
+\endhead
+命名 &
+\numitem{1}{表 / 视图 / 函数按 core（食材 / 菜 / 营养素 / 规则）、knowledge（知识库）、app（业务表 / 视图 / 函数）、audit（导入批次 / 质量）四 schema 组织；}
+\numitem{2}{路由统一加 \texttt{/api} 前缀；}
+\numitem{3}{工具编号 IF-INT-T01～T18。} \\
+接口 &
+\numitem{1}{响应体统一为 JSON 对象，含 \texttt{code}（整型错误码）、\texttt{message}（字符串提示）、\texttt{data}（业务数据）三字段；}
+\numitem{2}{接口按三段标识：IF-UI（用户）/ IF-EXT（外部）/ IF-INT（内部）。} \\
+数据 &
+\numitem{1}{\texttt{null} 表示未知；}
+\numitem{2}{可信度 \texttt{data\_quality} 分三级：官方实测 / 估算 / 待核查；}
+\numitem{3}{过敏原三态（已确认含 / 不含 / 未核查）与菜级决策三态（可用 / 严格排除 / 待核查排除）不可混用；}
+\numitem{4}{\texttt{*\_complete=false} 表示字段缺失（不当 0）；}
+\numitem{5}{\texttt{production\_ready=false} 表示不可用于正式结果。} \\
+智能体 &
+\numitem{1}{遵守 4.3 行为约束。} \\
+时间单位 &
+\numitem{1}{时延目标用 s / ms 表述；}
+\numitem{2}{营养目标用「周 / 跨日」表述。} \\
+\bottomrule
+\end{xltabular}
+
+\subsection{行为约束}
+
+以下 8 条行为约束为系统级关键性需求，对话 Agent 在理解、编排、决策与解释时须全部遵守：
+
+\begin{enumerate}
+\item \textbf{零编造}：所有数值一律来自工具返回值或输入的候选字段，绝不自行计算、编造、估算。
+\item \textbf{null $\neq$ 0}：字段为 null 表示未知，不得当 0、不得据此判达标/超标。
+\item \textbf{data\_quality 语义}：仅「官方实测」可作实测依据；「估算」「待核查」不得据此下结论。
+\item \textbf{未核查 $\neq$ 安全}：过敏原状态字段 \texttt{allergen\_status} 为未核查的食材/菜式不得宣称「安全」。
+\item \textbf{可溯源}：营养结论标注出处；知识性结论用 RAG 检索并注明来源。
+\item \textbf{硬约束优先}：过敏/忌口/疾病是硬约束，优先于用户偏好，建议不得越界。
+\item \textbf{needs\_clarification}：为 true 时必须追问用户，不得自行取值。
+\item \textbf{不做医学诊断}：反向营养结果仅作参考线索，须附就医提示。
+\end{enumerate}
+
+\section{系统体系结构设计}
+
+\subsection{系统总体设计}
+
+\subsubsection{概述}
+
+\paragraph{功能描述}
+
+系统由三部分构成，各部分功能如下：
+
+\begin{itemize}
+  \item \textbf{对话主界面}：唯一入口，含会话历史、对话流与输入框。
+  \item \textbf{结构化输出面板}：工具栏四面板，即食材清单、当前规划、历史方案与膳食报告。
+  \item \textbf{轻量档案}：记录身体参数、健康目标、过敏与禁忌；可随对话逐步补全，信息不足时系统追问。
+\end{itemize}
+
+系统性能要求：候选生成 P95 $\le$ 5s、确定性计算 P99 $\le$ 100ms、对话首字延迟 $\le$ 10s、并发 $\ge$ 50 用户；安全性须保证数值可溯源、健康数据仅授权可见。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\linewidth]{用例图.png}
+  \caption{用例图}
+  \label{fig:use_case}
+\end{figure}
+
+\paragraph{运行环境}
+
+\begin{xltabular}{\linewidth}{p{2cm}L}
+\caption{运行环境} \\
+\toprule
+\textbf{层} & \textbf{技术栈} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{层} & \textbf{技术栈} \\
+\midrule
+\endhead
+前端 & Vue3 + Vite + Element Plus \\
+后端 & FastAPI（Python 3.13），REST + 流式 SSE \\
+数据库 & PostgreSQL 18 + pgvector 扩展 \\
+Agent 层 & Agno 框架  \\
+大模型 & DeepSeek（生成/对话）；向量化使用共享 embedding 模型 \\
+\bottomrule
+\end{xltabular}
+
+
+\subsubsection{设计思想}
+
+系统按「\textbf{五层业务架构 + 两个横切层}」组织：五层自上而下逐层调用，初始化层位于底层负责环境准备，评测层贯穿五层负责质量观测。系统分层总览见图~\ref{fig:layers}。各层核心职责见表~\ref{tab:layers}。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.3cm]
+
+  \node[layerbox] (api) {接口层 \quad FastAPI · RESTful + SSE 流式对话};
+  \node[layerbox, below=of api] (agent) {Agent 层 \quad 对话 Agent：意图路由 + 工具编排（询问 / 配餐 / 调整）};
+  \node[layerbox, below=of agent] (engine) {规则引擎层 \quad 确定性生成候选（约束 + 搜索 + 回溯，非 LLM）};
+  \node[layerbox, below=of engine] (kb) {知识库层 \quad RAG 检索 · pgvector 向量 + 关键词 RRF};
+  \node[layerbox, below=of kb] (data) {数据层 \quad PostgreSQL · 领域实体持久化};
+
+  \node[layerbox, below=0.5cm of data, minimum height=0.7cm] (init)
+       {初始化层：建表 + 种子数据 + 向量化（位于底层）};
+
+  \node[draw, thick, rectangle, rounded corners=2pt, align=center, font=\small,
+        minimum width=1.3cm, minimum height=5.9cm, right=0.8cm of engine] (eval)
+       {\rotatebox{90}{评测层：贯穿五层}};
+
+\end{tikzpicture}
+\caption{系统分层总览}
+\label{fig:layers}
+\end{figure}
+
+\begin{xltabular}{\linewidth}{p{2.2cm}L}
+\caption{各层核心职责\label{tab:layers}} \\
+\toprule
+\textbf{层} & \textbf{核心职责} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{层} & \textbf{核心职责} \\
+\midrule
+\endhead
+数据层   & 数据持久化：档案、食材、菜、方案、会话等实体存储 \\
+知识库层 & 知识检索：权威资料向量化，支撑结论可溯源 \\
+规则引擎层 & 候选生成：确定性计算候选食谱  \\
+Agent 层 & 意图路由与编排：理解自然语言，编排确定性工具完成询问 / 配餐 / 调整 \\
+接口层   & 对外服务：统一 REST API 与流式对话 \\
+初始化层 & 环境准备：建表、灌入种子数据、首次向量化 \\
+评测层   & 质量观测：量化生成正确性、解释稳定性与性能 \\
+\bottomrule
+\end{xltabular}
+
+五层遵循「上层调用下层、下层不反向依赖上层」：接口层直接面对前端，Agent 层经确定性工具访问规则引擎层与数据层；横切的初始化层与评测层不参与业务调用链。
+
+系统的核心分工是\textbf{确定性计算与智能决策分离}：规则引擎（确定性工具）负责计算与生成，Agent 负责理解、决策、沟通；大模型不直接计算数值。据此形成\textbf{两层编排}：
+
+\begin{itemize}
+\item \textbf{任务编排归 Agent}：决定何时生成、何时解释、何时调整、何时落库；
+\item \textbf{算法编排归代码}：五步生成、回溯循环等顺序性强且需可复现的计算，封装为确定性工具，仅对外暴露输入/输出契约；Agent 只调用工具并解读结果，不执行循环内部的计算。
+\end{itemize}
+
+\textbf{领域知识按两路组织}：\textbf{数据形态}（食材成分表、菜库、DRIs、微量目标表、禁忌规则）供确定性工具查表计算；\textbf{语义形态}（膳食指南、营养原理）供 RAG 检索、Agent 推理与解释。
+
+\textbf{Agent 定制手段及其作用位置}见表~\ref{tab:agent-custom}。
+
+\begin{xltabular}{\linewidth}{p{2.2cm}p{3.5cm}L}
+\caption{Agent 定制手段与作用位置\label{tab:agent-custom}} \\
+\toprule
+\textbf{定制手段} & \textbf{作用位置} & \textbf{职责} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{定制手段} & \textbf{作用位置} & \textbf{职责} \\
+\midrule
+\endhead
+工具调用 & 确定性工具 & 算能量/宏量/微量、禁忌检查、油盐估算、落库、回溯 \\
+流程编排 & 对话 Agent & 理解需求、澄清缺口、调工具、解读结果、处理冲突、解释 \\
+提示词设计 & 系统指令 + 行为约束 + 角色设定 & 边界、输出契约、追问策略、解释表述 \\
+领域知识 & 知识库 & 数据形态供工具查表，语义形态供 Agent 推理 \\
+知识检索 & RAG & 解释/决策时补来源 \\
+\bottomrule
+\end{xltabular}
+
+系统部署一个\textbf{对话 Agent}，以「意图路由 + 工具编排」统一承接询问 / 配餐 / 调整三类请求：询问路径经 RAG 与反向营养分析；配餐与调整路径编排确定性工具生成、换候选与重算。Agent 输出结构化结果与正文解释，其行为须遵守 4.3 行为约束。
+
+\subsubsection{关键技术与算法}
+
+\noindent \textbf{（1）规则引擎五步生成算法}:
+
+\begin{enumerate}
+\item \textbf{算目标}：由档案得能量量级、每餐宏量区间、7 种关键微量目标、硬约束。
+\item \textbf{构造候选}：一餐 = 主食 + 1--2 道菜；从全量食材库组合出落在该餐宏量区间的候选，同时满足禁忌硬排除、做法规则过滤可行性、油盐在当餐限额内。
+\item \textbf{候选差异化}：同餐 2--3 个候选靠「换主食材 / 换做法」区分，宏量结构均落在该餐区间。
+\item \textbf{跨日微量平衡}：读取近期历史方案，汇总 7 种关键微量缺口；不足则回溯补位，直至补齐或落到「参考提示」。
+\item \textbf{输出}：候选集合 + 每餐「为什么这样搭」 + 饮食顺序建议 + 微量覆盖进度。
+\end{enumerate}
+
+\noindent \textbf{（2）确定性营养计算口径}：
+
+\begin{itemize}
+  \item \textbf{能量目标}：$=$ BMR $\times$ 1.4（固定活动系数），只作份量量级参考，不做热量缺口 / 盈余。
+  \item \textbf{健康目标}：只改结构，不改能量总量。
+    \begin{itemize}[leftmargin=1em]
+      \item 维持：碳水 50--65\% / 蛋白 10--20\% / 脂肪 20--30\%；
+      \item 减脂：蛋白 18--25\%，脂肪压至 20\% 下限；
+      \item 增肌：蛋白 20--25\%；
+      \item 控糖：碳水压至约 50\% 下限；
+      \item 改善肠胃：纤维与发酵食物增多。
+    \end{itemize}
+  \item \textbf{宏量分配}：按餐由智能体按实际餐位灵活分配，默认三餐参考早 30\% / 午 40\% / 晚 30\%。
+  \item \textbf{微量平衡}：7 种关键微量跨日动态平衡，读取近期历史方案；钠归油盐糖控制，膳食纤维归宏量结构，其余微量仅作参考提示。
+\end{itemize}
+
+\noindent \textbf{（3）RAG 知识检索}：
+
+\begin{itemize}
+  \item \textbf{知识库}：承载《中国居民膳食指南 2022》《中国食物成分表》《DRIs 2023》。
+  \item \textbf{检索方式}：向量 + 关键词两路 RRF 混合检索；每条结论标注出处，支撑可溯源。
+  \item \textbf{实现路径}：先行关键词检索，随后接入向量 RRF 混合检索。
+\end{itemize}
+
+\subsubsection{关键数据结构}
+
+系统的关键数据结构（实体）及其用途见表~\ref{tab:entity}，类结构见图~\ref{fig:class}。
+
+\begin{xltabular}{\linewidth}{p{4.2cm}L}
+\caption{关键数据结构\label{tab:entity}} \\
+\toprule
+\textbf{实体} & \textbf{说明} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{实体} & \textbf{说明} \\
+\midrule
+\endhead
+Profile & 轻量档案：身体参数、健康目标、疾病/过敏/宗教禁忌三类硬约束 \\
+Ingredient & 食材库：食材及其营养成分、过敏原标注、数据质量等级 \\
+Dish & 菜库：可搭配的菜式，带做法与油盐分级 \\
+MealPlan & 方案主表：一次配餐方案，含起止日期与进度状态 \\
+MealSlot & 餐位：方案内的一个进食安排（早/午/晚/加餐等），数量与类型由智能体编排 \\
+MealCandidate & 候选：每个餐位的 2--3 个备选搭配 \\
+MealCandidateDish & 候选明细：候选里具体包含的一道菜及其份量 \\
+ShoppingList & 食材清单：按方案汇总出的采购清单 \\
+NutritionReport & 方案营养报告：一份方案的营养核算结果 \\
+SymptomNutritionMap & 症状 $\rightarrow$ 营养素映射：反向营养查询用 \\
+Conversation & 对话会话：用户与智能体交互的会话窗口，记录基本归属关系 \\
+Message & 对话消息：会话中的具体记录 \\
+\bottomrule
+\end{xltabular}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\linewidth]{类图.png}
+  \caption{类图}
+  \label{fig:class}
+\end{figure}
+
+
+
+\subsubsection{基本处理流程}
+
+\paragraph{系统流程图}
+
+\textbf{配餐生成流程}见图~\ref{fig:flow1}：用户以自然语言提出配餐需求后，对话 Agent 识别为「配餐」，编排确定性工具生成候选；随后 Agent 解读并解释「为什么这样搭」，结果落库，用户查看餐卡片、换候选或固定。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.4cm]
+
+  \node[flowuser] (a) {用户：自然语言提出配餐需求};
+  \node[flowsys, below=of a] (b) {对话 Agent：意图路由（配餐） + 编排确定性工具};
+  \node[flowsys, below=of b] (c) {确定性工具：约束 + 搜索，生成候选};
+  \node[flowsys, below=of c] (d) {对话 Agent：解读 + 解释（为什么这样搭）};
+  \node[flowstore, below=of d] (e) {数据层：解释落库};
+  \node[flowuser, below=of e] (f) {用户：查看餐卡片 / 换候选 / 固定};
+  \node[flowstore, below=of f] (g) {数据层：方案锁定 + 生成食材清单};
+
+  \draw[arr] (a) -- (b);
+  \draw[arr] (b) -- (c);
+  \draw[arr] (c) -- (d);
+  \draw[arr] (d) -- (e);
+  \draw[arr] (e) -- (f);
+  \draw[arr] (f) -- (g);
+
+  \node[flowside, right=0.7cm of c] (src) {数据层\\档案 / 食材库 / 菜库};
+  \draw[darr] (src) -- (c);
+  \node[flowside, right=0.7cm of d] (kb) {知识库层\\补来源};
+  \draw[darr] (kb) -- (d);
+
+\end{tikzpicture}
+\caption{配餐生成流程}
+\label{fig:flow1}
+\end{figure}
+
+\textbf{营养对话流程}见图~\ref{fig:flow2}：用户以自然语言提问后，对话 Agent 识别为「询问」，读取档案硬约束、执行 RAG 检索与反向营养，前端展示正文与来源标注 / 就医提示 / 跳转定位；该路径只读，不修改方案。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[node distance=0.4cm]
+
+  \node[flowuser] (a) {用户：自然语言提问};
+  \node[flowsys, below=of a] (b) {对话 Agent：意图路由（询问）};
+  \node[flowsys, below=of b] (c) {读档案硬约束 + 读方案};
+  \node[flowsys, below=of c] (d) {RAG 检索 + 反向营养};
+  \node[flowuser, below=of d] (e) {前端：正文 + 来源标注 / 就医提示 / 跳转};
+
+  \draw[arr] (a) -- (b);
+  \draw[arr] (b) -- (c);
+  \draw[arr] (c) -- (d);
+  \draw[arr] (d) -- (e);
+
+  \node[flowside, right=0.7cm of c] (src) {数据层\\档案硬约束 / 方案};
+  \draw[darr] (src) -- (c);
+  \node[flowside, right=0.7cm of d] (kb) {知识库层\\RAG 检索};
+  \draw[darr] (kb) -- (d);
+
+\end{tikzpicture}
+\caption{营养对话流程}
+\label{fig:flow2}
+\end{figure}
+
+\paragraph{数据流程图}
+
+核心数据流图如图\ref{fig:dfd}所示，以 P1 对话 Agent 为枢纽，涵盖用户经对话与个人档案界面两条入口进入建档、候选生成与固定、营养分析与食材清单输出及咨询问答的数据通路。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.8\linewidth]{数据流图.png}
+  \caption{系统核心数据流图}
+  \label{fig:dfd}
+\end{figure}
+
+
+\subsubsection{人工处理过程}
+
+人工处理包括采购、补录档案等；与系统的职责边界见表~\ref{tab:human-sys}。
+
+\begin{xltabular}{\linewidth}{p{1cm}Q{6.4cm}L}
+\caption{人工与系统边界小结\label{tab:human-sys}} \\
+\toprule
+\textbf{环节} & \textbf{系统（自动）} & \textbf{人工（用户）} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{环节} & \textbf{系统（自动）} & \textbf{人工（用户）} \\
+\midrule
+\endhead
+档案 & 追问缺失字段、存储与联动生成 & 口头补充身体参数 / 目标 / 过敏禁忌 \\
+配餐 & 意图路由、五步计算、候选生成 & 表达生成范围与约束、选择候选并确认 \\
+调整 & 换候选 / 局部重算、维持宏量结构 & 表达「换一换 / 不吃某食材」等诉求 \\
+采购 & 汇总食材清单、可复制 & 自行采购、按清单执行 \\
+营养\newline 结论 & 确定性计算 + RAG 溯源 & 参考结论、必要时就医 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{系统部件}
+
+本系统为纯软件系统，所有软件部件均为软件配置项（CSCI）。按 5.1.2 的「五层业务架构」划分部件，每个部件赋予项目唯一标识，并标明用途与开发状态（见表~\ref{tab:cscu}）。
+
+部件的静态组成关系为：前端对话界面调用后端服务，后端服务编排对话 Agent 与规则引擎，规则引擎经知识库检索、经数据层持久化，自上而下单向调用、下层不反向依赖上层。
+
+\begin{xltabular}{\linewidth}{p{1.6cm}p{2.6cm}p{2.8cm}L}
+\caption{系统部件清单\label{tab:cscu}} \\
+\toprule
+\textbf{标识} & \textbf{部件} & \textbf{开发状态/类型} & \textbf{用途} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{标识} & \textbf{部件} & \textbf{开发状态/类型} & \textbf{用途} \\
+\midrule
+\endhead
+CSCI-01 & 前端对话界面 & 新开发 & 对话交互、结构化输出面板、轻量档案入口 \\
+CSCI-02 & 后端服务 & 复用 + 扩展 & REST + SSE 流式对话 + JWT 鉴权 \\
+CSCI-03 & 对话 Agent & 新开发 & 意图路由 + 工具编排，遵守 4.3 行为约束 \\
+CSCI-04 & 规则引擎 & 新开发 & 确定性五步生成、营养核算、禁忌与过敏原筛查 \\
+CSCI-05 & 知识库 & 复用 + 扩展 & pgvector 向量 + 关键词 RRF 混合检索，支撑可溯源 \\
+CSCI-06 & 数据库 & 复用 + 扩展 & PostgreSQL 四 schema 持久化；新增方案 / 候选 / 清单表 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{执行概念}
+
+系统部件间的动态关系通过时序图（图~\ref{fig:sequence}）与活动图（图~\ref{fig:activity}）表示。其中，时序图刻画规则引擎一次生成调用的读写时序，活动图刻画对话 Agent 的意图路由与工具编排。
+
+\begin{figure}[H]
+  \centering
+  \resizebox{0.9\linewidth}{!}{%
+  \begin{tikzpicture}[
+    font=\small,
+    lifeline/.style={dashed, color=black!50, thick},
+    part/.style={draw, rectangle, fill=white, minimum width=2.8cm, minimum height=0.8cm, align=center, thick},
+    msg/.style={->, >=stealth, thick},
+    ret/.style={->, >=stealth, thick, dashed},
+    % 激活条：浅灰底，深灰边，严格包裹
+    actbar/.style={fill=gray!25, draw=gray!80, thick},
+    lbl/.style={font=\scriptsize, above, midway}
+  ]
+    % 1. 定义参与者
+    \node[part] (p1) at (0,0) {用户};
+    \node[part] (p2) at (4.5,0) {对话 Agent};
+    \node[part] (p3) at (9.0,0) {确定性工具};
+    \node[part] (p4) at (13.5,0) {数据层};
+
+    % 2. 绘制生命线
+    \foreach \x in {0,4.5,9.0,13.5} \draw[lifeline] (\x,-0.5) -- (\x,-8.8);
+
+    % ================= 3. 灰色激活条 (精确定义高度) =================
+    % 用户与 Agent：从 -1.0 一直到底部 -8.2
+    \draw[actbar] (-0.15,-1.0) rectangle (0.15,-8.2);
+    \draw[actbar] (4.35,-1.0) rectangle (4.65,-8.2);
+    
+    % 工具：步骤 2 到步骤 7 虚线发出后结束 (-7.4)
+    \draw[actbar] (8.85,-2.4) rectangle (9.15,-7.4);
+    
+    % 数据层：两段激活
+    \draw[actbar] (13.35,-3.6) rectangle (13.65,-4.8);
+    \draw[actbar] (13.35,-6.2) rectangle (13.65,-6.8);
+
+    % ================= 4. 消息与箭头 =================
+    
+    % 1. 用户 -> Agent
+    \draw[msg] (0,-1.0) -- (4.5,-1.0) node[lbl]{1 提出配餐需求};
+    
+    % 2. Agent -> 工具
+    \draw[msg] (4.5,-2.4) -- (9.0,-2.4) node[lbl]{2 调用生成工具};
+    
+    % 3. 工具 -> 数据层
+    \draw[msg] (9.0,-3.6) -- (13.5,-3.6) node[lbl]{3 读档案/食材库/菜库/规则/历史};
+    
+    % 4. 数据层 --> 工具 (虚线)
+    \draw[ret] (13.5,-4.8) -- (9.0,-4.8) node[lbl]{4 返回数据};
+    
+    % 5. 工具内部自调用
+    \draw[msg] (9.15,-5.2) -- (10.3,-5.2) -- (10.3,-5.7) -- (9.15,-5.7);
+    \node[font=\scriptsize, anchor=west] at (10.4,-5.45) {5 五步计算（确定性）};
+    
+    % 6. 工具 -> 数据层 (落库)
+    \draw[msg] (9.0,-6.2) -- (13.5,-6.2) node[lbl]{6 落库候选（方案 + 依据）};
+
+    % 7. 数据层 --> 工具 (确认写入)
+    \draw[ret] (13.5,-6.8) -- (9.0,-6.8) node[lbl]{7 确认写入};
+
+    % 8. 工具 --> Agent (返回候选) —— 严格从工具激活条底部(-7.4)出发
+    \draw[ret] (9.0,-7.4) -- (4.5,-7.4) node[lbl]{8 返回候选集合};
+
+    % 9. Agent --> 用户 (返回卡片) —— 严格从 Agent 激活条底部(-8.2)出发
+    \draw[ret] (4.5,-8.2) -- (0,-8.2) node[lbl]{9 返回餐卡片};
+
+  \end{tikzpicture}}
+  \caption{规则引擎五步调用时序图}
+  \label{fig:sequence}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\resizebox{0.8\linewidth}{!}{
+\begin{tikzpicture}[
+  font=\small,
+  act/.style={draw, thick, rectangle, rounded corners=2pt, align=center, minimum width=2.9cm, minimum height=0.8cm},
+  actstore/.style={draw, thick, rectangle, rounded corners=2pt, fill=gray!12, align=center, minimum width=2.9cm, minimum height=0.8cm},
+  actuser/.style={draw, dashed, rectangle, rounded corners=2pt, align=center, minimum width=2.9cm, minimum height=0.8cm},
+  dec/.style={draw, thick, diamond, aspect=2, inner sep=0pt, align=center, font=\footnotesize, minimum width=2.4cm, minimum height=1.2cm},
+]
+% 起点与主脊柱（配餐列，x=0）
+\node[circle, fill=black, inner sep=0pt, minimum size=5pt] (start) at (0,0) {};
+\node[actuser] (input) at (0,-0.9) {用户自然语言输入};
+\node[act] (route) at (0,-2.4) {对话 Agent\\意图路由（询问/配餐/调整）};
+\node[dec] (d1) at (0,-4.2) {意图?};
+
+% 询问（左，x=-6.2，只读旁路）
+\node[act] (q1) at (-6.2,-5.9) {RAG 检索 + 反向营养};
+\node[actuser] (q2) at (-6.2,-7.7) {附来源/就医提示\\只读输出};
+\node[circle, draw, double, double distance=1.6pt, inner sep=0pt, minimum size=6pt] (endq) at (-6.2,-9.2) {};
+
+% 配餐（中，x=0）
+\node[act] (p1) at (0,-5.9) {检查信息缺口};
+\node[dec] (d2) at (0,-7.7) {信息不足?};
+\node[act, minimum width=1.6cm] (ask) at (3.2,-7.7) {追问};
+\node[act] (p2) at (0,-9.5) {编排确定性工具五步生成};
+
+% 调整（右，x=6.2）
+\node[act] (a1) at (6.2,-5.9) {定位餐次/食材};
+\node[act] (a2) at (6.2,-7.7) {经工具局部重算};
+
+% 汇合与落库
+\node[act] (cand) at (0,-11.3) {输出候选（餐卡）};
+\node[dec] (d3) at (0,-13.0) {确认?};
+\node[actstore] (save) at (0,-14.7) {落库（方案 + 依据）};
+\node[actstore] (panel) at (0,-16.4) {面板同步 + 历史方案};
+\node[circle, draw, double, double distance=1.6pt, inner sep=0pt, minimum size=6pt] (end) at (0,-17.6) {};
+
+% 主脊柱
+\draw[arr] (start) -- (input.north);
+\draw[arr] (input.south) -- (route.north);
+\draw[arr] (route.south) -- (d1.north);
+
+% 意图三路分流
+\draw[arr] (d1.south west) -- node[above,font=\footnotesize]{询问} (q1.north);
+\draw[arr] (d1.south) -- node[left,font=\footnotesize]{配餐} (p1.north);
+\draw[arr] (d1.south east) -- node[above,font=\footnotesize]{调整} (a1.north);
+
+% 询问路径（只读）
+\draw[arr] (q1.south) -- (q2.north);
+\draw[arr] (q2.south) -- (endq);
+
+% 配餐路径
+\draw[arr] (p1.south) -- (d2.north);
+\draw[arr] (d2.east) -- node[above,font=\footnotesize]{是} (ask.west);
+\draw[arr] (ask.north) |- (p1.east);
+\draw[arr] (d2.south) -- node[left,font=\footnotesize]{否} (p2.north);
+
+% 调整路径
+\draw[arr] (a1.south) -- (a2.north);
+
+% 汇合
+\draw[arr] (p2.south) -- (cand.north);
+\draw[arr] (a2.south) |- (0,-10.3);
+\draw[arr] (cand.south) -- (d3.north);
+\draw[arr] (d3.east) -- node[above,font=\footnotesize]{换一换} ++(1.15,0) |- (cand.east);
+\draw[arr] (d3.south) -- node[left,font=\footnotesize]{确认} (save.north);
+\draw[arr] (save.south) -- (panel.north);
+\draw[arr] (panel.south) -- (end);
+\end{tikzpicture}
+}
+\caption{对话 Agent 活动图（意图路由 → 工具编排 → 落库）}
+\label{fig:activity}
+\end{figure}
+
+\subsection{接口设计}
+\label{sec:interface}
+
+\subsubsection{接口标识}
+
+接口按「用户接口—外部接口—内部接口」三类划分，每类接口赋予项目唯一标识，标识范围与交互双方见表~\ref{tab:if-id}。
+
+\begin{xltabular}{\linewidth}{p{1cm}p{1.6cm}>{\raggedright\arraybackslash}p{5cm}p{5.0cm}p{1.0cm}}
+\caption{接口标识总览\label{tab:if-id}} \\
+\toprule
+\textbf{类别} & \textbf{前缀} & \textbf{标识形式} & \textbf{交互双方} & \textbf{数量} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{类别} & \textbf{前缀} & \textbf{标识形式} & \textbf{交互双方} & \textbf{数量} \\
+\midrule
+\endhead
+用户 & IF-UI & IF-UI-01 \(\sim\) IF-UI-03 & 用户 \(\leftrightarrow\) 前端界面 & 3 \\
+外部 & IF-EXT & IF-EXT-01 \(\sim\) IF-EXT-11 & 前端 \(\leftrightarrow\) 后端；\newline 后端 \(\leftrightarrow\) 大模型、向量检索 & 11 \\
+内部 & IF-INT & IF-INT-T01 \(\sim\) T18；IF-INT-DB-01 \(\sim\) 04 & 后端 \(\leftrightarrow\) Agent 工具层；\newline 后端 \(\leftrightarrow\) 数据库四 Schema & 22 \\
+\bottomrule
+\end{xltabular}
+
+\subsubsection{用户接口}
+
+用户接口不涉及网络协议，只约定「界面提交什么、展示什么、异常如何提示」，数据来源均经 5.4.3 的外部接口取得。
+
+\begin{enumerate}
+\item \textbf{IF-UI-01 对话主界面}：唯一入口，单一对话界面（仿通用大模型客户端），左侧会话历史、中部对话流、底部输入框；档案维护、配餐、调整与咨询均从对话发起，意图路由（询问 / 配餐 / 调整）对用户透明。
+\item \textbf{IF-UI-02 结构化输出面板}：对话右侧工具栏（可收起），含食材清单、当前规划、历史方案、膳食报告四面板，只读展示已确认方案的结构化结果；不承载「生成」动作，生成与调整均由对话发起，面板为空时引导用户回到对话发起配餐。
+\item \textbf{IF-UI-03 轻量档案}：仅保留身体参数、健康目标、过敏与禁忌等影响计算的关键字段，不必一次填全；支持对话中补全（如「我乳糖不耐」），信息不足时系统追问、不作臆测；档案变更后生成结果随之联动。
+\end{enumerate}
+
+\subsubsection{外部接口}
+
+外部接口为后端对外提供的网络接口，统一约定：路径加 \texttt{/api} 前缀；请求 / 响应为 JSON；响应体统一为 \{code, message, data\}（见设计约定表~\ref{tab:convention}）；JWT Bearer 鉴权，user\_id 由鉴权上下文注入并按用户隔离数据。REST 接口清单见表~\ref{tab:api}，流式对话与第三方服务接口见表~\ref{tab:ext}。
+
+\begin{xltabular}{\linewidth}{p{2cm}p{6.2cm}L}
+\caption{外部接口（REST）清单\label{tab:api}} \\
+\toprule
+\textbf{标识} & \textbf{路由} & \textbf{说明} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{标识} & \textbf{路由} & \textbf{说明} \\
+\midrule
+\endhead
+IF-EXT-01 & \texttt{/profile} & 轻量档案 CRUD；Agent 读档案 \\
+IF-EXT-02 & \texttt{/meal-plan/week/generate}、\texttt{/candidate/swap}、\texttt{/week/fix} & 生成候选、换候选、固定（经确定性工具，由 Agent 触发） \\
+IF-EXT-03 & \texttt{/meal-plan/current}、\texttt{/\{id\}}、\texttt{/list} & 当前方案 / 详情 / 历史 \\
+IF-EXT-04 & \texttt{/nutrition/analysis}、\texttt{/nutrition/report} & 7 关键微量跨日平衡（计算+落库）与方案级报告只读 \\
+IF-EXT-05 & \texttt{/shopping-list} & 按方案聚合食材清单 \\
+IF-EXT-06 & \texttt{/agent/rag-query}、\texttt{/agent/reverse-nutrition} & 知识库检索、反向营养推理 \\
+IF-EXT-07 & \texttt{/calc/nutrition}、\texttt{/condition-rules/*}、\texttt{/conditions/catalog} & 确定性营养核算、疾病规则；\texttt{/conditions/catalog} 为病种目录（区别于规则目录） \\
+IF-EXT-08 & \texttt{/health} & 健康检查探针 \\
+\bottomrule
+\end{xltabular}
+
+\begin{xltabular}{\linewidth}{p{2cm}p{2.6cm}p{3.2cm}L}
+\caption{外部接口（流式与第三方服务）\label{tab:ext}} \\
+\toprule
+\textbf{标识} & \textbf{接口} & \textbf{交互双方} & \textbf{说明} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{标识} & \textbf{接口} & \textbf{交互双方} & \textbf{说明} \\
+\midrule
+\endhead
+IF-EXT-09 & \texttt{/agent/chat}（SSE） & 前端 $\leftrightarrow$ 后端 & 流式对话；事件 \texttt{session / message / artifact / clarify / error / done}，详见下节 \\
+IF-EXT-10 & DeepSeek API & 后端 $\leftrightarrow$ 大模型 & 生成 / 对话；Function Calling + JSON 结构化输出，校验失败最多重试 3 次 \\
+IF-EXT-11 & pgvector & 后端 $\leftrightarrow$ 向量检索 & 向量 + 关键词 RRF 混合检索；未就绪时退化为关键词检索 \\
+\bottomrule
+\end{xltabular}
+
+\subsubsection{流式对话协议（SSE）}
+
+\texttt{IF-EXT-09}（\texttt{POST /api/agent/chat}）采用 SSE 流式传输，事件统一为 \texttt{event: <类型>} + \texttt{data: <JSON>}。事件类型如下：
+
+\begin{enumerate}
+  \item \texttt{session}：流首帧，下发 \texttt{conversation\_id}；
+  \item \texttt{message}：正文增量（纯文本，前端按切片自行拼接）；
+  \item \texttt{artifact}：结构化结果，\texttt{type} 取 \texttt{meal\_card / shopping\_list / current\_plan / nutrition\_report}，同 \texttt{type + raw\_id} 原位替换、不重复追加；
+  \item \texttt{clarify}：追问，携带 \texttt{question} 与 \texttt{missing\_fields}（对应 needs\_clarification），不新增 assistant 轮次；
+  \item \texttt{error}：失败时推送统一响应对象（同 REST 约定）；已输出正文不撤回，前端在气泡末尾追加错误提示，避免「说到一半消失」；
+  \item \texttt{done}：携带 \texttt{conversation\_id} 与 \texttt{finish\_reason}（可含 \texttt{meal\_plan\_id}），待会话与消息落库后关闭流。
+\end{enumerate}
+
+流式对话首字延迟 $\le$ 10s；长回答按增量推送，不阻塞前端。大模型不可用时，档案与方案浏览不受影响。
+
+\subsubsection{内部接口}
+
+内部接口为后端进程内的确定性工具接口，Agent 经 Function Calling 调用、不直连数据库，数值一律后端确定性计算。分为 Agent 工具接口（IF-INT-T01～T18）与数据库访问接口（IF-INT-DB-01～04）两类。
+
+\begin{xltabular}{\linewidth}{p{2.5cm}p{4cm}L}
+\caption{Agent 工具接口（IF-INT-T01～T18）\label{tab:tools}} \\
+\toprule
+\textbf{标识} & \textbf{工具名} & \textbf{用途} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{标识} & \textbf{工具名} & \textbf{用途} \\
+\midrule
+\endhead
+IF-INT-T01 & 搜索食材 & 按名称/别名查找食材及营养成分 \\
+IF-INT-T02 & 查询菜式营养 & 查菜式能量/蛋白/钠/钙与完整性 \\
+IF-INT-T03 & 过敏原筛查 & 按用户过敏原过滤菜式 \\
+IF-INT-T04 & 匹配营养参考值 & 按人群条件匹配 RNI/AI/UL \\
+IF-INT-T05 & 跨日 UL 评估 & 跨日摄入 vs UL 超限判断 \\
+IF-INT-T06 & 查看疾病规则目录 & 规则与审核状态目录 \\
+IF-INT-T07 & 查询正式疾病规则 & 只读已审核启用规则 \\
+IF-INT-T08 & 执行疾病规则评估 & 按规则评估当日摄入 \\
+IF-INT-T09 & 知识库检索 & 膳食指南/成分表/DRIs 原文检索 \\
+IF-INT-T10 & 反向营养推理 & 症状 $\rightarrow$ 可能缺乏的营养素 \\
+IF-INT-T11 & 营养核算/汇总 & 菜品+份量 $\rightarrow$ 整餐/整日营养汇总 \\
+IF-INT-T12 & 读用户档案 & 读取档案 \\
+IF-INT-T13 & 生成候选方案 & 编排五步算法生成候选并落库（draft） \\
+IF-INT-T14 & 换候选 & 同餐换候选并局部重算（candidates） \\
+IF-INT-T15 & 固定方案 & 确认候选、回填选中并锁定（fixed） \\
+IF-INT-T16 & 营养分析落库 & 7 关键微量跨日平衡计算并落 nutrition report 表 \\
+IF-INT-T17 & 生成食材清单 & 按方案聚合采购清单（分类分组 + is-staple 标记） \\
+IF-INT-T18 & 读当前规划 & 读用户当前方案（餐位 / 候选 / 选中） \\
+\bottomrule
+\end{xltabular}
+
+\noindent 数据库访问接口按四 schema 划分：
+
+\begin{itemize}[leftmargin=1em]
+  \item \textbf{IF-INT-DB-01}（core）：食材 / 菜 / 营养素 / 规则；
+  \item \textbf{IF-INT-DB-02}（knowledge）：知识库；
+  \item \textbf{IF-INT-DB-03}（app）：业务表 / 视图 / 函数；
+  \item \textbf{IF-INT-DB-04}（audit）：导入批次 / 质量。
+\end{itemize}
+
+\noindent 应用连接为非超级用户：core / knowledge 只读，app 读写。
+
+\section{运行设计}
+
+\subsection{系统初始化}
+
+系统启动时依次完成：数据库建表（幂等）与种子数据灌入（食材库、菜库、7 关键微量目标表、健康目标 $\rightarrow$ 结构映射表、症状 $\rightarrow$ 营养素映射、营养素参考值表）；首次向量化知识库；后端服务启动并加载配置；Agent 层加载系统指令与工具注册。
+
+\subsection{运行控制}
+
+运行时按请求触发对应运行模块组合，分四条路径控制，各自按「触发—模块组合—资源占用—安全控制—失败处理」约定。
+
+\subsubsection*{场景 A：询问（咨询 / 反向营养，只读）}
+
+\begin{itemize}
+\item \textbf{触发}：用户以自然语言提问（搭配原理 / 症状咨询），可附历史方案引用。
+\item \textbf{模块组合}：前端对话界面 $\rightarrow$ \texttt{/agent/chat}（SSE）$\rightarrow$ 对话 Agent $\rightarrow$ RAG / 反向营养 $\rightarrow$ 前端流式渲染。
+\item \textbf{操作步骤}：① 建立/复用会话 → ② 读档案硬约束与引用方案 → ③ RAG 检索 / 反向营养 → ④ 生成正文与来源 → ⑤ SSE 按 \texttt{message / done} 推送 → ⑥ 会话与消息落库。
+\item \textbf{资源占用}：首字延迟 $\le$ 10s，长回答增量推送不阻塞。
+\item \textbf{安全控制}：只读不改方案；未引用方案的回答标注「通用建议」；反向营养附就医提示；命中内容安全策略返回 \texttt{3001}。
+\item \textbf{失败处理}：大模型失败返回 \texttt{error} 事件（\texttt{2002}）可重试；结构化输出 3 次失败降级（\texttt{2003}）。
+\end{itemize}
+
+\subsubsection*{场景 B：配餐（生成，写入）}
+
+\begin{itemize}
+\item \textbf{触发}：用户表达生成范围（一餐 / 一日 / 数日或更长）。
+\item \textbf{模块组合}：对话 Agent $\rightarrow$ 生成工具 $\rightarrow$ 规则引擎五步算法 $\rightarrow$ 数据层落库。
+\item \textbf{操作步骤}：按 5.1.3 规则引擎五步生成算法执行，输出候选 + 依据 + 覆盖进度。
+\item \textbf{资源占用}：候选生成 P95 $\le$ 5s。
+\item \textbf{安全控制}：过敏 / 忌口硬排除；从全量食材库选材；大模型不参与计算。
+\item \textbf{失败处理}：计算异常返回 \texttt{2001}；约束冲突返回明确无解提示（\texttt{2006}），不返回半成品方案。
+\end{itemize}
+
+\subsubsection*{场景 C：调整（换候选 / 追加要求，写入）}
+
+\begin{itemize}
+\item \textbf{触发}：用户表达「换一换」「不吃某食材」「换做法」等调整诉求。
+\item \textbf{模块组合}：对话 Agent $\rightarrow$ 换候选 / 重算工具 $\rightarrow$ 局部重算 $\rightarrow$ 数据层回写。
+\item \textbf{操作步骤}：① 解析调整范围 → ② 调换候选 / 重算工具 → ③ 维持该餐宏量结构 → ④ 数值更新并落库。
+\item \textbf{资源占用}：候选生成 P95 $\le$ 5s；固定为单事务。
+\item \textbf{安全控制}：仍经确定性工具，禁忌不越界。
+\item \textbf{失败处理}：无解时明确提示（\texttt{2006}）；已固定方案不可再改（\texttt{2005}）。
+\end{itemize}
+
+\subsubsection*{场景 D：查看输出面板（只读）}
+
+\begin{itemize}
+\item \textbf{触发}：用户打开输出面板。
+\item \textbf{模块组合}：前端 $\rightarrow$ 查询接口 $\rightarrow$ 数据层已确认方案。
+\item \textbf{操作步骤}：按筛选条件取方案与候选，只读聚合展示；不触发任何写操作。
+\item \textbf{资源占用}：确定性计算 P99 $\le$ 100ms。
+\item \textbf{安全控制}：只读已确认方案，不涉及用户隐私字段外泄。
+\item \textbf{失败处理}：面板为空时引导用户回对话发起配餐。
+\end{itemize}
+
+\subsection{运行结束}
+
+服务停止时释放数据库连接与会话资源；对话会话数据保留于数据层，用户可再次打开会话。
+
+\section{系统出错处理设计}
+
+\subsection{出错信息}
+
+系统所有接口（含 SSE 流式对话的首帧）统一返回 JSON 响应对象（字段见设计约定表~\ref{tab:convention}）：\texttt{code = 0} 表示成功，\texttt{code $\neq$ 0} 表示失败，\texttt{message} 为面向用户的中文提示，不含堆栈、SQL 与内部路径。错误码分段：\textbf{0 成功；10xx 参数与权限类；20xx 计算与依赖类；3001 内容安全拦截}，同一错误码在所有接口语义一致。错误码见表~\ref{tab:errcode}。
+
+\begin{xltabular}{\linewidth}{p{2.2cm}p{3.6cm}L}
+\caption{错误码表\label{tab:errcode}} \\
+\toprule
+\textbf{错误码} & \textbf{含义} & \textbf{说明} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{错误码} & \textbf{含义} & \textbf{说明} \\
+\midrule
+\endhead
+0 & 成功 & 正常返回，data 承载业务数据 \\
+1001 & 参数错误 & 请求参数缺失/非法 \\
+1002 & 未授权 & 未登录或 token 失效 \\
+1003 & 越权 & 无权访问他人资源 \\
+1004 & 不存在 & 目标资源不存在 \\
+2001 & 计算失败 & 规则引擎/确定性计算异常 \\
+2002 & Agent 调用失败 & 大模型调用异常，可重试 \\
+2003 & 结构化输出降级 & 结构化输出校验 $\le$ 3 次失败后降级 \\
+2004 & 数据源不可用 & 数据库/向量库不可用 \\
+2005 & 方案已锁定 & 已固定方案不可再换候选 \\
+2006 & 方案生成失败 & 约束不可满足 / 无可行候选，前端提示并禁用按钮（不可重试） \\
+3001 & 内容安全拦截 & 输出命中内容安全策略 \\
+\bottomrule
+\end{xltabular}
+
+补充约定：
+
+\begin{enumerate}
+\item \textbf{文案单一来源}：\texttt{message} 由错误码映射表生成，禁止下游随手拼接，避免同一错误出现多种说法。
+\item \textbf{业务错误 $\neq$ HTTP 错误}：HTTP 层使用 200 / 400 / 401 / 403 / 404 / 429 / 500 / 502；参数错误用 400、未授权/越权用 401 / 403、超并发或频次用 429，其余业务失败仍返回 200 + 非 0 \texttt{code}，便于前端统一拦截。
+\item \textbf{流式不撤回}：失败时按 \texttt{event: error} 推送上述结构，已输出正文不撤回，前端在气泡末尾追加错误提示。
+\item \textbf{前端统一兜底}：1002 统一跳登录、1004 统一展示空态、2002 与 2003 统一展示「AI 解释暂不可用」。
+\item \textbf{未捕获异常不设业务码}：服务端未捕获异常统一返回 HTTP 500，仅写日志与 audit、不回传堆栈，不占用业务错误码。
+\end{enumerate}
+
+\subsection{补救措施}
+
+出错处理遵循「\textbf{先自救、再降级、后提示}」三级策略：服务端能自动补救的不打扰用户；不能补救的降级为可用结果并留痕；确实不可用的才给出明确提示与下一步动作。
+
+典型补救：
+
+\begin{itemize}
+\item 档案不存在 $\rightarrow$ 引导用户先建档，不臆造数据；
+\item 过敏原未核查 $\rightarrow$ 保守剔除（exclude\_until\_verified），不宣称安全；
+\item 疾病规则未审核 $\rightarrow$ 返回 rule\_not\_approved，不误判；
+\item null $\neq$ 0 $\rightarrow$ 缺失值返回「无法判断」而非按 0 判定；
+\item Agent 结构化输出校验失败 $\le$ 3 次后降级重试（\texttt{2003}）；
+\item 工具调用失败 $\rightarrow$ 返回错误说明字符串而不抛异常，Agent 降级续跑。
+\end{itemize}
+
+兜底原则：
+
+\begin{itemize}
+\item \textbf{宁可少给结论，不给错结论}：未核查的营养数据不作为「安全」依据，缺失值不参与达标率计算。
+\item \textbf{降级必留痕}：任何降级都在响应中带 \texttt{degraded: true} 与降级原因，写入 audit 表，便于追溯与复盘。
+\item \textbf{不做医学诊断}：涉及症状与用药的请求一律以 \texttt{3001} 拦截并引导就医。
+\end{itemize}
+
+\section{系统维护设计}
+
+\subsection{检测点的设计}
+
+检测点分启动自检、运行监控、周期回归三级，见表~\ref{tab:checkpoint}。所有检测点结果写入统一观测口径（字段：检测点、时间、结果、耗时、trace\_id），评测层按周汇总候选达标率、结构化输出成功率与响应时延。
+
+\begin{xltabular}{\linewidth}{p{2cm}Q{8cm}L}
+\caption{检测点清单\label{tab:checkpoint}} \\
+\toprule
+\textbf{级别} & \textbf{检测点} & \textbf{目的} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{级别} & \textbf{检测点} & \textbf{目的} \\
+\midrule
+\endhead
+启动自检 & 数据库建表 / 种子数据 / 向量化完成、健康检查就绪 & 失败拒绝启动，不带缺陷上线 \\
+运行监控 & 健康检查探针、候选生成时延、确定性计算时延、Agent 结构化输出成功率、RAG 命中/可溯源、数据库连接状态 & 异常触发告警 \\
+周期回归 & 数值口径、工具契约、边界场景回归脚本 & 验证「算得对」而非仅「存活」 \\
+\bottomrule
+\end{xltabular}
+
+\subsection{检测专用模块的设计}
+
+\subsubsection{健康检查接口}
+
+\texttt{GET /api/health} 返回统一响应对象，其 \texttt{data} 字段含 \texttt{db}、\texttt{vector}、\texttt{agent}（布尔探针）、\texttt{version}（字符串版本号）、\texttt{degraded}（布尔降级标记）；三个探针各自执行一次轻量操作（\texttt{SELECT 1} / 向量库计数 / 模型握手），超时 500ms 判为 false。存活与就绪分离：
+
+\begin{itemize}
+\item \texttt{/api/health/live}：仅证明进程存活，供容器重启判定；
+\item \texttt{/api/health/ready}：要求三个依赖全为 true，供负载均衡摘流使用。
+\end{itemize}
+
+向量检索未接线期间 \texttt{vector} 记为 \texttt{not\_applicable} 且不参与 ready 判定；该接口为运维探针，不计入业务接口清单。
+
+\subsubsection{数据库验收脚本}
+
+\texttt{scripts/verify\_db.py}，只读、可重复执行，依次校验：schema 是否存在 → 表与字段是否齐全 → 外键与唯一约束是否生效 → 种子数据行数是否达下限 → 向量维度与 chunk 数是否对齐。输出机器可读 JSON 报告，\textbf{退出码非 0 即判定验收失败}，可直接接入部署流水线；配套 \texttt{init\_db + seed} 必须幂等，可作为回滚后的重放手段。
+
+\subsubsection{结构化日志}
+
+\begin{itemize}[leftmargin=1em]
+\item \textbf{分级}：DEBUG（工具入参与出参）、INFO（请求与关键状态迁移）、WARN（降级、重试、约束放宽）、ERROR（未捕获异常、依赖不可用）。
+\item \textbf{结构化}：JSON 单行输出，字段固定为 \texttt{ts / level / trace\_id / user\_id（脱敏）/ module / code / latency\_ms / msg}。
+\item \textbf{链路串联}：\texttt{trace\_id} 由接口层生成，透传至 Agent、工具调用与数据库访问，一次请求全链路回溯。
+\item \textbf{脱敏}：手机号、身份证、疾病信息等敏感字段落日志与入库前统一脱敏，原始值只存于加密列；日志不含完整个人资料与密钥。
+\end{itemize}
+
+\subsubsection{监控指标}
+
+采集四类指标并按层打标（接口层 / Agent 层 / 规则引擎层 / 数据层），定位退化发生在哪一层：流量（QPS、并发会话数、429 触发次数）、时延（P50 / P95 / P99、首字延迟）、错误（错误码分布、工具调用失败率、降级率）、成本（大模型 token 消耗与调用次数）。评测层与运行监控共用同一份数据，不另起一套报表。
+
+\subsubsection{回归测试脚本}
+
+以固定档案构造基准用例，覆盖三类：\textbf{数值口径}（BMR、TDEE、默认三餐宏量 30/40/30、供能比换算、1g 油脂 = 9kcal）、\textbf{工具契约}（入参拼装、URL 与方法、业务错误码与网络异常下的降级分支）、\textbf{边界场景}（空档案、过敏原冲突、全量食材库中约束无解）。脚本以测试桩替代真实后端与模型，提交前执行，\textbf{退出码作为门禁}，确保局部改动不破坏既有功能。
+
+\section{尚待解决的问题}
+
+本节列出本设计尚未解决、且系统完成前需解决的问题。
+
+\begin{xltabular}{\linewidth}{p{0.9cm}Q{8.2cm}L}
+\caption{尚待解决问题\label{tab:open}} \\
+\toprule
+\textbf{编号} & \textbf{尚待解决的问题} & \textbf{完成前需解决的要点} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{编号} & \textbf{尚待解决的问题} & \textbf{完成前需解决的要点} \\
+\midrule
+\endhead
+P1 & 反向营养的确定性方案未定：症状→营养素目前仅「推测＋就医提示」，是否纳入确定性推理、映射表覆盖范围未定 & 明确反向营养是交付功能还是仅参考线索；若交付则补确定性映射 \\
+P2 & 营养核算数据口径未定：菜式油盐糖为量级估计，可食部、烹饪损失未落定 & 定数据源与换算口径，使数值精度可接受且可溯源 \\
+P3 & 硬约束冲突时求解策略未定：候选为空时放松顺序、优先级、终止与兜底未定义 & 明确无解降级策略，保证算法必终止、结果可解释 \\
+P4 & 低质量数据兜底策略未定：食材「估算/待核查」占比高时如何出方案、如何提示未定义 & 明确低质量数据下的可用性与提示口径 \\
+\bottomrule
+\end{xltabular}
+
+\section{需求的可追踪性}
+
+系统部件（CSCI-01～06，见 5.2）与系统需求（MVP 验收标准 7 条）建立双向追踪，正向见表~\ref{tab:trace}，反向见表~\ref{tab:trace-rev}。
+
+\begin{xltabular}{\linewidth}{p{1cm}Q{5.5cm}L}
+\caption{需求可追踪性（正向：验收标准 → 部件）\label{tab:trace}} \\
+\toprule
+\textbf{编号} & \textbf{MVP 验收标准} & \textbf{满足部件} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{编号} & \textbf{MVP 验收标准} & \textbf{满足部件} \\
+\midrule
+\endhead
+1 & 自然语言表达生成范围，正确路由并生成 & CSCI-01（对话入口）、 CSCI-03（意图路由）\newline CSCI-04（五步生成） \\
+2 & 表达约束时方案不含相关食材，信息不足时追问而非臆测 & CSCI-01（档案交互）、\newline CSCI-03（needs\_clarification 追问）\newline CSCI-04（硬排除） \\
+3 & 数值来自确定性工具且可溯源，换候选后数值更新并真实落库 & CSCI-02（接口）、CSCI-06（落库）、\newline CSCI-04（确定性工具） \\
+4 & 确认后落库，面板同步，历史方案可回看 & CSCI-01（输出面板）、CSCI-06（落库）、\newline CSCI-02（查询接口） \\
+5 & 询问类问题附来源，反向咨询附就医提示 & CSCI-03（解释与就医提示）、\newline CSCI-05（RAG 溯源） \\
+6 & 档案变更后生成结果随之联动 & CSCI-04（生成读档案）、CSCI-06（档案） \\
+7 & 读取近期历史做微量跨日平衡，无历史时追问或放松约束 & CSCI-03（追问）、CSCI-04（五步第 4 步）、CSCI-06（历史方案） \\
+\bottomrule
+\end{xltabular}
+
+\begin{xltabular}{\linewidth}{p{8cm}L}
+\caption{系统部件到需求的反向追踪（部件 → 验收标准）\label{tab:trace-rev}} \\
+\toprule
+\textbf{部件} & \textbf{覆盖验收标准} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{部件} & \textbf{覆盖验收标准} \\
+\midrule
+\endhead
+CSCI-01 前端对话界面（含输出面板） & 1、2、4 \\
+CSCI-02 后端服务（接口层） & 3、4 \\
+CSCI-03 对话 Agent & 1、2、5、7 \\
+CSCI-04 规则引擎（确定性工具） & 1、2、3、6、7 \\
+CSCI-05 知识库（RAG） & 5 \\
+CSCI-06 数据库（含轻量档案） & 3、4、6、7 \\
+\bottomrule
+\end{xltabular}
+
+\end{document}
