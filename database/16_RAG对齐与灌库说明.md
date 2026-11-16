@@ -16,14 +16,23 @@
   末尾自检 7 项全部返回预期值。另外把三类前置错误各触发了一次，确认报错文案能照着改：
   没装 pgvector（提示换 `pgvector/pgvector:pg18` 镜像）、非超级用户（提示换 postgres）、
   库里没有 `knowledge_doc`（提示先还原 01 再跑 12）。
+- 2026-11-15 又在 **PG18.7 + pgvector 0.8.7**（容器同大版本）上跑了一遍：23 条 0 错、7 项自检全过
+  （`backlog_rows=26`、`embedding_column=vector(1024)`、`hnsw_index=true`、`vector_extension=0.8.7`）。
+  这一步把"PG18 容器待回填"降级为"镜像还没 build"，证据见 05 附录 C-4。
 - 嵌入模型与维度已按 Agent 岗 2026-11-14 的契约书定稿（`bge-m3` / 1024 / cosine），
   `embedding_profile.decision_status` 直接落 `aligned`；跑过旧版 14 的库再跑一次会自动把
   `pending_alignment` 收敛成 `aligned`（实测：手改回 pending_alignment 跑一遍即回 aligned）。
 - `15` 用本地假嵌入后端在同一个实例上跑通了**写库全链路**：3 条文档灌入 → 再跑一遍无事可做（幂等）
   → 改一条 `content` → 只重灌那 1 条，`embedding_hash` 随之更新，`v_embedding_backlog` 归零。
-- 环境说明：本机（Windows）装不上 pgvector，这一轮是把 Ubuntu 云主机装的 PG14 + 编译的 pgvector 0.8.0
-  当靶场跑出来的。SQL 语义与容器里的 PG18 + pgvector 0.8.x 一致，但**大版本差异仍在**：
-  容器里第一次跑完请把自检输出贴回 05，作为 PG18 的正式证据。
+  2026-11-15 又在 43 篇文档（26 篇营养素 + 19 新增 17 篇主题）上实灌：成功 43、失败 0、剩余 0；
+  `knowledge.search_documents` 能正常返回（`vector_rank` 1～5）。注意这一轮用的是 mock 嵌入服务，
+  只证明链路，不证明语义质量——mock 的余弦相似度只有 0.15～0.20，别拿它判断召回好坏。
+- 环境说明：本机（Windows）装不上 pgvector，靶场是 Ubuntu 云主机。11-14 那轮是 PG14 + 编译的
+  pgvector 0.8.0，11-15 换成了 PGDG 的 PG18.7 + pgvector 0.8.7（与 `pgvector/pgvector:pg18` 同大版本）。
+  **镜像本身仍未 build**（本机无 Docker、云主机是无特权容器），容器里第一次跑完请把自检输出贴回 05 附录 C-7。
+- 知识库现在有两类条目：`nutrient:<营养素>:overview`（26 篇，原样）与 `topic:<slug>`（17 篇，19 新增）。
+  `v_embedding_backlog` 不按 category 过滤，所以 19 跑完队列从 26 变成 43，15 会一并灌。
+  换模型或改维度重灌时也一样，不需要为两类条目分开处理。
 - 跑的过程中修掉两个真问题，v1.2r1r1 之前的版本会在这两处栽：
   1. `v_embedding_backlog` 没有 `content` 列，而 15 正是从视图取 `content` 算 md5 → 一跑就报
      `column "content" does not exist`。已把 `content` 补进视图（追加在末尾，`CREATE OR REPLACE` 可就地升级）。

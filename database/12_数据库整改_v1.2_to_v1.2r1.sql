@@ -5,6 +5,7 @@
 -- 覆盖评审项：P1-1、P2-3、P3（全部清理项）；P1-2 的向量化在 14 单独执行；
 --            二轮评审的 R1（函数出参补 purine_level）、R2（50–64 岁女性铁参考并回单行取 12）。
 -- 执行方式：psql -d diet_agent -f 12_数据库整改_v1.2_to_v1.2r1.sql
+-- 执行身份：需 DBA/超级用户或表 owner（3.3 要临时禁用 app.meal_plan 的只读守卫，见该段注释）
 --
 
 \set ON_ERROR_STOP on
@@ -354,14 +355,51 @@ DROP SCHEMA IF EXISTS staging CASCADE;
 -- 3.3 3 条 legacy 方案与 1 条迁移报告：确认有意保留
 --     用途：v1.1→v1.2 兼容性回归样本，且 04 验收脚本以 count(data_version='legacy-v1.1') >= 3 断言其未被误删。
 --     清理口径：只标记不删除。
-UPDATE app.meal_plan
-   SET sources = CASE
-       WHEN jsonb_typeof(COALESCE(sources, '{}'::jsonb)) = 'object'
-        AND NOT (COALESCE(sources, '{}'::jsonb) ? 'retention')
-       THEN COALESCE(sources, '{}'::jsonb) || '{"retention": "legacy-regression-sample"}'::jsonb
-       ELSE sources
-   END
- WHERE data_version = 'legacy-v1.1';
+--     注意：这 3 条计划在真实库上 status='fixed'，直接 UPDATE 会被 app.trg_guard_meal_plan_update 拦下
+--     （报 "meal plan N is fixed and read-only"）。这是**业务只读保护**，不该为迁移脚本放宽；
+--     所以这里定点禁用该触发器、写完立刻恢复，异常分支也恢复，等价于一次受控的数据订正。
+DO $$
+DECLARE
+    v_marked  integer := 0;
+    v_trigger boolean;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1 FROM pg_trigger
+         WHERE tgrelid = 'app.meal_plan'::regclass
+           AND tgname  = 'trg_guard_meal_plan_update'
+           AND NOT tgisinternal
+    ) INTO v_trigger;
+
+    IF v_trigger THEN
+        BEGIN
+            ALTER TABLE app.meal_plan DISABLE TRIGGER trg_guard_meal_plan_update;
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE EXCEPTION 'app.meal_plan 的只读守卫需要表 owner 或超级用户才能临时禁用，请用 postgres 执行本脚本'
+                  USING ERRCODE = '42501';
+        END;
+    END IF;
+
+    BEGIN
+        UPDATE app.meal_plan
+           SET sources = COALESCE(sources, '{}'::jsonb) || '{"retention": "legacy-regression-sample"}'::jsonb
+         WHERE data_version = 'legacy-v1.1'
+           AND jsonb_typeof(COALESCE(sources, '{}'::jsonb)) = 'object'
+           AND NOT (COALESCE(sources, '{}'::jsonb) ? 'retention');
+        GET DIAGNOSTICS v_marked = ROW_COUNT;
+    EXCEPTION WHEN OTHERS THEN
+        IF v_trigger THEN
+            ALTER TABLE app.meal_plan ENABLE TRIGGER trg_guard_meal_plan_update;
+        END IF;
+        RAISE;
+    END;
+
+    IF v_trigger THEN
+        ALTER TABLE app.meal_plan ENABLE TRIGGER trg_guard_meal_plan_update;
+    END IF;
+
+    RAISE NOTICE '3.3 legacy 计划标记 retention：本次写入 % 条（触发器已恢复）', v_marked;
+END
+$$;
 
 
 -- ---------------------------------------------------------------------------

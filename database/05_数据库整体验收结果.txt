@@ -134,6 +134,7 @@ ROLLBACK 后残留测试行: 0
 ============================================================
 
   1) pg_restore 还原 01 dump：本机没有 pg_restore 18，未执行。01 dump 未改动（sha256 见 09）。
+     → 2026-11-15 已在云主机 PG18.7 用 pg_restore 18 还原成功（rc=0、日志 0 报错，60 道菜 / 128 食材 / 26 篇知识库），见附录 C。
   2) pgvector：14_RAG向量化_v1.2r1.sql 引用 vector 类型，Windows 无可用 pgvector 二进制，
      本机装不了扩展。该脚本只做了 PG18 语法解析校验（当时 22 条语句 0 语法错误），
      未在实例上执行、未建索引、未灌向量。前提与替代方案见 16。
@@ -142,6 +143,7 @@ ROLLBACK 后残留测试行: 0
      写库路径依赖 apply_document_embedding 与 vector 类型，同样因缺 pgvector 未执行；
      真实模型（bge-m3 / 1024 维）尚未调用。
      → 2026-11-14 写库路径已在真实 pgvector 上跑通（灌入、幂等、改内容只重灌 1 条），见附录 B。
+     → 2026-11-15 在 43 篇文档（含 19 新增 17 篇）上实灌成功 43/失败 0（本地 mock 嵌入服务），见附录 C-6。
 
 ============================================================
 六、结论
@@ -151,7 +153,9 @@ ROLLBACK 后残留测试行: 0
   加上二轮评审的 R1（函数补 purine_level）、R2（50–64 岁女性铁参考并回单行取 12），
   在真实 PG18.6 上结构生效、行为可复现、脚本幂等，27/27 断言通过。
   P1-2（pgvector RAG）随 14/15/16 交付，受本机环境限制未实测，需 DBA 装扩展后执行。
-  → 2026-11-14 已在真实 pgvector 0.8.0 上实测通过（见附录 B）；PG18 容器首次运行仍待回填。
+  → 2026-11-14 已在真实 pgvector 0.8.0 上实测通过（见附录 B）。
+  → 2026-11-15 在 PG18.7 + pgvector 0.8.7 上 7/7 通过，`docker/` 八步初始化脚本实跑 8/8 通过（见附录 C）；
+     只剩「镜像真正 build 一次」没做，因为本机与云主机都跑不了 Docker。
   P2-1（升级路径）、P2-2（文件编号）以文档交付，见 13、17。
 
   R2 只改了库内数据，源文件 rni_reference.json 的 iron 仍是"无月经 10 / 有月经 12"两行，
@@ -299,6 +303,91 @@ DO
   B-5  仍未验证
        · PG18 容器（pgvector/pgvector:pg18）里的首次执行：上述实测在 PG14 + pgvector 0.8.0 上完成，
          容器第一次跑完请把 7 项自检输出贴到本节
+         → 2026-11-15 已在 PG18.7 + pgvector 0.8.7 上跑通（7/7，见附录 C-4）；容器镜像本身仍未 build（见附录 C-7）。
        · 真实嵌入模型（bge-m3）仍未调用，灌库用的是假后端
 
 注：14 的 23 条语句里有 1 条是新增的旧库收敛 UPDATE，上一轮语法解析时的 22 条不含它。
+
+============================================================
+附录 C：2026-11-15 PG18.7 + pgvector 0.8.7 全链路实测（含 12 的真 bug 与 19 知识库扩充）
+============================================================
+
+运行环境：云主机 Ubuntu 22.04（无特权容器，CapEff=0，跑不了 Docker），用 PGDG 装的
+PostgreSQL 18.7（/usr/lib/postgresql/18）+ postgresql-18-pgvector 0.8.7，干净实例：
+端口 5545、socket /tmp/pg18、数据 /tmp/pg18/data、locale=C、trust 认证。
+选 PG18 而不是继续用 PG14 靶场，是因为容器基础镜像 pgvector/pgvector:pg18 就是 PG18，
+同大版本才谈得上"等价"。
+
+  C-1  01 备份用 pg_restore 18 还原（首次真实验证）
+       dump 头解析：PGDMP、archive 1.16.0、format=custom、comp=1、内含 CREATE DATABASE diet_agent
+       命令：pg_restore -d postgres --create --no-owner 01.dump
+       结果：rc=0，日志 0 报错，创建库 diet_agent；
+             core.dish=60、core.ingredient=128、knowledge.knowledge_doc=26、
+             core.health_condition 初始 1 行（hypertension），5 个业务 schema 齐全（staging 尚未清理）
+       文件完整性：01/03/12/14/15/18 六个文件 sha256 与 09 逐条一致，传输字节无损
+
+  C-2  12 在真实库上暴露一个只在有数据时才出现的 bug（本轮修掉）
+       现象：第 3.3 段 UPDATE app.meal_plan ... WHERE data_version='legacy-v1.1' 被拦：
+             ERROR:  meal plan 2 is fixed and read-only
+             CONTEXT:  PL/pgSQL function app.guard_meal_plan_update() line 19 at RAISE
+       根因：3 条 legacy 计划（meal_plan_id=2/5/6）在真实库里 status='fixed'，
+             而 app.trg_guard_meal_plan_update（BEFORE UPDATE FOR EACH ROW）会拒绝任何关键列变更，
+             sources 就在关键列里。空库/临时库没有这种行，所以这两轮一直 PASS——是数据差异暴露出来的。
+       修法：不改业务守卫的语义，只在 12 的 3.3 段包一个 DO 块：定点 DISABLE TRIGGER
+             trg_guard_meal_plan_update → UPDATE 打 retention 标记 → ENABLE TRIGGER，
+             EXCEPTION 分支也恢复；非表 owner / 非超级用户执行时给出明确 42501 提示。
+             语句数仍是 23 条（pglast 复核）。
+       重跑：12 全量 23 条语句 0 报错，NOTICE「3.3 legacy 计划标记 retention：本次写入 3 条（触发器已恢复）」，
+             8 项自检全过（ingredient_view_columns=25、iron_female_50_64_rows=1、r1/r1b migrated 各 1、
+             search_func_has_purine_level=true、search_func_out_columns=18、staging_gone=true、test_view_gone=true）
+       影响面：不修的话，任何"有真实数据"的库跑 12 都会在 3.3 断掉，后面的迁移登记与授权不执行，
+             库停在半迁移态——容器首次启动也必然踩到。
+
+  C-3  03 / 18 依次执行
+       03：13 条语句，0 报错，diet_app 建立并授权
+       18：4 条语句，INSERT 0 4；自检 condition_rows=4、category_慢性疾病=4、missing_condition_ids=(无)、all_confirmed=4
+
+  C-4  14 在 PG18.7 + pgvector 0.8.7 上（容器同版本）
+       23 条语句 0 报错；7 项自检：
+         backlog_rows=26 / database_name=diet_agent / embedding_column=vector(1024) /
+         extension_schema=public / hnsw_index=true / search_function=true / vector_extension=0.8.7
+       与附录 B 的 0.8.0 环境相比，唯一变化是扩展版本号，其余口径一致。
+
+  C-5  04 整体验收在含数据库上跑完（此前一直缺这一环）
+       31 条语句逐条执行，0 报错，无 RAISE 断言失败；关键计数：
+         dishes=60、goal_mappings=5、ingredients=128、key_micronutrients=7、
+         legacy_plans_preserved=3、r1_migration=1、r1b_migration=1、schema_migration=1、staging_schema_removed=true
+       计划流程段这次走完整了（临时库曾因 goal_structure_map 为空停在第 6 条）：
+         微量余额表 7 行（钙 220mg / 铁 5mg / 维A 120μgRAE / B1 0.5mg / B2 0.5mg / 维C 35mg / 锌 3.5mg）；
+         疾病分支 NOTICE「branch acceptance passed with rule HTN-SODIUM-DASH-1500 / condition hypertension」；
+         末尾新增菜式 30 行清单（DISH-031～DISH-060）原样输出。
+
+  C-6  19 知识库主题扩充（新文件）
+       · 运行前基线：26 篇，全部 nutrient:<营养素>:overview，category ∈ {维生素, 矿物质, 脂肪酸, 其他}
+       · 执行：19 的 3 条语句 0 报错，INSERT 0 17，NOTICE「新增/更新 17 条，知识库有效总数 43 条」
+       · 自检表：knowledge_total=43、nutrient_rows=26、topic_rows=17、
+         cat 分布 维生素13 / 矿物质11 / 脂肪酸1 / 其他1 / 病种6 / 人群5 / 膳食结构3 / 食物过敏与安全3、
+         duplicate_keys=0、正文长度 136～234 字、backlog_after_19=43
+       · 幂等：连跑第二遍仍 43 条（17 条走 ON CONFLICT DO UPDATE），无重复 stable_key
+       · 15 联动：--dry-run 显示「待灌/待重灌 43 条，预计 2 次后端调用，约 12177 字符」
+       · 写库：用本地 mock 嵌入服务（字符 bigram 哈希到 1024 维）实灌，成功 43、失败 0，剩余待灌 0；
+         knowledge.search_documents 能返回结果（vector_rank 1～5）
+       注意：mock 只为验链路，它的余弦相似度只有 0.15～0.20，真实语义质量要等 bge-m3 接上再评。
+
+  C-7  docker/ 初始化链路（脚本逐条实跑；镜像未 build）
+       · initdb/ 八个脚本按 00→10→20→30→40→50→55→60 顺序执行：8/8 rc=0，整链日志 0 ERROR
+       · 60 汇总表：condition_rows=4 / diet_app_role=present / dish_rows=60 / embedding_backlog=43 /
+         ingredient_rows=128 / knowledge_topic=17 / knowledge_total=43 / legacy_fixed_plans=3 /
+         migrations=2026-11-12-product-v2,2026-11-13-dish-expansion-60,2026-11-13-review-r1,2026-11-13-review-r1b /
+         pgvector_version=0.8.7 / schemas=app,audit,core,knowledge / server_version=18.7
+       · 负向测试：缺 SQL 资产 → 00 rc=1；库名与 03 写死的 diet_agent 不符 → 30 rc=1
+       · 脚本静态检查：八个 initdb 脚本 `bash -n` 全部通过（8/8，无语法错）
+       · 交付包自校验：解压 zip 后在包根跑 `sha256sum -c 09_文件校验值.sha256`，30/30 OK、0 FAILED
+       · 未做：docker build。云主机是无特权容器（grep Cap /proc/self/status 全 0、systemd-detect-virt=container-other、
+         docker: command not found），本机 Windows 无 Docker/WSL，所以镜像一层都没真正构建过。
+         第一次 build 可能要调 pgvector/pgvector:pg18 的 PGDATA/健康检查细节与 COPY 通配，见 docker/README.md。
+
+  C-8  仍未验证
+       · 镜像 build 与容器内首次启动（原因见 C-7）
+       · 真实嵌入模型 bge-m3（1024 维）与 p_min_similarity 默认 0.5 的实际召回质量
+       · 19 的 17 篇主题未经业务/营养岗审稿（口径问题找谁改，见 17 第十节）
