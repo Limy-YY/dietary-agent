@@ -1,0 +1,126 @@
+{
+  "base": "https://salon-posing-stroke-supplier.trycloudflare.com",
+  "time": "2026-11-16T15:15:52.273149",
+  "results": [
+    {
+      "id": "R-01",
+      "method": "GET",
+      "path": "/api/health",
+      "status": 200,
+      "pass": true,
+      "note": "code=None"
+    },
+    {
+      "id": "R-02",
+      "method": "GET",
+      "path": "/api/ingredients/search?q=%E9%B8%A1%E8%83%B8%E8%82%89",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-03",
+      "method": "GET",
+      "path": "/api/dishes/search?page=1&page_size=5",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-04",
+      "method": "POST",
+      "path": "/api/calc/nutrition",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-05a",
+      "method": "PUT",
+      "path": "/api/profile",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-05b",
+      "method": "GET",
+      "path": "/api/profile",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-06",
+      "method": "POST",
+      "path": "/api/nutrition/analysis",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-07a",
+      "method": "GET",
+      "path": "/api/condition-rules/catalog?page=1&page_size=5",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-07b",
+      "method": "GET",
+      "path": "/api/condition-rules/production",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-07c",
+      "method": "GET",
+      "path": "/api/conditions/catalog",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-07d",
+      "method": "GET",
+      "path": "/api/conditions",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-08",
+      "method": "POST",
+      "path": "/api/meal-plan/week/generate",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-09a",
+      "method": "GET",
+      "path": "/api/meal-plan/current",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-09b",
+      "method": "GET",
+      "path": "/api/meal-plan/list?page=1&page_size=5",
+      "status": 200,
+      "pass": true,
+      "note": "code=0"
+    },
+    {
+      "id": "R-12",
+      "method": "POST",
+      "path": "/api/agent/chat",
+      "status": 200,
+      "pass": true,
+      "note": "sse_frames=8"
+    }
+  ]
+}
