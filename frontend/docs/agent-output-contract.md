@@ -160,6 +160,8 @@
 | `macro_summary.protein_pct / fat_pct / carb_pct` | number / null | 三段供能比；null 显示「—」 |
 | `macro_summary.oil_g / salt_g / fiber_g` | number / null | 「烹调油 / 食盐 / 膳食纤维」三项独立指标 |
 | `key_micro_summary.<nutrient_id>` | 对象，固定 7 键 | 微量区；每项含 `name_zh / target / unit / intake / gap / covered_pct / status` |
+| `summary.achievement` | object / null | 达标率；含 `micro_overall_pct`、`macro`、`micro` 三段口径 |
+| `summary.daily_trend[]` | object[] | 每日摄入序列；每项含 `date / label / calories / protein_g / fat_g / carb_g / fiber_g / oil_g / salt_g / micro / meal_count / known_meal_count / status` |
 | `summary.reference_hints` | string[] | 参考口径说明（如「本期铁按普通口径，未区分经期」） |
 | `summary.data_quality_notes` | string[] | 数据质量说明 |
 | `completeness.meal_count / known_meal_count / missing_meal_count` | integer / null | 「共 N 餐 · 已知 N 餐 · 缺失 N 餐」 |
@@ -170,6 +172,7 @@
 
 - 微量顺序固定 7 键；`status=参考提示` 中性色 +「提示」，不得红色。
 - `intake=null` → 「—」+「数据不足」；不允许显示 0%。
+- `daily_trend[].calories=null` 表示当日数据不足，趋势值显示「—」，不补 0；`status=参考提示` 走中性色。
 - 钠只在 `macro_summary.salt_g`，不进微量区。
 - `summary.data_quality_notes` 与 `completeness` 在面板底部常驻展示，不折叠。
 - 面板请求先取 `GET /meal-plan/current`：无方案 → 配餐引导；有方案未分析 → 「生成本方案膳食报告」（`POST /nutrition/analysis`）；已生成 → 展示报告。

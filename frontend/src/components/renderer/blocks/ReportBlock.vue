@@ -58,12 +58,12 @@
       <div v-if="report.daily_trend.length" class="rp-section">
         <div class="rp-section-title">📈 每日热量</div>
         <div class="rp-trend">
-          <div v-for="(d, i) in report.daily_trend" :key="i" class="rp-bar-wrap" :title="`${d.date} · ${d.calories} kcal`">
-            <span class="rp-bar-val">{{ d.calories }}</span>
+          <div v-for="(d, i) in report.daily_trend" :key="i" class="rp-bar-wrap" :title="`${d.date} · ${d.calories === null || d.calories === undefined ? '—' : d.calories} kcal`">
+            <span class="rp-bar-val">{{ d.calories === null || d.calories === undefined ? '—' : d.calories }}</span>
             <div class="rp-bar-area">
               <div class="rp-bar" :class="d.status" :style="{ height: barHeight(d) }"></div>
             </div>
-            <div class="rp-bar-date">{{ d.show_date ? d.date : '' }}</div>
+            <div class="rp-bar-date">{{ d.show_date ? d.label || d.date : '' }}</div>
           </div>
         </div>
       </div>
@@ -153,6 +153,10 @@ function barHeight(d) {
 .rp-extra-val {
   font-size: 13px;
   font-weight: 600;
+}
+
+.rp-bar.neutral {
+  background: var(--chart-empty, #f0f0f0);
 }
 
 .rp-micro-tag {

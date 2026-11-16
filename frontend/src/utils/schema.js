@@ -326,12 +326,62 @@ function macroSegment(name, pct, color) {
   }
 }
 
+function trendMicroView(micro) {
+  if (!micro || typeof micro !== 'object' || Array.isArray(micro)) return {}
+  const out = {}
+  Object.keys(micro).forEach((k) => {
+    out[k] = numOrNull(micro[k])
+  })
+  return out
+}
+
+function trendDayView(day, i) {
+  const d = day || {}
+  const date = str(pick(d, 'date'), '')
+  const statusZh = str(pick(d, 'status'), '参考提示')
+  return {
+    date,
+    label: str(pick(d, 'label'), date.slice(5) || `第${i + 1}天`),
+    calories: numOrNull(pick(d, 'calories')),
+    protein_g: numOrNull(pick(d, 'protein_g')),
+    fat_g: numOrNull(pick(d, 'fat_g')),
+    carb_g: numOrNull(pick(d, 'carb_g')),
+    fiber_g: numOrNull(pick(d, 'fiber_g')),
+    oil_g: numOrNull(pick(d, 'oil_g')),
+    salt_g: numOrNull(pick(d, 'salt_g')),
+    micro: trendMicroView(pick(d, 'micro')),
+    meal_count: numOrNull(pick(d, 'meal_count')),
+    known_meal_count: numOrNull(pick(d, 'known_meal_count')),
+    status: ['ok', 'over', 'low'].includes(statusZh) ? statusZh : 'neutral',
+    status_zh: statusZh,
+    show_date: true
+  }
+}
+
+function normalizeDailyTrend(list) {
+  return arr(list).map(trendDayView)
+}
+
+function achievementView(achievement) {
+  if (!achievement || typeof achievement !== 'object' || Array.isArray(achievement)) return null
+  const macro = achievement.macro && typeof achievement.macro === 'object' ? achievement.macro : {}
+  const micro = achievement.micro && typeof achievement.micro === 'object' ? achievement.micro : {}
+  return {
+    micro_overall_pct: numOrNull(pick(achievement, 'micro_overall_pct')),
+    macro,
+    micro
+  }
+}
+
 export function normalizeReport(report) {
   const r = report || {}
   const macro = r.macro_summary || {}
   const microMap = r.key_micro_summary || {}
   const completeness = r.completeness || {}
   const summary = r.summary || {}
+  const trendSource = arr(pick(summary, 'daily_trend')).length
+    ? pick(summary, 'daily_trend')
+    : pick(r, 'daily_trend')
   const reportType = str(pick(r, 'report_type'), 'plan')
   const start = str(pick(r, 'period_start'), '')
   const end = str(pick(r, 'period_end'), '')
@@ -381,9 +431,10 @@ export function normalizeReport(report) {
     },
     reference_hints: arr(pick(summary, 'reference_hints')),
     data_quality_notes: arr(pick(summary, 'data_quality_notes')),
+    achievement: achievementView(pick(summary, 'achievement')),
     sources: arr(pick(r, 'sources')),
     insights: arr(pick(summary, 'reference_hints')),
-    daily_trend: [],
+    daily_trend: normalizeDailyTrend(trendSource),
     expanded: false
   }
 }

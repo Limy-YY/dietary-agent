@@ -226,6 +226,49 @@ export function toNutritionReport(legacy, { planId, reportId, windowDays = 7 } =
   })
 
   const seg = legacy.macro.segments
+  const dailyTrend = Array.isArray(legacy.daily_trend)
+    ? legacy.daily_trend.map((d, i) => ({
+        date: String(d.date || `D${i + 1}`),
+        label: String(d.label || d.date || `D${i + 1}`),
+        calories: d.calories == null ? null : Number(d.calories),
+        protein_g: null,
+        fat_g: null,
+        carb_g: null,
+        fiber_g: null,
+        oil_g: null,
+        salt_g: null,
+        micro: {},
+        meal_count: null,
+        known_meal_count: null,
+        status: d.status || 'ok'
+      }))
+    : []
+  const achievementMicro = {}
+  MICRO_KEYS.forEach((k) => {
+    const m = keyMicro[k]
+    achievementMicro[k] = {
+      name_zh: m.name_zh,
+      target: m.target,
+      unit: m.unit,
+      level: m.status === '达标' ? 'ok' : m.status === '不足' ? 'danger' : 'warn',
+      achieved_pct: m.covered_pct,
+      valid_days: legacy.meta.valid_days,
+      achieved_days: m.covered_pct == null ? null : Math.round((legacy.meta.valid_days * m.covered_pct) / 100)
+    }
+  })
+  const achievedPcts = MICRO_KEYS.map((k) => keyMicro[k].covered_pct).filter((v) => v != null)
+  const achievement = {
+    macro: {
+      protein_pct: { level: 'ok', range: [15, 25], value_pct: seg[0] ? seg[0].percent : null },
+      fat_pct: { level: 'ok', range: [20, 30], value_pct: seg[2] ? seg[2].percent : null },
+      carb_pct: { level: 'ok', range: [45, 65], value_pct: seg[1] ? seg[1].percent : null }
+    },
+    micro: achievementMicro,
+    micro_overall_pct: achievedPcts.length
+      ? Number((achievedPcts.reduce((a, b) => a + b, 0) / achievedPcts.length).toFixed(1))
+      : null
+  }
+
   return {
     nutrition_report_id: reportId,
     report_type: 'plan',
@@ -244,6 +287,9 @@ export function toNutritionReport(legacy, { planId, reportId, windowDays = 7 } =
     },
     key_micro_summary: keyMicro,
     summary: {
+      basis: 'daily_average',
+      daily_trend: dailyTrend,
+      achievement,
       reference_hints: [...legacy.insights, '铁按普通口径计算，未区分经期（本期口径）'],
       data_quality_notes: ['部分食材微量为近似值（approx/check），不作为官方实测结论']
     },

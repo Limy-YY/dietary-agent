@@ -44,6 +44,19 @@
         </div>
       </div>
 
+      <div v-if="report.daily_trend.length" class="rp-section">
+        <div class="rp-section-title">📈 每日热量</div>
+        <div class="rp-trend">
+          <div v-for="(d, i) in report.daily_trend" :key="i" class="rp-bar-wrap" :title="`${d.date} · ${d.calories === null || d.calories === undefined ? '—' : d.calories} kcal`">
+            <span class="rp-bar-val">{{ d.calories === null || d.calories === undefined ? '—' : d.calories }}</span>
+            <div class="rp-bar-area">
+              <div class="rp-bar" :class="d.status" :style="{ height: barHeight(d) }"></div>
+            </div>
+            <div class="rp-bar-date">{{ d.show_date ? d.label || d.date : '' }}</div>
+          </div>
+        </div>
+      </div>
+
       <div class="rp-section">
         <div class="rp-section-title">🔬 {{ report.micro.title }}</div>
         <div class="rp-micro-grid">
@@ -139,6 +152,16 @@ const generatedText = computed(() =>
   report.value?.meta.generated_at ? fmtDateTime(report.value.meta.generated_at) : '—'
 )
 
+const maxCalories = computed(() => {
+  const list = (report.value?.daily_trend || []).map((d) => Number(d.calories) || 0)
+  return Math.max(...list, 1)
+})
+
+function barHeight(d) {
+  const h = Math.round(((Number(d.calories) || 0) / maxCalories.value) * 100)
+  return `${Math.max(4, h)}%`
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -202,6 +225,10 @@ watch(() => panel.active, (v) => v === 'report' && load())
 .rp-extra-val {
   font-size: 13px;
   font-weight: 600;
+}
+
+.rp-bar.neutral {
+  background: var(--chart-empty, #f0f0f0);
 }
 
 .rp-micro-tag {

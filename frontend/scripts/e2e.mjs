@@ -280,6 +280,10 @@ async function main() {
       assert.ok(analyzed.data.macro_summary)
       assert.equal(Object.keys(analyzed.data.key_micro_summary).length, 7, '微量应有 7 键')
       assert.ok(analyzed.data.completeness && analyzed.data.summary.data_quality_notes, '缺完整度/数据说明')
+      assert.ok(Array.isArray(analyzed.data.summary.daily_trend) && analyzed.data.summary.daily_trend.length, 'summary 缺 daily_trend')
+      assert.ok(analyzed.data.summary.achievement, 'summary 缺 achievement')
+      const trendDay = analyzed.data.summary.daily_trend[0]
+      assert.ok('date' in trendDay && 'label' in trendDay && 'calories' in trendDay && 'status' in trendDay, '趋势日字段不完整')
 
       const after = await api('/api/nutrition/report?meal_plan_id=' + encodeURIComponent(planId))
       assert.equal(after.code, 0)
@@ -306,8 +310,9 @@ async function main() {
       assert.equal(rep.report_type, 'plan')
       assert.equal(Object.keys(rep.key_micro_summary).length, 7)
       assert.ok(rep.summary.reference_hints.length, '缺 reference_hints')
+      assert.ok(Array.isArray(rep.summary.daily_trend) && rep.summary.daily_trend.length, 'artifact 缺 daily_trend')
       const neutral = Object.values(rep.key_micro_summary).filter((m) => m.status === '参考提示').length
-      s.ok(`${rep.nutrition_report_id} · ${rep.period_start}~${rep.period_end} · 参考提示 ${neutral} 项`)
+      s.ok(`${rep.nutrition_report_id} · ${rep.period_start}~${rep.period_end} · 趋势 ${rep.summary.daily_trend.length} 天 · 参考提示 ${neutral} 项`)
     } catch (e) {
       s.fail(e)
     }
