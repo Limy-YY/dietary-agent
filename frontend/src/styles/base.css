@@ -3467,6 +3467,13 @@ button {
   margin-bottom: 10px;
 }
 
+/* 弹窗（Element Plus el-dialog）：加大页边距，让文字与容器边界更有呼吸感（ui-spec 6.11） */
+.el-dialog {
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
+  padding: 26px 30px;
+}
+
 /* 窄屏兜底 */
 @media (max-width: 1280px) {
   :root {

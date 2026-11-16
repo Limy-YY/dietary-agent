@@ -27,9 +27,6 @@
       <div v-if="!meals.length" class="rm-dish-tip">暂无食谱明细，可以先让膳宝生成一餐。</div>
     </div>
     <div class="modal-note">份量按档案估算；做法只保留要点，按自家口味调油盐即可。</div>
-    <template #footer>
-      <el-button @click="visible = false">关闭</el-button>
-    </template>
   </el-dialog>
 </template>
 

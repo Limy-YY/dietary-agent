@@ -12,7 +12,7 @@
         <div class="hd-kv">
           <div class="kv-row"><span class="kv-k">周期</span><span class="kv-v">{{ payload.range_text }}</span></div>
           <div class="kv-row"><span class="kv-k">健康目标</span><span class="kv-v">{{ payload.goal_label || '—' }}</span></div>
-          <div class="kv-row"><span class="kv-k">状态</span><span class="kv-v">{{ payload.is_executed ? '已执行' : '未执行' }} · {{ payload.status_label }}</span></div>
+          <div class="kv-row"><span class="kv-k">状态</span><span class="kv-v">{{ payload.is_executed ? '已执行' : '未执行' }}</span></div>
         </div>
       </div>
 
@@ -64,7 +64,6 @@
 
     <template #footer>
       <el-button :loading="regenerating" @click="regenerate">照这个思路再排一次</el-button>
-      <el-button @click="visible = false">关闭</el-button>
     </template>
   </el-dialog>
 </template>
@@ -201,6 +200,7 @@ watch(visible, (v) => {
   font-weight: 600;
   color: var(--brand-hover);
   margin-bottom: 6px;
+  padding-right: 76px; /* 与 .meal-table 的 mt-kcal 热量列（76px）左缘对齐 */
 }
 
 .hd-day-head span {
@@ -213,6 +213,7 @@ watch(visible, (v) => {
   align-items: center;
   justify-content: space-between;
   margin: 18px 0 10px;
+  padding-right: 76px; /* 「展开做法」与热量列左缘对齐，而不是贴死弹窗右缘 */
 }
 
 .hd-toggle-btn {

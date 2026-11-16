@@ -111,9 +111,6 @@
         </ul>
       </div>
       <div class="modal-note">份量按身高体重估算，只作参考；身体有特殊情况请先问医生。</div>
-      <template #footer>
-        <el-button @click="reasonOpen = false">关闭</el-button>
-      </template>
     </el-dialog>
   </div>
 </template>

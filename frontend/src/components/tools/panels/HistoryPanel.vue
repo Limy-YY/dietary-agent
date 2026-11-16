@@ -50,7 +50,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchPlanList, fetchPlanById, setPlanExecuted } from '@/api/mealPlan.js'
-import { normalizeMealCard, STATUS_LABELS, goalLabel, planTypeTitle } from '@/utils/schema.js'
+import { normalizeMealCard, goalLabel, planTypeTitle } from '@/utils/schema.js'
 import { fmtDate } from '@/utils/format.js'
 import { usePanelStore } from '@/stores/panel.js'
 import { useChatStore } from '@/stores/chat.js'
@@ -106,7 +106,6 @@ function summaryView(item) {
     title: buildTitle(item),
     range_short: shortRange(item.start_date, item.end_date),
     range_text: item.start_date && item.end_date ? `${item.start_date} ~ ${item.end_date}` : '—',
-    status_label: STATUS_LABELS[item.status] || '已生效',
     is_executed: Boolean(item.is_executed),
     goal_code: item.goal_code || '',
     week_bucket: weekBucket(item.start_date)
@@ -165,7 +164,6 @@ async function view(p) {
       title: p.title,
       range_text: p.range_text,
       goal_label: goalLabel(raw.goal_code || p.goal_code),
-      status_label: p.status_label,
       is_executed: Boolean(raw.is_executed),
       days: plan.days
     }
