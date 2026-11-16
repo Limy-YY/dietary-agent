@@ -4,8 +4,6 @@
 Agent 的「非生成」工具（档案 / 食材 / 菜式 / 核算 / RAG / 反向营养 / 疾病规则 / 周报）
 都走后端 HTTP；「生成方案」走 rule_engine（见 rule_engine_bridge.py，进程内直调）。
 """
-import contextvars
-
 import requests
 
 import config
@@ -15,21 +13,17 @@ _TIMEOUT = 30
 
 # 后端业务接口都要 JWT（403/401 否则），Agent 由后端 /agent/chat 代调时必须复用调用方身份。
 # 后端在请求体里带上 token，main.py 收到后调 set_token()。
-# 用 ContextVar 而非模块级全局变量：SSE 是流式的，并发请求各有独立 ASGI task context，
-# 每个请求的 token 只在本 task 内可见，避免 A 的 token 被 B 覆盖导致身份串号/越权。
-_token_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "agent_backend_token", default=None
-)
+_token: str | None = None
 
 
 def set_token(token: str | None) -> None:
-    """设置当前请求上下文使用的 Bearer token（由后端 /agent/chat 透传）。"""
-    _token_ctx.set(token or None)
+    """设置后续 REST 调用使用的 Bearer token（由后端 /agent/chat 透传）。"""
+    global _token
+    _token = token or None
 
 
 def _auth_headers() -> dict:
-    token = _token_ctx.get()
-    return {"Authorization": f"Bearer {token}"} if token else {}
+    return {"Authorization": f"Bearer {_token}"} if _token else {}
 
 
 class BackendError(RuntimeError):
