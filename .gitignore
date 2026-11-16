@@ -1,0 +1,35 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 真实密钥（.env.example 模板、frontend/.env.development 等非密钥配置不受影响）----
+.env
+
+# ---- Node / 前端 ----
+node_modules/
+dist/
+.vite/
+*.local
+npm-debug.log*
+
+# ---- IDE ----
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---- 日志 ----
+*.log
