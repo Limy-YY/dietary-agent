@@ -281,6 +281,8 @@ def run(user_id: str, message: str) -> dict:
                 end_date=str(end_day),
                 meal_types=req_meal_types
             )
+            # 生成后写入内存态，供「换候选 / 确认」读取（重构漏写这行会导致确认时报「还没有待确认的方案」）
+            _user_state(user_id)["current_plan"] = plan
         except Exception as e:
             return {"text": f"方案没排出来：{e}", "blocks": []}
 
