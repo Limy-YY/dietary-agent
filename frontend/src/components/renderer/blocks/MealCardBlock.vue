@@ -22,7 +22,7 @@
           <div class="cand-name">{{ c.name }}</div>
           <div class="cand-desc">{{ c.desc || '按档案份量做了微调' }}</div>
         </div>
-        <div class="cand-kcal">{{ fmtNum(c.kcal) }} kcal</div>
+        <div class="cand-kcal">{{ fmtKcal(c.kcal) }} kcal</div>
       </div>
       <div v-if="!candidates.length" class="cand-empty">这一餐暂无候选，换个说法试试（例如「推荐午餐搭配」）</div>
     </div>
@@ -39,7 +39,7 @@
           <div class="meal-type">
             {{ slot.label || MEAL_LABELS[slot.meal_type] || '一餐' }}
             <span v-if="slot.time">· {{ slot.time }}</span>
-            <span class="meal-kcal">{{ fmtNum(slot.kcal) }} kcal</span>
+            <span class="meal-kcal">{{ fmtKcal(slot.kcal) }} kcal</span>
           </div>
           <div class="meal-dish">{{ slot.dish_text }}</div>
           <div class="meal-meta">{{ slot.dish_count }} 道菜 · 点这里看用量和做法</div>
@@ -68,7 +68,7 @@
               {{ (s.label || s.meal_type || '').charAt(0) }} {{ s.dish_count }}
             </span>
           </div>
-          <div class="wd-kcal">{{ fmtNum(day.kcal) }} kcal</div>
+          <div class="wd-kcal">{{ fmtKcal(day.kcal) }} kcal</div>
           <span class="wd-chevron">▾</span>
         </div>
         <div class="week-day-body">
@@ -81,7 +81,7 @@
               <div class="wd-meal-dishes">{{ s.dish_text }}</div>
             </div>
             <div class="wd-meal-side">
-              <span class="wd-meal-kcal">{{ fmtNum(s.kcal) }} kcal</span>
+              <span class="wd-meal-kcal">{{ fmtKcal(s.kcal) }} kcal</span>
               <button class="wd-swap" :disabled="isFixed || !s.candidates.length" @click.stop="swap(s)">
                 换一换
               </button>
@@ -121,7 +121,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { MEAL_LABELS, PHRASE } from '@/constants/actions.js'
-import { arr, fmtNum } from '@/utils/schema.js'
+import { arr, fmtKcal } from '@/utils/schema.js'
 import { useUi } from '@/composables/useUi.js'
 
 const props = defineProps({ block: { type: Object, required: true } })

@@ -41,6 +41,14 @@ export function fmtPct(v) {
   return `${Math.round(n * 10) / 10}%`
 }
 
+/* 热量（kcal）统一保留 1 位小数 */
+export function fmtKcal(v) {
+  if (v === null || v === undefined || v === '') return '—'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  return n.toFixed(1)
+}
+
 /* ---------- 枚举展示（只做中文标签，不承载业务映射表） ---------- */
 
 const MEAL_LABELS = { 早: '早餐', 午: '午餐', 晚: '晚餐' }

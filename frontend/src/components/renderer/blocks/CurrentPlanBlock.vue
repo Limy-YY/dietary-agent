@@ -17,12 +17,12 @@
       <div v-for="(day, di) in plan.days" :key="day.iso + di" class="cp-day">
         <div class="cp-day-head">
           <span>{{ day.weekday }} · {{ day.date }}</span>
-          <span class="cp-day-kcal">{{ fmtNum(day.kcal) }} kcal</span>
+          <span class="cp-day-kcal">{{ fmtKcal(day.kcal) }} kcal</span>
         </div>
         <div v-for="(s, si) in day.slots" :key="si" class="cp-slot">
           <span class="cp-slot-label">{{ s.label }} {{ s.time }}</span>
           <span class="cp-slot-dish">{{ s.dish_text || '—' }}</span>
-          <span class="cp-slot-kcal">{{ fmtNum(s.kcal) }} kcal</span>
+          <span class="cp-slot-kcal">{{ fmtKcal(s.kcal) }} kcal</span>
         </div>
       </div>
     </div>
@@ -32,7 +32,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { fmtNum } from '@/utils/schema.js'
+import { fmtKcal } from '@/utils/schema.js'
 
 const props = defineProps({ block: { type: Object, required: true } })
 const plan = computed(() => props.block.plan || null)

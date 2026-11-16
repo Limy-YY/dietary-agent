@@ -18,7 +18,7 @@
           <span class="type-tag" :class="isFixed ? 'live' : 'archive'">{{ isFixed ? '已生效' : '待确认' }}</span>
         </div>
         <div class="po-cal-compact">
-          <span class="num">{{ fmtNum(plan.goal_energy_kcal) }}</span>
+          <span class="num">{{ fmtKcal(plan.goal_energy_kcal) }}</span>
           <span class="unit">kcal 目标</span>
         </div>
       </div>
@@ -31,7 +31,7 @@
       >
         <div class="plan-day-head" @click="openDay = openDay === di ? -1 : di">
           <span class="pd-label">{{ day.is_today ? '今天' : day.weekday }} · {{ day.date }}</span>
-          <span class="pd-kcal">{{ fmtNum(day.kcal) }} kcal</span>
+          <span class="pd-kcal">{{ fmtKcal(day.kcal) }} kcal</span>
           <span class="pd-chevron">▾</span>
         </div>
         <div class="plan-day-body">
@@ -41,7 +41,7 @@
                 <tr v-for="(slot, si) in day.slots" :key="si">
                   <td class="mt-meal">{{ slot.label }}</td>
                   <td class="mt-dish">{{ slot.dish_text || '—' }}</td>
-                  <td class="mt-kcal"><span class="num">{{ fmtNum(slot.kcal) }}</span></td>
+                  <td class="mt-kcal"><span class="num">{{ fmtKcal(slot.kcal) }}</span></td>
                 </tr>
               </tbody>
             </table>
@@ -76,7 +76,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { fetchCurrentPlan } from '@/api/mealPlan.js'
-import { fmtNum, normalizeCurrentPlan } from '@/utils/schema.js'
+import { fmtKcal, normalizeCurrentPlan } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
 import { usePanelStore } from '@/stores/panel.js'
 import { useChatStore } from '@/stores/chat.js'
