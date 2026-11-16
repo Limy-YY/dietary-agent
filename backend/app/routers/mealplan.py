@@ -167,7 +167,19 @@ def _get_plan(db: Session, meal_plan_id: int) -> MealPlan:
     return plan
 
 
-def _serialize_candidate(c: MealCandidate) -> dict:
+def _dish_names(db: Session, dish_ids) -> dict[str, str]:
+    """按 dish_id 批量取菜名。菜名在 core.dish，meal_candidate_dish 关联表只有 dish_id。"""
+    ids = sorted({str(x) for x in dish_ids if x})
+    if not ids:
+        return {}
+    rows = db.execute(
+        text("SELECT dish_id, name FROM core.dish WHERE dish_id = ANY(:ids)"),
+        {"ids": ids},
+    ).mappings().all()
+    return {r["dish_id"]: r["name"] for r in rows}
+
+
+def _serialize_candidate(c: MealCandidate, names: dict[str, str]) -> dict:
     return {
         "candidate_id": c.candidate_id,
         "rank": c.rank,
@@ -182,6 +194,7 @@ def _serialize_candidate(c: MealCandidate) -> dict:
         "dishes": [
             {
                 "dish_id": d.dish_id,
+                "name": names.get(d.dish_id, ""),
                 "role": d.role,
                 "servings": _f(d.servings, 2),
                 "estimated_g": _f(d.estimated_g),
@@ -200,7 +213,7 @@ def _selected_candidate(slot: MealSlot) -> MealCandidate | None:
     )
 
 
-def _serialize_slot(slot: MealSlot) -> dict:
+def _serialize_slot(slot: MealSlot, names: dict[str, str]) -> dict:
     picked = _selected_candidate(slot)
     return {
         "meal_slot_id": slot.meal_slot_id,
@@ -209,12 +222,13 @@ def _serialize_slot(slot: MealSlot) -> dict:
         "display_order": slot.display_order,
         "target_macro": slot.target_macro or {},
         "selected_candidate_id": slot.selected_candidate_id,
-        "selected_candidate": _serialize_candidate(picked) if picked else None,
-        "candidates": [_serialize_candidate(c) for c in slot.candidates],
+        "selected_candidate": _serialize_candidate(picked, names) if picked else None,
+        "candidates": [_serialize_candidate(c, names) for c in slot.candidates],
     }
 
 
-def _serialize_plan(plan: MealPlan) -> dict:
+def _serialize_plan(plan: MealPlan, db: Session) -> dict:
+    _names = _dish_names(db, [d.dish_id for s in plan.slots for c in s.candidates for d in c.dishes])
     return {
         "meal_plan_id": plan.meal_plan_id,
         "user_id": plan.user_id,
@@ -233,7 +247,7 @@ def _serialize_plan(plan: MealPlan) -> dict:
         "fixed_at": _iso(plan.fixed_at),
         "created_at": _iso(plan.created_at),
         "updated_at": _iso(plan.updated_at),
-        "slots": [_serialize_slot(s) for s in sorted(plan.slots, key=lambda x: (x.slot_date, x.display_order))],
+        "slots": [_serialize_slot(s, _names) for s in sorted(plan.slots, key=lambda x: (x.slot_date, x.display_order))],
     }
 
 
@@ -381,7 +395,7 @@ def generate_week_plan(
         db.rollback()
         raise BizError(BizCode.PLAN_GENERATION_FAILED, f"方案落库失败: {exc}") from exc
 
-    return api_success(_serialize_plan(_get_plan(db, plan.meal_plan_id)))
+    return api_success(_serialize_plan(_get_plan(db, plan.meal_plan_id), db))
 
 
 # ---------------------------------------------------------------- API-23 换候选
@@ -462,7 +476,7 @@ def swap_candidate(
             "meal_slot_id": slot.meal_slot_id,
             "selected_candidate_id": target.candidate_id,
             "previous_candidate_id": previous_id,
-            "candidate": _serialize_candidate(target),
+            "candidate": _serialize_candidate(target, _dish_names(db, [d.dish_id for d in target.dishes])),
             "macro_delta": delta,
         }
     )
@@ -581,7 +595,7 @@ def fix_plan(
     db.commit()
 
     db.refresh(plan)
-    return api_success(_serialize_plan(_get_plan(db, plan.meal_plan_id)))
+    return api_success(_serialize_plan(_get_plan(db, plan.meal_plan_id), db))
 
 
 # ---------------------------------------------------------------- API-21 当前
@@ -611,7 +625,7 @@ def current_plan(
         )
         plan = db.execute(stmt).scalar_one_or_none()
         if plan is not None:
-            return api_success(_serialize_plan(plan))
+            return api_success(_serialize_plan(plan, db))
     return api_success(None)
 
 
@@ -673,4 +687,4 @@ def get_plan(plan_id: int, user_id: str = CurrentUser, db: Session = Depends(get
     plan = _get_plan(db, plan_id)
     if plan.user_id != user_id:
         raise BizError(BizCode.FORBIDDEN, "无权查看他人方案", http_status=403)
-    return api_success(_serialize_plan(plan))
+    return api_success(_serialize_plan(plan, db))

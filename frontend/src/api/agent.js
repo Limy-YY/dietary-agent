@@ -11,8 +11,14 @@ import { getToken, apiBase, ApiError } from './http.js'
  * 请求体：{ conversation_id?, message, context?{ meal_plan_id } }
  */
 export async function streamChat({ conversationId, message, context, signal, onEvent }) {
-  const bodyPayload = { message }
-  if (conversationId) bodyPayload.conversation_id = conversationId
+  // user_id 由后端从 Authorization 的 token 解析（chat.py 用 token.sub 覆盖请求体），
+  // 这里发空串只为通过 ChatRequest 的必填校验；真值以后端 token 为准。
+  const bodyPayload = { message, user_id: '' }
+  // 真后端 conversation_id 是整数；Mock 时代遗留的 'conv_...' 字符串会导致 Pydantic int 校验失败，这里只发整数。
+  const cid = Number(conversationId)
+  if (conversationId != null && conversationId !== '' && Number.isInteger(cid)) {
+    bodyPayload.conversation_id = cid
+  }
   if (context && context.meal_plan_id != null) bodyPayload.context = { meal_plan_id: context.meal_plan_id }
 
   const res = await fetch(`${apiBase()}/agent/chat`, {

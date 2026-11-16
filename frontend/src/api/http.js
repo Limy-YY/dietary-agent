@@ -19,7 +19,10 @@ export function setToken(token) {
 }
 
 export function apiBase() {
-  if (import.meta.env.VITE_USE_MOCK !== 'false') return '/api'
+  // 开发态统一走相对路径 /api，交给 Vite dev server 代理到 VITE_API_BASE（见 vite.config.js）。
+  // 否则 axios/fetch 直接用绝对地址跨域打后端，会被浏览器 CORS 拦截。
+  if (import.meta.env.DEV) return '/api'
+  // 生产态：同源网关提供 /api，或显式 VITE_API_BASE
   return `${import.meta.env.VITE_API_BASE || ''}/api`
 }
 
@@ -77,6 +80,11 @@ http.interceptors.response.use(
 
     if (body.code === 0) return body.data
     if (body.code === 1004) return null
+    if (body.code === 2005) {
+      // 方案状态不允许该操作：属业务状态（如食材清单需先「确认/固定」方案），
+      // 由调用方决定如何展示，不弹全局错误 toast。
+      return Promise.reject(new ApiError(2005, body.message || CODE_MESSAGES[2005], { status: response.status }))
+    }
 
     if (body.code === 1002) {
       ElMessage.error(CODE_MESSAGES[1002])

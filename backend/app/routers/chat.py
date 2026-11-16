@@ -129,7 +129,7 @@ def _load_plan_payload(db: Session, plan_id: int, user_id: str) -> dict | None:
         return None
     if plan.user_id != user_id:
         return None
-    return _serialize_plan(plan)
+    return _serialize_plan(plan, db)
 
 
 def _parse_agent_sse(resp: httpx.Response):
