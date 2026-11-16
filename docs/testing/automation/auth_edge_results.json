@@ -1,0 +1,12 @@
+{
+  "time": "2026-11-16T17:40:54.425510",
+  "base": null,
+  "results": [
+    {
+      "id": "P0-static",
+      "title": "agent 全局 _token 并发串号（源码）",
+      "pass": false,
+      "note": "模块级 global _token 仍在，须改请求级参数或 contextvars"
+    }
+  ]
+}
