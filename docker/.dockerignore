@@ -1,0 +1,9 @@
+.git
+backend
+frontend
+agent
+tests
+docs
+deploy
+**/__pycache__
+**/*.pyc
