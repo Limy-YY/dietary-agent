@@ -23,6 +23,7 @@ Agent 侧仍按 v1 草案输出 nutrition / recipe_detail / sources / medical_hi
 """
 import json
 import logging
+import re
 
 import httpx
 from fastapi import APIRouter, Depends, Header
@@ -48,6 +49,20 @@ _PLACEHOLDER_REPLY = (
 
 # 建档所需的轻量字段（与契约 §3.3 必填项一致，v1.2 用 gender），clarify 时原样下发
 _REQUIRED_PROFILE_FIELDS = ["gender", "age", "height_cm", "weight_kg", "goal_code"]
+
+# 用户直接在对话里报身体指标时，要放行给 Agent 走建档（PUT /api/profile）。
+# 不放行的话「档案缺失 → 一律 clarify」会把建档入口堵死，无档案用户永远建档不了。
+_PROFILE_HINT_RE = re.compile(
+    r"(男|女)|\d{2,3}\s*(?:cm|厘米|CM|公分)|\d{2,3}\s*(?:kg|KG|公斤|斤)|"
+    r"(增肌|减脂|减肥|控糖|血糖|维持|养胃|调理|过敏|忌口)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_profile_input(message: str) -> bool:
+    """消息里是否带了可用于建档的身体指标/目标（命中 2 项即视为建档意图）。"""
+    return len(_PROFILE_HINT_RE.findall(message or "")) >= 2
+
 
 # Agent block type → 契约 artifact type；未列出的 v1 草案 block 一律丢弃
 _ARTIFACT_TYPE_MAP = {
@@ -229,8 +244,9 @@ def agent_chat(
         assistant_text: list[str] = []
 
         try:
-            if not _profile_exists(db, req.user_id):
-                # 契约 §2.7：信息不足必须 clarify 追问，不得编造档案
+            if not _profile_exists(db, req.user_id) and not _looks_like_profile_input(req.message):
+                # 契约 §2.7：信息不足必须 clarify 追问，不得编造档案。
+                # 例外：消息里已带身体指标/目标 → 不拦，交给 Agent 走建档（否则建档入口被堵死）。
                 yield _sse(
                     "clarify",
                     {
@@ -263,6 +279,15 @@ def agent_chat(
                         for event, data in _agent_events(req, conversation_id, token):
                             if event == "message":
                                 assistant_text.append(data.get("content") or "")
+                            elif event == "artifact":
+                                # Agent 生成方案后下发的卡片：把 payload.plan_id 回填到 done，
+                                # 前端靠 done.meal_plan_id 跳转 / 换候选 / 固定；不回填就一直是 null
+                                pid = (data.get("payload") or {}).get("plan_id")
+                                if meal_plan_id is None and pid not in (None, "", 0):
+                                    try:
+                                        meal_plan_id = int(pid)
+                                    except (TypeError, ValueError):
+                                        logger.warning("Agent artifact 的 plan_id 非整数：%r", pid)
                             elif event == "error":
                                 finish_reason = "error"
                             yield _sse(event, data)
