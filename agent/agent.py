@@ -294,12 +294,9 @@ def run(user_id: str, message: str) -> dict:
             text = f"收到！已结合你的{goal}档案，为你生成了今天的方案："
 
         return {
-            "text": text,
+            "text": text + "\n(注：以上知识由权威文献提供；生病请及时就医。可在面板中查看当前规划。)",
             "blocks": [
-                blocks.meal_card_block(plan),
-                blocks.nutrition_block(plan),
-                blocks.sources_block(),
-                blocks.anchor_block([{"panel": "current_plan", "label": "查看当前规划"}])
+                blocks.meal_card_block(plan)
             ],
         }
 
@@ -308,24 +305,34 @@ def run(user_id: str, message: str) -> dict:
         st = _user_state(user_id)
         plan = st.get("current_plan")
         if not plan:
-            return {"text": "还没有可以先换的方案。要不要我先生成今天的搭配？",
-                    "blocks": [blocks.anchor_block([{"panel": "current_plan", "label": "查看当前规划"}])]}
+            return {"text": "您还没有待确认的方案，要不要先生成今天的配餐？", "blocks": []}
+
+        # 找到要换的是哪一餐
         slot = _find_slot(plan, intent.get("meal_type") or "午餐")
-        if not slot or not slot.get("candidates"):
-            return {"text": "这一餐没有可换的候选。", "blocks": [blocks.meal_card_block(plan)]}
-        cans = slot["candidates"]
-        cur = next((i for i, c in enumerate(cans) if c["candidate_id"] == slot.get("selected_candidate_id")), -1)
-        nxt = cans[(cur + 1) % len(cans)]
-        slot["selected_candidate_id"] = nxt["candidate_id"]
-        slot["dishes"] = nxt["dishes"]
-        slot["kcal"] = nxt["kcal"]
-        slot["dish_text"] = nxt["name"].split("·")[-1].strip()
-        for day in plan["days"]:
-            day["kcal"] = round(sum(s["kcal"] for s in day["slots"]), 1)
-        plan["status"] = "draft"
-        dish_text = nxt["name"].split("·")[-1].strip()
-        return {"text": f"换好了。{slot['label']}换成「{dish_text}」，这一餐 {nxt['kcal']} kcal。方案还是草稿，确认后才生效。",
-                "blocks": [blocks.meal_card_block(plan), blocks.anchor_block([{"panel": "current_plan", "label": "查看当前规划"}])]}
+        if not slot:
+            return {"text": "没找到对应的餐位。", "blocks": [blocks.meal_card_block(plan)]}
+
+        try:
+            # 【核心修改】不自己在内存算了，直接调后端接口落库，并拿到最新的方案！
+            updated_plan = bc.swap_candidate(
+                meal_plan_id=plan.get("meal_plan_id", ""),
+                meal_slot_id=slot.get("meal_slot_id", "")
+            )
+
+            # 把后端返回的最新方案更新到会话状态里
+            st["current_plan"] = updated_plan
+
+            # 拿换好的新菜名拼到文字里
+            new_slot = _find_slot(updated_plan, intent.get("meal_type") or "午餐")
+            new_dish_text = new_slot.get("dish_text", "新候选")
+
+            return {
+                "text": f"换好啦！给你换成了 {new_dish_text}，这一顿 {new_slot.get('kcal')} kcal。你觉得怎么样？\n(可在面板中查看当前规划)",
+                # 【核心修改】只发前端认的 meal_card，删掉废弃的 anchor_block
+                "blocks": [blocks.meal_card_block(updated_plan)]
+            }
+        except Exception as e:
+            return {"text": f"换候选失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
 
     # 选用候选
     if kind == "choose_candidate":
@@ -333,86 +340,119 @@ def run(user_id: str, message: str) -> dict:
         plan = st.get("current_plan")
         if not plan:
             return {"text": "还没有方案。先生成一份吧。", "blocks": []}
+
         slot = _find_slot(plan, intent.get("meal_type") or "午餐")
         if not slot:
             return {"text": "没找到这一餐。", "blocks": [blocks.meal_card_block(plan)]}
+
         target = next((c for c in slot["candidates"] if c["name"] in (intent.get("name") or "")), None)
         if not target:
-            return {"text": "我没听清是哪个候选，可以把候选名称发我，或直接点候选卡片。", "blocks": [blocks.meal_card_block(plan)]}
-        slot["selected_candidate_id"] = target["candidate_id"]
-        slot["dishes"] = target["dishes"]
-        slot["kcal"] = target["kcal"]
-        plan["status"] = "draft"
-        return {"text": f"已选定「{target['name'].split('·')[-1].strip()}」，这一餐 {target['kcal']} kcal。",
-                "blocks": [blocks.meal_card_block(plan)]}
+            return {"text": "我没听清是哪个候选，可以把候选名称发我，或直接点候选卡片。",
+                    "blocks": [blocks.meal_card_block(plan)]}
+
+        try:
+            # 【核心修改】选用指定的菜，要多传一个 candidate_id 给后端
+            updated_plan = bc.swap_candidate(
+                meal_plan_id=plan.get("meal_plan_id", ""),
+                meal_slot_id=slot.get("meal_slot_id", ""),
+                candidate_id=target.get("candidate_id", "")
+            )
+
+            st["current_plan"] = updated_plan
+
+            return {
+                "text": f"已选定 {target['name'].split('(')[-1].strip()}，这一餐 {target['kcal']} kcal。",
+                "blocks": [blocks.meal_card_block(updated_plan)]
+            }
+        except Exception as e:
+            return {"text": f"选用失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
 
     # 确认 / 固定
     if kind == "confirm":
         st = _user_state(user_id)
         plan = st.get("current_plan")
         if not plan:
-            return {"text": "现在还没有待确认的方案。我可以先按你的档案排今天的三餐，也可以排一周。",
-                    "blocks": [blocks.anchor_block([{"panel": "current_plan", "label": "打开当前规划"}])]}
-        plan["status"] = "fixed"
-        st["plans"].insert(0, dict(plan))
-        shop = _shopping_list(plan)
-        total = sum(len(g["items"]) for g in shop["groups"])
-        return {"text": f"已确认，方案已生效。食材清单共 {total} 项，按类别分好了。",
-                "blocks": [blocks.meal_card_block(plan),
-                           blocks.shopping_list_block(shop),
-                           blocks.anchor_block([{"panel": "current_plan", "label": "当前规划"},
-                                                {"panel": "grocery", "label": "食材清单"},
-                                                {"panel": "history", "label": "历史方案"}])]}
+            return {"text": "现在还没有待确认的方案。我可以先按你的档案排今天的二餐，也可以排一周。", "blocks": []}
 
-    # 膳食报告
+        try:
+            # 【核心修改】调后端接口，把状态改成 fixed 并落库
+            updated_plan = bc.fix_meal_plan(meal_plan_id=plan.get("meal_plan_id", ""))
+
+            st["current_plan"] = updated_plan
+            st["plans"].insert(0, dict(updated_plan))
+
+            # 清单生成（保持原样即可，前端认 shopping_list_block）
+            shop = _shopping_list(updated_plan)
+            total = sum(len(g["items"]) for g in shop["groups"])
+
+            return {
+                "text": f"已确认，方案已生效。食材清单共 {total} 项，按类别分好了。\n(点击左下角菜单可查看历史方案与食材清单)",
+                # 【核心修改】保留 meal_card 和 shopping_list，删掉废弃的 anchor_block
+                "blocks": [
+                    blocks.meal_card_block(updated_plan),
+                    blocks.shopping_list_block(shop)
+                ]
+            }
+        except Exception as e:
+            return {"text": f"确认方案失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
+
     if kind == "report":
         scope = intent.get("scope", "week")
         st = _user_state(user_id)
         plan = st.get("current_plan")
 
         if not plan:
-            return {"text": "还没有可复盘的方案。先确认一份规划再生成报告吧。",
-                    "blocks": [blocks.anchor_block([{"panel": "report", "label": "膳食报告"}])]}
+            # 【修改】去掉了 anchor_block，改用文字引导
+            return {"text": "还没有可复盘的方案。先确认一份规划，再在面板里生成报告吧。", "blocks": []}
 
         plan_id = plan.get("plan_id", "")
 
         try:
-            # 如果 plan_id 是纯数字，说明是落库后的真实方案，调真实后端 API
             if str(plan_id).isdigit():
                 report = bc.nutrition_analysis(int(plan_id))
             else:
-                # 如果是离线字符串 ID，做离线 Mock 兜底，防止崩溃
                 report = {
                     "period_start": plan.get("plan_date", ""),
                     "summary": {"reference_hints": ["此为离线预览报告，方案落库后可查看精准微量分析。"]},
                     "key_micro_summary": {}
                 }
         except Exception as e:
-            return {"text": f"报告生成失败：{e}。可能是方案未落库或后端未响应。",
-                    "blocks": [blocks.anchor_block([{"panel": "report", "label": "膳食报告"}])]}
+            # 【修改】去掉了 anchor_block
+            return {"text": f"报告生成失败：{e}。可能是方案未落库或后端未响应。", "blocks": []}
 
         rb = _report_dict(report, scope)
-        return {"text": f"已为你生成{'本周' if scope == 'week' else '本次方案'}膳食报告。",
-                "blocks": [blocks.report_block(rb), blocks.sources_block(),
-                           blocks.anchor_block([{"panel": "report", "label": "打开膳食报告"}])]}
+        # 【修改】只留 report_block（它会在 blocks.py 里发合规的 nutrition_report），删掉来源和锚点卡片
+        return {
+            "text": f"已为你生成{'本周' if scope == 'week' else '本次方案'}膳食报告。\n(注：完整数据请在右侧面板查看)",
+            "blocks": [blocks.report_block(rb)]
+        }
 
     # 完整食谱 / 食材清单
     if kind == "recipe_detail":
         plan = _user_state(user_id).get("current_plan")
         if not plan:
             return {"text": "还没有方案可以展开。要先排今天的三餐吗？", "blocks": []}
-        return {"text": "完整食谱在下面，每道菜都有估量和热量。",
-                "blocks": [blocks.meal_plan_block(plan), blocks.nutrition_block(plan), blocks.sources_block()]}
+        # 【修改】原本发 3 种废弃卡片，现在严格遵照清单要求改发 meal_card_block
+        return {
+            "text": "完整食谱卡片已送达，每道菜都有估量和热量。",
+            "blocks": [blocks.meal_card_block(plan)]
+        }
 
     if kind == "shopping_list":
         plan = _user_state(user_id).get("current_plan")
         if not plan or plan.get("status") != "fixed":
-            return {"text": "方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类。",
-                    "blocks": [blocks.anchor_block([{"panel": "grocery", "label": "打开食材清单"}])]}
+            # 【修改】去掉了 anchor_block
+            return {
+                "text": "方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类，你可以在菜单里打开食材清单。",
+                "blocks": []}
+
         shop = _shopping_list(plan)
         total = sum(len(g["items"]) for g in shop["groups"])
-        return {"text": f"清单已经整理好，共 {total} 项，按类别分好了。",
-                "blocks": [blocks.shopping_list_block(shop), blocks.anchor_block([{"panel": "grocery", "label": "打开食材清单"}])]}
+        # 【修改】只发 shopping_list_block
+        return {
+            "text": f"清单已经整理好，共 {total} 项，按类别分好了。\n(点击左下角菜单可查看完整食材清单)",
+            "blocks": [blocks.shopping_list_block(shop)]
+        }
 
     # 反向营养 / 症状咨询
     if kind == "reverse_nutrition":
@@ -422,12 +462,15 @@ def run(user_id: str, message: str) -> dict:
             content = "；".join((it.get("content") or it.get("title") or "")[:120] for it in items[:3])
         except Exception:
             content = ""
+
         text = _llm_text(
             SYSTEM_INSTRUCTION + "\n针对症状咨询：给出可能的营养线索，措辞用「可能缺乏 / 建议关注」，不给定论，并注明仅供参考、不构成诊断、建议就医。",
             f"症状：{message}\n检索线索：{content or '无'}",
             "单看症状无法下结论，建议先就医检查；饮食上注意均衡，可结合档案做针对性调整（仅供参考，不构成诊断）。",
         )
-        return {"text": text, "blocks": [blocks.medical_hint_block(), blocks.sources_block()]}
+        # 【修改】就医提醒和文献来源已由 LLM 融入正文，不再发废弃的 medical_hint 和 sources 卡片
+        return {"text": text + "\n\n(注：以上信息由文献库提供参考，不可替代专业医疗诊断，如有不适请及时就医。)",
+                "blocks": []}
 
     # 知识问答
     if kind == "rag_qa":
@@ -439,17 +482,20 @@ def run(user_id: str, message: str) -> dict:
         except Exception:
             content = ""
             sources = []
+
         text = _llm_text(
             SYSTEM_INSTRUCTION + "\n用检索到的资料回答，结论标注出处，注意双口径（生重/成品）与油盐话术。",
             f"问题：{message}\n检索资料：{content or '无'}",
             "这个问题建议结合权威膳食指南理解；如需针对性建议，我可以按你的档案给出更具体的方案。",
         )
-        return {"text": text, "blocks": [blocks.rag_sources_block(sources)] if sources else []}
+        # 【修改】停用 rag_sources 卡片，来源通过 LLM 文本呈现
+        return {"text": text, "blocks": []}
 
     # 兜底
+    # 【修改】停用 anchor_block
     return {
-        "text": "这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告。",
-        "blocks": [blocks.anchor_block([{"panel": "current_plan", "label": "当前规划"}, {"panel": "report", "label": "膳食报告"}])],
+        "text": "这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告。\n(功能面板可在左下角菜单中找到)",
+        "blocks": [],
     }
 
 

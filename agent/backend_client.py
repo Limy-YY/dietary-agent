@@ -141,3 +141,21 @@ def generate_meal_plan(user_id: str, scope: str, start_date: str, end_date: str,
         "meal_types": meal_types
     }
     return _post("/api/meal-plan/week/generate", payload)
+
+# -----------------------------------------------------------------------------
+def swap_candidate(meal_plan_id: str, meal_slot_id: str, candidate_id: str = None) -> dict:
+    """换一换候选，落库持久化"""
+    payload = {
+        "meal_plan_id": meal_plan_id,
+        "meal_slot_id": meal_slot_id
+    }
+    if candidate_id:
+        payload["candidate_id"] = candidate_id
+    return _post("/api/meal-plan/candidate/swap", payload)
+
+def fix_meal_plan(meal_plan_id: str, selections: dict = None) -> dict:
+    """确认方案，落库持久化"""
+    payload = {"meal_plan_id": meal_plan_id}
+    if selections:
+        payload["selections"] = selections
+    return _post("/api/meal-plan/week/fix", payload)

@@ -47,8 +47,16 @@ def _slot_view(slot: dict) -> dict:
 def meal_card_block(plan: dict) -> dict:
     scope = plan.get("plan_type", "day")
     is_week = scope == "week"
-    first_day = plan["days"][0] if plan.get("days") else {"kcal": 0, "slots": []}
-    avg = round(sum(d["kcal"] for d in plan.get("days", [])) / max(1, len(plan.get("days", []))))
+
+    # 【核心修复 1】兼容后端新版 v1.2 的 ID 命名：优先取 meal_plan_id
+    real_plan_id = plan.get("meal_plan_id") or plan.get("plan_id", "")
+
+    # 【核心修复 2】兼容单日/单餐的 slots 路径：外层没有 days 时，直接去外层找 slots
+    days_list = plan.get("days", [])
+    root_slots = plan.get("slots", [])
+    first_day = days_list[0] if days_list else {"kcal": plan.get("kcal", 0), "slots": root_slots}
+
+    avg = round(sum(d.get("kcal", 0) for d in days_list) / max(1, len(days_list))) if days_list else 0
     candidate_count = len(first_day.get("slots", [{}])[0].get("candidates", [])) if first_day.get("slots") else 0
 
     goal = plan.get("goal_text", "")
@@ -63,8 +71,8 @@ def meal_card_block(plan: dict) -> dict:
 
     return {
         "type": "meal_card",
-        "plan_id": plan.get("plan_id", ""),
-        "card_id": f"card_{plan.get('plan_id', '')}",
+        "plan_id": real_plan_id,  # 换成兼容后的真实 ID
+        "card_id": f"card_{real_plan_id}",
         "title": title,
         "subtitle": subtitle,
         "scope": scope,
@@ -73,6 +81,7 @@ def meal_card_block(plan: dict) -> dict:
         "target_kcal": plan.get("goal_energy_kcal", 0),
         "total_kcal": first_day.get("kcal", 0),
         "range_text": plan.get("range_text", ""),
+        # 取 first_day 里的 slots，现在无论是从 days 里拿的还是外层拿的，都不会为空了
         "slots": [] if is_week else [_slot_view(s) for s in first_day.get("slots", [])],
         "days": [
             {
@@ -82,7 +91,7 @@ def meal_card_block(plan: dict) -> dict:
                 "kcal": d.get("kcal", 0),
                 "slots": [_slot_view(s) for s in d.get("slots", [])],
             }
-            for d in plan.get("days", [])
+            for d in days_list
         ] if is_week else [],
         "reason": {
             "summary": "按档案与近期微量摄入平衡排出这套方案",
@@ -92,79 +101,79 @@ def meal_card_block(plan: dict) -> dict:
     }
 
 
-def meal_plan_block(plan: dict) -> dict:
-    return {
-        "type": "meal_plan",
-        "plan_id": plan.get("plan_id", ""),
-        "view": "week" if plan.get("plan_type") == "week" else "day",
-        "title": plan.get("title", ""),
-        "subtitle": plan.get("subtitle", ""),
-        "days": [
-            {
-                "date": d.get("date", ""),
-                "weekday": d.get("weekday", ""),
-                "is_today": d.get("is_today", False),
-                "kcal": d.get("kcal", 0),
-                "slots": [_slot_view(s) for s in d.get("slots", [])],
-            }
-            for d in plan.get("days", [])
-        ],
-    }
+# def meal_plan_block(plan: dict) -> dict:
+#     return {
+#         "type": "meal_plan",
+#         "plan_id": plan.get("plan_id", ""),
+#         "view": "week" if plan.get("plan_type") == "week" else "day",
+#         "title": plan.get("title", ""),
+#         "subtitle": plan.get("subtitle", ""),
+#         "days": [
+#             {
+#                 "date": d.get("date", ""),
+#                 "weekday": d.get("weekday", ""),
+#                 "is_today": d.get("is_today", False),
+#                 "kcal": d.get("kcal", 0),
+#                 "slots": [_slot_view(s) for s in d.get("slots", [])],
+#             }
+#             for d in plan.get("days", [])
+#         ],
+#     }
 
 
-def nutrition_block(plan: dict) -> dict:
-    return {"type": "nutrition", "plan_id": plan.get("plan_id", ""), **plan.get("nutrition", {})}
+# def nutrition_block(plan: dict) -> dict:
+#     return {"type": "nutrition", "plan_id": plan.get("plan_id", ""), **plan.get("nutrition", {})}
 
 
-def recipe_block(plan: dict) -> dict:
-    meals = []
-    for s in (plan.get("days", [{}])[0].get("slots", [])):
-        meals.append({
-            "label": s.get("label", ""),
-            "time": s.get("time", ""),
-            "color": s.get("color", ""),
-            "kcal": s.get("kcal", 0),
-            "total": s.get("kcal", 0),
-            "dishes": [
-                {"name": d.get("name", ""), "amount": d.get("amount", ""),
-                 "kcal": d.get("kcal", 0), "tip": d.get("tip", ""), "steps": d.get("steps", [])}
-                for d in s.get("dishes", [])
-            ],
-        })
-    return {"type": "recipe_detail", "title": f"{plan.get('title', '')} · 详细食谱", "meals": meals}
+# def recipe_block(plan: dict) -> dict:
+#     meals = []
+#     for s in (plan.get("days", [{}])[0].get("slots", [])):
+#         meals.append({
+#             "label": s.get("label", ""),
+#             "time": s.get("time", ""),
+#             "color": s.get("color", ""),
+#             "kcal": s.get("kcal", 0),
+#             "total": s.get("kcal", 0),
+#             "dishes": [
+#                 {"name": d.get("name", ""), "amount": d.get("amount", ""),
+#                  "kcal": d.get("kcal", 0), "tip": d.get("tip", ""), "steps": d.get("steps", [])}
+#                 for d in s.get("dishes", [])
+#             ],
+#         })
+#     return {"type": "recipe_detail", "title": f"{plan.get('title', '')} · 详细食谱", "meals": meals}
 
 
-def sources_block() -> dict:
-    return {"type": "sources", "title": "参考来源", "items": SOURCES}
-
-
-def anchor_block(items: list[dict]) -> dict:
-    return {"type": "anchor", "items": items}
-
-
-def medical_hint_block(text: str | None = None) -> dict:
-    return {
-        "type": "medical_hint",
-        "level": "warn",
-        "title": "这不是医学诊断",
-        "text": text or "营养建议只作饮食参考，不能替代检查与诊断。",
-        "action_label": "查看参考来源",
-    }
-
-
-def rag_sources_block(items: list[dict]) -> dict:
-    """RAG 检索结果 → sources block（用条目里的 source/source_id/title）。"""
-    out = []
-    for it in items:
-        if it.get("title") or it.get("source"):
-            out.append({
-                "title": it.get("title") or it.get("source") or "",
-                "publisher": "",
-                "published_at": "",
-                "url": it.get("source_id") or "",
-                "snippet": (it.get("content") or "")[:120],
-            })
-    return {"type": "sources", "title": "参考来源", "items": out or SOURCES}
+# def sources_block() -> dict:
+#     return {"type": "sources", "title": "参考来源", "items": SOURCES}
+#
+#
+# def anchor_block(items: list[dict]) -> dict:
+#     return {"type": "anchor", "items": items}
+#
+#
+# def medical_hint_block(text: str | None = None) -> dict:
+#     return {
+#         "type": "medical_hint",
+#         "level": "warn",
+#         "title": "这不是医学诊断",
+#         "text": text or "营养建议只作饮食参考，不能替代检查与诊断。",
+#         "action_label": "查看参考来源",
+#     }
+#
+#
+# def rag_sources_block(items: list[dict]) -> dict:
+#     """RAG 检索结果 → sources block（用条目里的 source/source_id/title）。"""
+#     out = []
+#     for it in items:
+#         if it.get("title") or it.get("source"):
+#             out.append({
+#                 "title": it.get("title") or it.get("source") or "",
+#                 "publisher": "",
+#                 "published_at": "",
+#                 "url": it.get("source_id") or "",
+#                 "snippet": (it.get("content") or "")[:120],
+#             })
+#     return {"type": "sources", "title": "参考来源", "items": out or SOURCES}
 
 
 def shopping_list_block(list_dict: dict) -> dict:
@@ -179,4 +188,4 @@ def shopping_list_block(list_dict: dict) -> dict:
 
 
 def report_block(report: dict) -> dict:
-    return {"type": "report", **report, "expanded": False}
+    return {"type": "nutrition_report", **report, "expanded": False}
