@@ -46,18 +46,23 @@ defineEmits(['phrase', 'retry'])
 
 <style scoped>
 /* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */
-.md :deep(p) { margin: 0 0 8px; }
+.md :deep(p) { margin: 0 0 6px; }
 .md :deep(p:last-child) { margin-bottom: 0; }
 .md :deep(ul),
-.md :deep(ol) { margin: 0 0 8px; padding-left: 18px; }
-.md :deep(li) { margin: 3px 0; }
+.md :deep(ol) { margin: 0 0 6px; padding-left: 18px; }
+.md :deep(li) { margin: 2px 0; }
 .md :deep(h1),
 .md :deep(h2),
 .md :deep(h3),
-.md :deep(h4) { margin: 12px 0 6px; font-weight: 600; line-height: 1.4; }
+.md :deep(h4) { margin: 10px 0 4px; font-weight: 600; line-height: 1.4; }
 .md :deep(h2) { font-size: 16px; }
 .md :deep(h3) { font-size: 15px; }
 .md :deep(strong) { font-weight: 600; }
+.md :deep(hr) { border: none; border-top: 1px solid var(--border-soft, #e5e7eb); margin: 8px 0; }
+.md :deep(table) { border-collapse: collapse; margin: 0 0 8px; font-size: 13.5px; max-width: 100%; }
+.md :deep(th),
+.md :deep(td) { border: 1px solid var(--border-soft, #e5e7eb); padding: 6px 10px; text-align: left; vertical-align: top; }
+.md :deep(th) { background: #f2f4f3; font-weight: 600; }
 .md :deep(code) {
   background: #f2f4f3;
   padding: 1px 5px;
