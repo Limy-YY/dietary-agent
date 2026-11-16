@@ -196,14 +196,19 @@ def meal_card_block(plan: dict) -> dict:
 
 def shopping_list_block(list_dict: dict) -> dict:
     groups = list_dict.get("groups", [])
-    total = sum(len(g.get("items", [])) for g in groups)
+    total = list_dict.get("total_items") or sum(len(g.get("items", [])) for g in groups)
     return {
         "type": "shopping_list",
         "title": "食材清单",
         "summary": f"共 {total} 项，分 {len(groups)} 组",
+        "total_items": total,
+        "meal_plan_id": list_dict.get("meal_plan_id", ""),
         "groups": groups,
     }
 
 
 def report_block(report: dict) -> dict:
-    return {"type": "nutrition_report", **report, "expanded": False}
+    # block type 用 "report"：后端 chat.py 的 _ARTIFACT_TYPE_MAP 把 "report" 映射成
+    # 契约 artifact "nutrition_report"；直接发 "nutrition_report" 会被当未知 type 丢弃。
+    # 这里原样透传后端 /nutrition/analysis 的方案级报告，由前端 normalizeReport 渲染。
+    return {"type": "report", **report, "expanded": False}

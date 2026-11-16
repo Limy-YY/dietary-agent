@@ -154,6 +154,16 @@ def generate_meal_plan(user_id: str, scope: str, start_date: str, end_date: str,
     return _post("/api/meal-plan/week/generate", payload)
 
 # -----------------------------------------------------------------------------
+def get_meal_plan(meal_plan_id) -> dict:
+    """按 id 取方案详情（API-04），含 slots / candidates / dishes 四级结构。"""
+    return _get(f"/api/meal-plan/{meal_plan_id}")
+
+
+def get_shopping_list(meal_plan_id) -> dict:
+    """取方案食材清单（API-27，fix 时已按食材级生成落库）。"""
+    return _get("/api/shopping-list", {"meal_plan_id": meal_plan_id})
+
+
 def swap_candidate(meal_plan_id: str, meal_slot_id: str, candidate_id: str = None) -> dict:
     """换一换候选，落库持久化"""
     payload = {

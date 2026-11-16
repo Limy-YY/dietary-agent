@@ -60,6 +60,8 @@ _INTENT_SYSTEM = (
     'profile_build（用户描述身体指标/目标/过敏，需建档）、rag_qa（营养知识问答）、'
     'explain（解释当前方案为什么这样搭/搭配理由）、'
     'reverse_nutrition（症状咨询，如口角炎/乏力/掉发）、chat（闲聊）。\n'
+    '注意：只有用户明确要求「生成/推荐/安排 菜单、三餐、食谱」时才归 plan_*；'
+    '询问营养知识、食物功效、该怎么吃、忌口建议这类问题一律归 rag_qa。\n'
     'JSON 字段：{"intent":"...", "meal_type":"早餐|午餐|晚餐|null", '
     '"profile":{"gender":"男|女","age":0,"height_cm":0,"weight_kg":0,'
     '"goal_code":"maintain|fat_loss|muscle_gain|glucose_control|digestive_health","allergies":[],"conditions":{},"name":""}}。'
@@ -94,23 +96,26 @@ def _regex_intent(message: str) -> dict | None:
     if has(r"选用|就用|选这个|选方案"):
         label = next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")
         return {"intent": "choose_candidate", "meal_type": label, "name": m}
-    if has(r"确认|固定|就这个|可以了|没问题"):
+    if has(r"确认|固定|就这个|就它|就选|就这么|定了"):
         return {"intent": "confirm"}
     if has(r"报告|复盘"):
         scope = "month" if has(r"月|30天|30 天") else "week"
         return {"intent": "report", "scope": scope}
     if has(r"完整食谱|详细食谱|做法|步骤"):
         return {"intent": "recipe_detail"}
-    if has(r"食材|清单|买菜|采购"):
+    if has(r"食材清单|清单|买菜|采购"):
         return {"intent": "shopping_list"}
-    if has(r"为什么.*(这样|这么|如此).*(搭|配)|搭配(理由|依据)|配餐(理由|依据)|怎么搭|搭配讲究"):
+    # 解释「为什么这样搭」：只认明确追问依据的话术，避免「怎么搭配饮食」这类营养咨询被误判成解释
+    if has(r"为什么.*(这样|这么|如此).*(搭|配)|搭配(理由|依据)|配餐(理由|依据)"):
         return {"intent": "explain"}
     if has(r"一周|七天|7天|整周|一周食谱"):
         return {"intent": "plan_week"}
-    if has(r"一餐|推荐|午餐|晚餐|早餐") and not has(r"三餐|一日"):
+    # 配餐类意图必须带「生成/排/推荐菜单」这类明确动作，不能只靠「推荐/吃什么/食谱/搭配」几个词，
+    # 否则「推荐补钙食物」「贫血吃什么」「高血压食谱」这类营养咨询会被误判成配餐、跳出方案。
+    if has(r"推荐(一餐|午餐|晚餐|早餐)|来一餐|(午餐|晚餐|早餐)(吃什么|怎么配|推荐)"):
         label = next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")
         return {"intent": "plan_meal", "meal_type": label}
-    if has(r"三餐|一日|今天|明天|吃什么|搭配|配餐|食谱"):
+    if has(r"三餐|一日三餐|今天吃|明天吃|生成(食谱|菜单|三餐)|排(食谱|菜单|三餐)"):
         return {"intent": "plan_day"}
     return None
 
@@ -187,43 +192,63 @@ def _gen(user_id: str, params: dict, profile: dict) -> dict:
 
 
 def _shopping_list(plan: dict) -> dict:
-    """由方案聚合出食材清单（按简单类别分组）。"""
-    cat_of = {}
-    groups: dict[str, dict] = {}
-    for day in plan.get("days", []):
-        for slot in day.get("slots", []):
-            for d in slot.get("dishes", []):
-                name = d["name"]
-                cat = cat_of.get(name)
-                if cat is None:
-                    n = name
-                    if re.search(r"菜|瓜|茄|椒|芦笋|木耳|海带|菌|菇|笋|菠菜|芥蓝|空心菜|油麦菜|娃娃菜|包菜|西兰花|萝卜|白菜", n):
-                        cat = "🥬 蔬菜类"
-                    elif re.search(r"鸡|牛|猪|鱼|虾|肉|排|三文鱼|鳕鱼|鲈鱼|龙利鱼|鸡胸|鸡腿|排骨|蛋", n):
-                        cat = "🍗 肉禽蛋水产"
-                    elif re.search(r"米|面|吐司|馒头|红薯|玉米|藜麦|燕麦|小米|麦|饼|面包", n):
-                        cat = "🌾 主食杂粮"
-                    elif re.search(r"蓝莓|苹果|香蕉|橙子|牛油果|核桃|杏仁|莓|梨", n):
-                        cat = "🍎 水果坚果"
-                    elif re.search(r"豆浆|酸奶|牛奶|豆腐|豆", n):
-                        cat = "🥛 奶豆饮品"
-                    else:
-                        cat = "🧂 其他"
-                    cat_of[name] = cat
-                g = groups.setdefault(cat, {"category": cat, "items": []})
-                if not any(it["name"] == name for it in g["items"]):
-                    g["items"].append({"item_id": f"it-{cat}-{name}", "name": name,
-                                       "amount": d.get("amount", ""), "is_staple": bool(d.get("is_staple")),
-                                       "checked": False})
-    return {"meal_plan_id": plan.get("plan_id", ""), "groups": list(groups.values())}
+    """取方案食材清单：直接走后端 /shopping-list（fix 时已按食材级生成落库），Agent 不重算。
+
+    后端返回 {shopping_list_id, meal_plan_id, total_items, groups[{category,
+    items[{ingredient_id, name, estimated_quantity, unit}]}]}，与前端
+    normalizeGroups 期望的食材级结构一致（数量为估算克数，非菜名拼接）。
+    """
+    meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
+    return bc.get_shopping_list(meal_plan_id)
+
+
+# 餐次口径归一：中文全称 / 英文 / 单字 → 统一单字（早/午/晚）。
+# 用于把「更换早餐候选」里的「早餐」与后端 slot.meal_type 的「早」对上。
+_MEAL_KEY = {
+    "早餐": "早", "breakfast": "早", "早": "早",
+    "午餐": "午", "lunch": "午", "午": "午",
+    "晚餐": "晚", "dinner": "晚", "晚": "晚",
+}
+
+
+def _meal_key(label) -> str:
+    if not label:
+        return ""
+    return _MEAL_KEY.get(str(label).strip(), str(label).strip())
+
+
+def _iter_slots(plan: dict):
+    """遍历方案全部餐位：兼容后端 v1.2（顶层 slots）与旧 days/slots 结构。"""
+    for s in plan.get("slots") or []:
+        yield s
+    for day in plan.get("days") or []:
+        for s in day.get("slots") or []:
+            yield s
 
 
 def _find_slot(plan: dict, label: str) -> dict | None:
-    for day in plan.get("days", []):
-        for s in day.get("slots", []):
-            if label in s.get("label", "") or label in s.get("meal_type", ""):
-                return s
+    target = _meal_key(label)
+    for s in _iter_slots(plan):
+        if _meal_key(s.get("meal_type") or s.get("label") or "") == target:
+            return s
     return None
+
+
+def _slot_dish_text(slot: dict) -> str:
+    """后端 slot → 已选候选菜名串（用于换候选后的回执文案）。"""
+    picked = slot.get("selected_candidate") or ((slot.get("candidates") or [None])[0])
+    dishes = (picked or {}).get("dishes") or []
+    return " + ".join(str(d.get("name", "")) for d in dishes)
+
+
+def _candidate_name(candidate: dict) -> str:
+    """后端候选 → 菜名串（与前端 candidateView.name 同构：dishes[].name 用 ' + ' 连接）。
+
+    后端 `_serialize_candidate` 没有 name 字段，菜名在 dishes[].name 里；
+    「选用」分支靠它把用户消息里的候选名和方案里的候选对上。
+    """
+    dishes = (candidate or {}).get("dishes") or []
+    return " + ".join(str(d.get("name", "")) for d in dishes)
 
 
 # ---------------------------------------------------------------- 主执行
@@ -346,21 +371,28 @@ def run(user_id: str, message: str) -> dict:
             return {"text": "没找到对应的餐位。", "blocks": [blocks.meal_card_block(plan)]}
 
         try:
-            # 【核心修改】不自己在内存算了，直接调后端接口落库，并拿到最新的方案！
-            updated_plan = bc.swap_candidate(
-                meal_plan_id=plan.get("meal_plan_id", ""),
-                meal_slot_id=slot.get("meal_slot_id", "")
+            meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
+            # 【修复】swap 接口只回部分结果（candidate + macro_delta），不携带完整 slots；
+            # 这里调它只负责落库，完整方案再按 id 重新拉取，避免状态被部分结果覆盖。
+            bc.swap_candidate(
+                meal_plan_id=meal_plan_id,
+                meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
             )
-
-            # 把后端返回的最新方案更新到会话状态里
+            updated_plan = bc.get_meal_plan(meal_plan_id)
             st["current_plan"] = updated_plan
 
-            # 拿换好的新菜名拼到文字里
+            # 拿换好的新菜名 / 热量拼到文字里
             new_slot = _find_slot(updated_plan, intent.get("meal_type") or "午餐")
-            new_dish_text = new_slot.get("dish_text", "新候选")
+            new_dish_text = _slot_dish_text(new_slot) if new_slot else "新候选"
+            kcal_text = "热量待估"
+            if new_slot:
+                picked = new_slot.get("selected_candidate") or ((new_slot.get("candidates") or [None])[0])
+                k = (picked or {}).get("macro_estimate", {}).get("kcal")
+                if k is not None:
+                    kcal_text = f"{k} kcal"
 
             return {
-                "text": f"换好啦！给你换成了 {new_dish_text}，这一顿 {new_slot.get('kcal')} kcal。你觉得怎么样？\n(可在面板中查看当前规划)",
+                "text": f"换好啦！给你换成了 {new_dish_text}，这一顿 {kcal_text}。你觉得怎么样？\n(可在面板中查看当前规划)",
                 # 【核心修改】只发前端认的 meal_card，删掉废弃的 anchor_block
                 "blocks": [blocks.meal_card_block(updated_plan)]
             }
@@ -378,23 +410,34 @@ def run(user_id: str, message: str) -> dict:
         if not slot:
             return {"text": "没找到这一餐。", "blocks": [blocks.meal_card_block(plan)]}
 
-        target = next((c for c in slot["candidates"] if c["name"] in (intent.get("name") or "")), None)
+        # 候选没有 name 字段（菜名在 dishes[].name）。用「菜名串完整出现在消息里」匹配，
+        # 取最长命中（最具体）避免子集候选误命中（如单菜「米饭」被「米饭 + 清炒西兰花」抢走）。
+        msg = intent.get("name") or ""
+        target = None
+        for c in slot.get("candidates") or []:
+            sig = _candidate_name(c)
+            if sig and sig in msg:
+                if target is None or len(sig) > len(_candidate_name(target)):
+                    target = c
         if not target:
             return {"text": "我没听清是哪个候选，可以把候选名称发我，或直接点候选卡片。",
                     "blocks": [blocks.meal_card_block(plan)]}
 
         try:
-            # 【核心修改】选用指定的菜，要多传一个 candidate_id 给后端
-            updated_plan = bc.swap_candidate(
-                meal_plan_id=plan.get("meal_plan_id", ""),
-                meal_slot_id=slot.get("meal_slot_id", ""),
-                candidate_id=target.get("candidate_id", "")
+            # 【核心修改】选用指定候选：多传 candidate_id；接口只落库，完整方案再按 id 拉取。
+            meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
+            bc.swap_candidate(
+                meal_plan_id=meal_plan_id,
+                meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
+                candidate_id=target.get("candidate_id", ""),
             )
-
+            updated_plan = bc.get_meal_plan(meal_plan_id)
             st["current_plan"] = updated_plan
 
+            kcal = (target.get("macro_estimate") or {}).get("kcal")
+            kcal_text = f"{kcal} kcal" if kcal is not None else "热量待估"
             return {
-                "text": f"已选定 {target['name'].split('(')[-1].strip()}，这一餐 {target['kcal']} kcal。",
+                "text": f"已选定 {_candidate_name(target)}，这一顿 {kcal_text}。",
                 "blocks": [blocks.meal_card_block(updated_plan)]
             }
         except Exception as e:
@@ -414,9 +457,9 @@ def run(user_id: str, message: str) -> dict:
             st["current_plan"] = updated_plan
             st["plans"].insert(0, dict(updated_plan))
 
-            # 清单生成（保持原样即可，前端认 shopping_list_block）
+            # 清单直接取后端 /shopping-list（fix 已按食材级落库），不再本地按 days 重算
             shop = _shopping_list(updated_plan)
-            total = sum(len(g["items"]) for g in shop["groups"])
+            total = shop.get("total_items") or sum(len(g.get("items", [])) for g in shop.get("groups", []))
 
             return {
                 "text": f"已确认，方案已生效。食材清单共 {total} 项，按类别分好了。\n(点击左下角菜单可查看历史方案与食材清单)",
@@ -430,7 +473,6 @@ def run(user_id: str, message: str) -> dict:
             return {"text": f"确认方案失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
 
     if kind == "report":
-        scope = intent.get("scope", "week")
         st = _user_state(user_id)
         plan = st.get("current_plan")
 
@@ -438,26 +480,24 @@ def run(user_id: str, message: str) -> dict:
             # 【修改】去掉了 anchor_block，改用文字引导
             return {"text": "还没有可复盘的方案。先确认一份规划，再在面板里生成报告吧。", "blocks": []}
 
-        plan_id = plan.get("plan_id", "")
+        # 后端方案主键是 meal_plan_id（没有 plan_id），v1.2 报告只做方案级（report_type=plan）。
+        plan_id = plan.get("meal_plan_id") or plan.get("plan_id", "")
 
         try:
             if str(plan_id).isdigit():
                 report = bc.nutrition_analysis(int(plan_id))
             else:
-                report = {
-                    "period_start": plan.get("plan_date", ""),
-                    "summary": {"reference_hints": ["此为离线预览报告，方案落库后可查看精准微量分析。"]},
-                    "key_micro_summary": {}
-                }
+                return {"text": "方案还没落库，暂时生成不了报告。先确认一份规划吧。", "blocks": []}
         except Exception as e:
             # 【修改】去掉了 anchor_block
             return {"text": f"报告生成失败：{e}。可能是方案未落库或后端未响应。", "blocks": []}
 
-        rb = _report_dict(report, scope)
-        # 【修改】只留 report_block（它会在 blocks.py 里发合规的 nutrition_report），删掉来源和锚点卡片
+        # 【修改】后端 /nutrition/analysis 返回的是完整方案级报告（macro_summary/key_micro_summary/
+        # summary.daily_trend/period_start...），原样交给 report_block，由前端 normalizeReport 渲染，
+        # 不再在 Agent 侧转成残缺的「视图」结构。
         return {
-            "text": f"已为你生成{'本周' if scope == 'week' else '本次方案'}膳食报告。\n(注：完整数据请在右侧面板查看)",
-            "blocks": [blocks.report_block(rb)]
+            "text": "已为你生成方案膳食报告。\n(注：完整数据请在右侧面板查看)",
+            "blocks": [blocks.report_block(report)]
         }
 
     # 完整食谱 / 食材清单
@@ -479,8 +519,11 @@ def run(user_id: str, message: str) -> dict:
                 "text": "方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类，你可以在菜单里打开食材清单。",
                 "blocks": []}
 
-        shop = _shopping_list(plan)
-        total = sum(len(g["items"]) for g in shop["groups"])
+        try:
+            shop = _shopping_list(plan)
+            total = shop.get("total_items") or sum(len(g.get("items", [])) for g in shop.get("groups", []))
+        except Exception as e:
+            return {"text": f"食材清单读取失败：{e}", "blocks": []}
         # 【修改】只发 shopping_list_block
         return {
             "text": f"清单已经整理好，共 {total} 项，按类别分好了。\n(点击左下角菜单可查看完整食材清单)",
@@ -517,7 +560,14 @@ def run(user_id: str, message: str) -> dict:
         material = _explain_material(plan)
         text = _llm_text(
             SYSTEM_INSTRUCTION
-            + "\n用下方方案数据解释「为什么这样搭」：逐条对应数据（能量/蛋白/微量/结构/油盐），只引用给定字段，没有的写「该项未提供」，不要编造。",
+            + "\n用下方方案数据解释「为什么这样搭」。\n"
+              "排版要求（务必遵守，输出要像主流大模型那样简洁美观）：\n"
+              "- 小节标题用「### 」，要点用「- 」或「1. 2. 3.」列表，关键数值与结论用 **加粗**；\n"
+              "- 列表项之间、标题与正文之间都不要留空行（空行会让页面出现大片空白、显得稀疏）；\n"
+              "- 禁止「---」分隔线、禁止逐字复述餐卡里已展示的数据；\n"
+              "- 需要表格时用「| 列1 | 列2 |」并在下一行写「|---|---|」，不要用制表符；\n"
+              "- 按「能量 / 蛋白 / 微量 / 结构 / 油盐」五条组织，每条 1~3 行，没数据的字段一句话写「该项未提供」，不要空谈；\n"
+              "- 结尾 2~3 行总结；不编造、不下达标结论（null≠0，依据码不能代替实测）。",
             f"用户问：{message}\n方案数据：{json.dumps(material, ensure_ascii=False)}",
             "这套方案是结合你的档案与目标排的：主食打底保证供能，配菜兼顾蛋白质与蔬菜，具体依据如下…",
         )
@@ -552,41 +602,3 @@ def run(user_id: str, message: str) -> dict:
 def _week_start() -> str:
     d = date.today()
     return (d - timedelta(days=d.weekday())).isoformat()
-
-
-def _report_dict(report: dict, scope: str) -> dict:
-    """后端新版方案级营养报告 -> report block 数据。"""
-    micro_summary = report.get("key_micro_summary") or {}
-    micro_items = []
-
-    # 适配新版 API 返回的字典结构
-    for k, v in micro_summary.items():
-        pct = v.get("covered_pct") or 0
-        status = "ok" if pct >= 80 else "warn" if pct >= 50 else "danger"
-        if v.get("status") == "参考提示":
-            status = "ok"
-
-        micro_items.append({
-            "name": v.get("name_zh") or k,
-            "value": f"{pct}%" if pct else "—",
-            "ring_percent": pct,
-            "status": status,
-            "note": v.get("status") or "详见周报"
-        })
-
-    summary = report.get("summary") or {}
-    hints = summary.get("reference_hints") or []
-
-    return {
-        "report_id": f"report_{report.get('nutrition_report_id', 'mock')}",
-        "scope": scope,
-        "headline": "本周膳食报告" if scope == "week" else "方案膳食报告",
-        "meta": {"range_start": report.get("period_start", ""), "range_end": report.get("period_end", ""),
-                 "generated_at": date.today().isoformat(), "valid_days": 0, "total_meals": 0,
-                 "target_kcal": 0},
-        "summary_text": hints[0] if hints else "微量元素平衡已分析。",
-        "macro": {"center_value": "0", "center_label": "kcal 日均", "segments": []},
-        "micro": {"title": "关键微量元素覆盖", "items": micro_items},
-        "daily_trend": [],
-        "insights": hints[:3],
-    }
