@@ -258,25 +258,49 @@ def run(user_id: str, message: str) -> dict:
     # 生成方案
     if kind in ("plan_day", "plan_week", "plan_meal"):
         if profile is None:
-            return {"text": "还没有你的档案。可以先告诉我：性别、年龄、身高体重、目标和过敏，我建档后马上配餐。", "blocks": []}
-        params = {"scope": {"plan_day": "day", "plan_week": "week", "plan_meal": "meal"}[kind]}
-        if kind == "plan_meal":
-            params["meal_type"] = {"早餐": "早", "午餐": "午", "晚餐": "晚"}.get(intent.get("meal_type") or "午餐", "午")
+            return {"text": "还没有你的档案。可以先告诉我：性别、年龄、身高体重、目标和过敏，我建档后马上配餐。 ",
+                    "blocks": []}
+
+        scope = {"plan_day": "day", "plan_week": "week", "plan_meal": "meal"}[kind]
+
         try:
-            plan = _gen(user_id, params, profile)
+            # 1. 构造真实后端的日期参数
+            today = date.today()
+            end_day = today + timedelta(days=6) if scope == "week" else today
+
+            # 映射餐位英文（兼容后端标准枚举）
+            mt_map = {"早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner"}
+            req_meal_types = ["breakfast", "lunch", "dinner"] if scope != "meal" else [
+                mt_map.get(intent.get("meal_type", ""), "lunch")]
+
+            # 2. 【核心替换】直接走网络请求调后端真实 API，确保方案落库并生成真实的 ID！
+            plan = bc.generate_meal_plan(
+                user_id=user_id,
+                scope=scope,
+                start_date=str(today),
+                end_date=str(end_day),
+                meal_types=req_meal_types
+            )
         except Exception as e:
             return {"text": f"方案没排出来：{e}", "blocks": []}
+
         goal = _goal_text(profile)
         if kind == "plan_week":
-            text = f"收到！按你的{goal}档案排了接下来七天（{plan['range_text']}）的三餐，食材尽量不重复："
+            # 去掉了对 plan['range_text'] 的依赖，避免后端新 JSON 没有该字段报错
+            text = f"收到！按你的{goal}档案排了接下来七天（{today} 至 {end_day}）的三餐，食材尽量不重复："
         elif kind == "plan_meal":
             text = "给你挑了三个方向，热量都落在本餐区间，点一个就能确认："
         else:
             text = f"收到！已结合你的{goal}档案，为你生成了今天的方案："
+
         return {
             "text": text,
-            "blocks": [blocks.meal_card_block(plan), blocks.nutrition_block(plan),
-                       blocks.sources_block(), blocks.anchor_block([{"panel": "current_plan", "label": "查看当前规划"}])],
+            "blocks": [
+                blocks.meal_card_block(plan),
+                blocks.nutrition_block(plan),
+                blocks.sources_block(),
+                blocks.anchor_block([{"panel": "current_plan", "label": "查看当前规划"}])
+            ],
         }
 
     # 换候选

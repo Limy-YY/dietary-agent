@@ -17,7 +17,7 @@ SOURCES = [
 
 def _slot_view(slot: dict) -> dict:
     return {
-        "slot_id": slot.get("slot_id", ""),
+        "meal_slot_id": slot.get("meal_slot_id", ""),  # 修改：对齐 v1.2 契约，不用 slot_id
         "meal_type": slot.get("meal_type", "lunch"),
         "label": slot.get("label", ""),
         "time": slot.get("time", ""),
@@ -34,6 +34,7 @@ def _slot_view(slot: dict) -> dict:
                 "name": c.get("name", ""),
                 "kcal": c.get("kcal", 0),
                 "desc": c.get("desc", ""),
+                "macro_estimate": c.get("macro_estimate", {}), # 新增：补充前端要求的宏量字段
                 "dishes": c.get("dishes", []),
             }
             for c in slot.get("candidates", [])

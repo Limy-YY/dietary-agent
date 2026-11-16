@@ -115,3 +115,15 @@ def rag_query(query: str, top_k: int = 5):
 
 def reverse_nutrition(symptoms: str, top_k: int = 5):
     return _post("/api/agent/reverse-nutrition", {"symptoms": symptoms, "top_k": top_k})
+
+# ---------------------------------------------------------------- 调用后端接口生成方案并落库
+def generate_meal_plan(user_id: str, scope: str, start_date: str, end_date: str, meal_types: list):
+    """调用后端真实接口生成方案并落库"""
+    payload = {
+        "user_id": user_id,
+        "scope": scope, # day, week, meal
+        "start_date": start_date,
+        "end_date": end_date,
+        "meal_types": meal_types
+    }
+    return _post("/api/meal-plan/week/generate", payload)
