@@ -14,10 +14,7 @@
         <div v-for="p in g.items" :key="p.plan_id" class="history-plan" @click="view(p)">
           <div style="min-width: 0">
             <div class="plan-title">{{ p.title }}</div>
-            <div class="plan-range">
-              {{ p.range_text }}<span v-if="p.created_text"> · {{ p.created_text }}</span>
-              <span v-if="p.status !== 'fixed'" class="pending-tag">{{ p.status_label }}</span>
-            </div>
+            <div class="plan-range">{{ p.range_short }}</div>
           </div>
           <label class="plan-action-row" @click.stop>
             <input type="checkbox" :checked="p.is_executed" @change="toggleExecuted(p, $event)" />
@@ -40,9 +37,9 @@
       <EmptyState
         icon="🗂️"
         title="还没有历史方案"
-        desc="确认过的配餐方案会按周归档在这里，
+        desc="确认（固定）过的方案才会归档在这里，
 方便你回看当时怎么吃的、有没有照做。"
-        :actions="[{ icon: '🥗', label: '生成一日三餐', desc: '先让智能体为你配餐', phrase: '生成一日三餐' }]"
+        :actions="[{ icon: '🥗', label: '生成一日三餐', desc: '先让智能体为你配餐并确认', phrase: '生成一日三餐' }]"
         @action="onAction"
       />
     </template>
@@ -53,8 +50,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchPlanList, fetchPlanById, setPlanExecuted } from '@/api/mealPlan.js'
-import { normalizeMealCard, STATUS_LABELS, goalLabel } from '@/utils/schema.js'
-import { fmtDate, fmtDateTime } from '@/utils/format.js'
+import { normalizeMealCard, STATUS_LABELS, goalLabel, planTypeTitle } from '@/utils/schema.js'
+import { fmtDate } from '@/utils/format.js'
 import { usePanelStore } from '@/stores/panel.js'
 import { useChatStore } from '@/stores/chat.js'
 import { useUi } from '@/composables/useUi.js'
@@ -69,8 +66,6 @@ const error = ref('')
 const plans = ref([])
 const total = ref(0)
 
-const TYPE_SUFFIX = { 餐: '一餐', 日: '三餐', 多日: '方案', 周: '方案', 自定义: '方案' }
-
 function shortRange(start, end) {
   if (!start) return ''
   if (!end || start === end) return fmtDate(start)
@@ -78,10 +73,9 @@ function shortRange(start, end) {
 }
 
 function buildTitle(item) {
-  const range = shortRange(item.start_date, item.end_date)
   const goal = goalLabel(item.goal_code)
-  const suffix = TYPE_SUFFIX[item.plan_type] || '方案'
-  return [range, goal, suffix].filter(Boolean).join(' ')
+  const scope = planTypeTitle(item.plan_type)
+  return goal ? `${goal} · ${scope}` : scope
 }
 
 function weekBucket(iso) {
@@ -110,14 +104,11 @@ function summaryView(item) {
     plan_id: item.meal_plan_id,
     plan_type: item.plan_type,
     title: buildTitle(item),
+    range_short: shortRange(item.start_date, item.end_date),
     range_text: item.start_date && item.end_date ? `${item.start_date} ~ ${item.end_date}` : '—',
-    start_date: item.start_date,
-    end_date: item.end_date,
-    status: item.status || 'draft',
-    status_label: STATUS_LABELS[item.status] || '草稿',
+    status_label: STATUS_LABELS[item.status] || '已生效',
     is_executed: Boolean(item.is_executed),
     goal_code: item.goal_code || '',
-    created_text: item.created_at ? fmtDateTime(item.created_at) : '—',
     week_bucket: weekBucket(item.start_date)
   }
 }
@@ -136,7 +127,8 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const page = await fetchPlanList({ page: 1, pageSize: 20 })
+    // 历史方案只归档「已确认（fixed）」的方案，draft/candidates 不进历史
+    const page = await fetchPlanList({ page: 1, pageSize: 20, status: 'fixed' })
     plans.value = (page.items || []).map(summaryView)
     total.value = page.total || plans.value.length
   } catch (e) {
@@ -208,15 +200,5 @@ watch(() => panel.active, (v) => v === 'history' && load())
 
 .history-group-label:first-of-type {
   margin-top: 4px;
-}
-
-.pending-tag {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0 5px;
-  font-size: 11px;
-  color: var(--brand-hover);
-  background: var(--brand-light, #eef4f0);
-  border-radius: 4px;
 }
 </style>

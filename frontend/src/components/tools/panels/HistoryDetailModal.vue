@@ -16,7 +16,10 @@
         </div>
       </div>
 
-      <div class="hd-section-title">🍽️ 食谱概览</div>
+      <div class="hd-section-title">
+        🍽️ 食谱概览
+        <span v-if="dailyAvg !== null" class="hd-avg">{{ payload.days.length > 1 ? '日均约 ' : '全天约 ' }}{{ dailyAvg }} kcal</span>
+      </div>
       <div v-for="(day, di) in payload.days" :key="di" class="hd-day">
         <div class="hd-day-head">{{ day.weekday }} · {{ day.date }}<span>{{ fmtKcal(day.kcal) }} kcal</span></div>
         <div class="meal-overview-wrap">
@@ -29,6 +32,27 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div class="hd-toggle-row">
+        <div class="hd-section-title" style="margin: 0">👩‍🍳 详细食谱</div>
+        <button class="hd-toggle-btn" @click="showDetail = !showDetail">{{ showDetail ? '收起做法' : '展开做法' }}</button>
+      </div>
+      <div v-if="showDetail">
+        <div v-for="(day, di) in payload.days" :key="'dish-' + di" class="hd-day">
+          <div class="hd-day-head">{{ day.weekday }} · {{ day.date }}</div>
+          <div v-for="(s, si) in day.slots" :key="si" class="hd-slot-group">
+            <div class="hd-slot-head">{{ s.label }} {{ s.time }}</div>
+            <div v-for="(dish, fi) in s.dishes" :key="fi" class="hd-dish">
+              <div class="hd-dish-head">
+                <span class="hd-dish-name">{{ dish.name }}</span>
+                <span v-if="dish.amount && dish.amount !== '—'" class="hd-dish-amount">{{ dish.amount }}</span>
+                <span v-if="dish.tip" class="hd-dish-method">{{ dish.tip }}</span>
+              </div>
+              <div v-if="dish.ingredients && dish.ingredients.length" class="hd-dish-ing">食材：{{ dish.ingredients.join('；') }}</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -68,8 +92,17 @@ const payload = computed(() => ui.historyPayload)
 const report = ref(null)
 const reportLoading = ref(false)
 const regenerating = ref(false)
+const showDetail = ref(false)
 
 const reportBlock = computed(() => (report.value ? { ...report.value, expanded: true } : null))
+
+const dailyAvg = computed(() => {
+  const vals = (payload.value?.days || [])
+    .map((d) => d.kcal)
+    .filter((v) => v !== null && v !== undefined && Number.isFinite(Number(v)))
+  if (!vals.length) return null
+  return Math.round(vals.reduce((s, v) => s + Number(v), 0) / vals.length)
+})
 
 async function loadReport() {
   const id = payload.value?.plan_id
@@ -150,6 +183,13 @@ watch(visible, (v) => {
   margin: 18px 0 10px;
 }
 
+.hd-avg {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-sub);
+  margin-left: 6px;
+}
+
 .hd-day {
   margin-bottom: 12px;
 }
@@ -166,6 +206,78 @@ watch(visible, (v) => {
 .hd-day-head span {
   font-weight: 400;
   color: var(--text-sub);
+}
+
+.hd-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 0 10px;
+}
+
+.hd-toggle-btn {
+  font-size: 12px;
+  color: var(--brand);
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+}
+
+.hd-toggle-btn:hover {
+  color: var(--brand-hover);
+}
+
+.hd-slot-group {
+  margin-bottom: 10px;
+}
+
+.hd-slot-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-hover);
+  margin-bottom: 6px;
+  padding-left: 8px;
+  border-left: 3px solid var(--brand);
+}
+
+.hd-dish {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-subtle, #f7f8f6);
+  margin-bottom: 6px;
+}
+
+.hd-dish-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hd-dish-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.hd-dish-amount {
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.hd-dish-method {
+  font-size: 11px;
+  color: var(--brand-hover);
+  background: var(--brand-light, #eef4f0);
+  padding: 0 6px;
+  border-radius: 4px;
+}
+
+.hd-dish-ing {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.7;
+  margin-top: 4px;
 }
 
 .hd-note {
