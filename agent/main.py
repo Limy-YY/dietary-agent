@@ -9,12 +9,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 import agent
 import backend_client
@@ -44,12 +46,15 @@ def _suggestions(blocks: list[dict]) -> list[str]:
     return ["生成一日三餐", "生成一周食谱", "推荐一餐搭配"]
 
 
-def _stream(req: AgentChatRequest):
+async def _stream(req: AgentChatRequest):
     conv_id = str(req.conversation_id or f"conv_{int(time.time() * 1000)}")
     yield _sse("message", {"conversation_id": conv_id, "delta": ""})
 
+    # agent.run 是同步阻塞（内部走 requests 调后端 REST）。放到线程池执行，
+    # 当前 ASGI task 的 ContextVar（token）会被复制到线程，agent 内的 REST 调用
+    # 因此带上本请求的身份；并发请求各自独立 task，不串号。
     try:
-        result = agent.run(req.user_id, req.message)
+        result = await run_in_threadpool(agent.run, req.user_id, req.message)
     except Exception as e:  # 生成中失败 → error 事件，前端可重试
         yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
         return
@@ -57,8 +62,8 @@ def _stream(req: AgentChatRequest):
     text = result.get("text") or ""
     for i in range(0, len(text), 6):
         yield _sse("message", {"delta": text[i:i + 6]})
-        # 模拟逐字流；让前端能感知到打字效果
-        time.sleep(0.008)
+        # 模拟逐字流；让前端能感知到打字效果（async 里不能阻塞 event loop）
+        await asyncio.sleep(0.008)
 
     blocks = result.get("blocks") or []
     if blocks:
@@ -73,9 +78,11 @@ def _stream(req: AgentChatRequest):
 
 
 @app.post("/chat")
-def chat(req: AgentChatRequest) -> StreamingResponse:
+async def chat(req: AgentChatRequest) -> StreamingResponse:
     """与智能体对话（SSE）。"""
-    # 后端透传的 JWT 交给 backend_client，后续 REST 调用自动带 Authorization
+    # 后端透传的 JWT 交给 backend_client，后续 REST 调用自动带 Authorization。
+    # set_token 必须在 async 路由内（当前 task context）调用：ContextVar 会随该 task
+    # 传播到 run_in_threadpool 的线程；若放在同步生成器里会丢失 context 而串号。
     backend_client.set_token(req.token)
     return StreamingResponse(
         _stream(req),
