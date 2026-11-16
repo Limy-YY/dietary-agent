@@ -58,6 +58,7 @@ _INTENT_SYSTEM = (
     "你是膳食搭配智能体的意图分类器。把用户消息归入一个意图，只返回 JSON，不要多余文字。\n"
     '意图：plan_day（今日/某天一日三餐）、plan_week（一周食谱）、plan_meal（单餐推荐）、'
     'profile_build（用户描述身体指标/目标/过敏，需建档）、rag_qa（营养知识问答）、'
+    'explain（解释当前方案为什么这样搭/搭配理由）、'
     'reverse_nutrition（症状咨询，如口角炎/乏力/掉发）、chat（闲聊）。\n'
     'JSON 字段：{"intent":"...", "meal_type":"早餐|午餐|晚餐|null", '
     '"profile":{"gender":"男|女","age":0,"height_cm":0,"weight_kg":0,'
@@ -102,6 +103,8 @@ def _regex_intent(message: str) -> dict | None:
         return {"intent": "recipe_detail"}
     if has(r"食材|清单|买菜|采购"):
         return {"intent": "shopping_list"}
+    if has(r"为什么.*(这样|这么|如此).*(搭|配)|搭配(理由|依据)|配餐(理由|依据)|怎么搭|搭配讲究"):
+        return {"intent": "explain"}
     if has(r"一周|七天|7天|整周|一周食谱"):
         return {"intent": "plan_week"}
     if has(r"一餐|推荐|午餐|晚餐|早餐") and not has(r"三餐|一日"):
@@ -224,6 +227,34 @@ def _find_slot(plan: dict, label: str) -> dict | None:
 
 
 # ---------------------------------------------------------------- 主执行
+
+
+def _explain_material(plan: dict) -> dict:
+    """从当前方案抽取「为什么这样搭」的解释素材（只取后端/规则引擎给的数据，不自行计算）。"""
+    meals = []
+    for s in plan.get("slots", []):
+        picked = s.get("selected_candidate") or (s.get("candidates") or [None])[0]
+        if not picked:
+            continue
+        macro = picked.get("macro_estimate") or {}
+        meals.append({
+            "餐次": s.get("meal_type"),
+            "菜": [f"{d.get('name', '')}（{d.get('portion_text', '')}）" for d in picked.get("dishes", [])],
+            "能量_kcal": macro.get("kcal"),
+            "蛋白_g": macro.get("protein_g"),
+            "脂肪_g": macro.get("fat_g"),
+            "碳水_g": macro.get("carb_g"),
+            "膳食纤维_g": macro.get("fiber_g"),
+            "搭配说明": picked.get("why_text"),
+            "依据码": picked.get("reason_codes"),
+            "进食顺序建议": picked.get("eating_order_advice"),
+        })
+    return {
+        "目标能量_kcal": plan.get("goal_energy_kcal"),
+        "plan_type": plan.get("plan_type"),
+        "meals": meals,
+    }
+
 
 def run(user_id: str, message: str) -> dict:
     """执行一条用户消息，返回 {text, blocks}。"""
@@ -475,6 +506,23 @@ def run(user_id: str, message: str) -> dict:
                 "blocks": []}
 
     # 知识问答
+    # 解释「为什么这样搭」
+    if kind == "explain":
+        plan = _user_state(user_id).get("current_plan")
+        if not plan:
+            return {
+                "text": "现在还没有配好的方案，我暂时没有可解释的依据。先让我按你的档案排一餐或一日三餐，我再解释为什么这样搭。",
+                "blocks": [],
+            }
+        material = _explain_material(plan)
+        text = _llm_text(
+            SYSTEM_INSTRUCTION
+            + "\n用下方方案数据解释「为什么这样搭」：逐条对应数据（能量/蛋白/微量/结构/油盐），只引用给定字段，没有的写「该项未提供」，不要编造。",
+            f"用户问：{message}\n方案数据：{json.dumps(material, ensure_ascii=False)}",
+            "这套方案是结合你的档案与目标排的：主食打底保证供能，配菜兼顾蛋白质与蔬菜，具体依据如下…",
+        )
+        return {"text": text, "blocks": [blocks.meal_card_block(plan)]}
+
     if kind == "rag_qa":
         try:
             r = bc.rag_query(message, 5)
