@@ -7,7 +7,7 @@
       <button class="ws-chip" @click="$emit('pick', '生成一日三餐')">安排今天三餐</button>
       <button class="ws-chip" @click="$emit('pick', '生成一周食谱')">排一周食谱</button>
       <button class="ws-chip" @click="$emit('pick', '推荐一餐搭配')">推荐一餐</button>
-      <button class="ws-chip" @click="$emit('pick', '生成周膳食报告')">看本周报告</button>
+      <button class="ws-chip" @click="$emit('pick', '生成方案膳食报告')">看膳食报告</button>
     </div>
   </div>
 </template>

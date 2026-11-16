@@ -63,7 +63,8 @@
           <div v-for="(m, i) in report.micro.items" :key="i" class="rp-micro">
             <MicroRing :item="m" :size="40" />
             <div class="rp-micro-name">{{ m.name }}</div>
-            <div v-if="m.status === 'neutral'" class="rp-micro-tag">提示</div>
+            <div class="rp-micro-note-item">{{ m.note }}</div>
+            <div v-if="m.status === 'danger'" class="rp-micro-tag danger">超标</div>
           </div>
         </div>
         <p class="rp-micro-note">覆盖度按方案内食材估算；显示「—」表示该项数据不足，不作为 0 处理。</p>
@@ -107,7 +108,7 @@
         title="这份方案还没生成报告"
         desc="报告会按当前方案复盘宏量供能比、7 项关键微量，
 并列出数据完整度与口径说明。"
-        :actions="[{ icon: '📊', label: '生成本方案膳食报告', desc: '基于当前方案生成 plan 级报告', phrase: '生成周膳食报告' }]"
+        :actions="[{ icon: '📊', label: '生成本方案膳食报告', desc: '基于当前方案生成 plan 级报告', phrase: '生成方案膳食报告' }]"
         hint="💡 也可以在底部输入框直接对我说：<br><b>“帮我生成一份膳食报告”</b>"
         @action="onAction"
       />
@@ -238,6 +239,18 @@ watch(() => panel.active, (v) => v === 'report' && load())
   border-radius: 4px;
   color: var(--text-sub);
   background: var(--bg-soft, #f2f3f5);
+}
+
+.rp-micro-tag.danger {
+  color: var(--chart-danger);
+  background: rgba(239, 83, 80, 0.12);
+}
+
+.rp-micro-note-item {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-sub);
+  white-space: nowrap;
 }
 
 .rp-micro-note {

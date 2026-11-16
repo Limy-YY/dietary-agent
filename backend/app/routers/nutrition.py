@@ -322,7 +322,9 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
         elif agg["micro_count"][k] < selected_meals:
             # 部分餐次缺该微量数据，不硬性判达标/不足
             status = "参考提示"
-        elif covered >= 100:
+        elif covered > 100:
+            status = "超标"
+        elif covered >= 80:
             status = "达标"
         else:
             status = "不足"
@@ -553,6 +555,10 @@ def analyze_plan(
             f"{micro[k]['name_zh']}补{_MICRO_ADVICE.get(k, '相关食材')}" for k in shortfall
         )
         hints.append(f"{names}距每日目标仍有缺口，建议下一次方案增加：{advices}")
+    over = [k for k in MICRO_IDS if micro[k].get("status") == "超标"]
+    if over:
+        names = "、".join(micro[k]["name_zh"] for k in over)
+        hints.append(f"{names}已超过每日参考值，长期超量需关注")
     hints.append("铁按普通口径计算，未区分经期（本期口径）")
     if any(v.get("status") == "参考提示" for v in micro.values()):
         hints.append("部分微量存在数据缺口或不宜硬性补足，按参考提示处理，不作达标结论")

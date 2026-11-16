@@ -316,28 +316,38 @@ export function normalizeGroups(groups) {
 /* ---------- NutritionReport ---------- */
 
 const MICRO_KEYS = ['calcium', 'iron', 'zinc', 'vitamin_a', 'vitamin_b1', 'vitamin_b2', 'vitamin_c']
-const MICRO_STATUS = { 达标: 'ok', 不足: 'warn', 参考提示: 'neutral' }
+const MICRO_STATUS = { 达标: 'ok', 不足: 'warn', 超标: 'danger', 参考提示: 'neutral' }
 
 function microView(entry, key) {
   const m = entry || {}
   const pct = numOrNull(pick(m, 'covered_pct'))
   const intake = numOrNull(pick(m, 'intake'))
   const statusZh = str(pick(m, 'status'), '')
+  const unit = str(pick(m, 'unit'), '')
+  const gap = numOrNull(pick(m, 'gap'))
+  // 只有「完整数据」才给百分比和环：参考提示（无数据/部分数据）时不给数值、环也不画，
+  // 避免「锌 56.5% 但灰环」这种数值与环不同步的误导。
+  const fullData = intake !== null && statusZh !== '参考提示'
+
+  let note
+  if (intake === null) note = '数据不足'
+  else if (statusZh === '参考提示') note = '部分餐次缺数据'
+  else if (gap != null && gap > 0) note = `已超 ${fmtNum(gap)}${unit}`
+  else if (gap != null && gap < 0) note = `还差 ${fmtNum(-gap)}${unit}`
+  else note = '已达标'
+
   return {
     key,
     name: str(pick(m, 'name_zh'), key),
     target: numOrNull(pick(m, 'target')),
-    unit: str(pick(m, 'unit'), ''),
+    unit,
     intake,
-    gap: numOrNull(pick(m, 'gap')),
-    percent: pct,
-    value: intake === null ? '—' : fmtPct(pct),
+    gap,
+    percent: fullData ? pct : null,
+    value: fullData ? fmtPct(pct) : '—',
     status: MICRO_STATUS[statusZh] || 'neutral',
     status_zh: statusZh,
-    note:
-      intake === null
-        ? '数据不足'
-        : `摄入 ${fmtNum(intake)}${str(pick(m, 'unit'), '')} / 目标 ${fmtNum(pick(m, 'target'))}${str(pick(m, 'unit'), '')}`
+    note
   }
 }
 
@@ -421,7 +431,7 @@ export function normalizeReport(report) {
     meal_plan_id: str(pick(r, 'meal_plan_id'), ''),
     scope: reportType,
     report_type: reportType,
-    headline: reportType === 'plan' ? '方案膳食报告' : '膳食报告',
+    headline: reportType === 'plan' ? `方案膳食报告（${daySpan ?? '—'} 天）` : '膳食报告',
     meta: {
       range_start: start,
       range_end: end,

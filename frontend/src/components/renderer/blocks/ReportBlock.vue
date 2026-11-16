@@ -49,7 +49,8 @@
           <div v-for="(m, i) in report.micro.items" :key="i" class="rp-micro">
             <MicroRing :item="m" :size="42" />
             <div class="rp-micro-name">{{ m.name }}</div>
-            <div v-if="m.status === 'neutral'" class="rp-micro-tag">提示</div>
+            <div class="rp-micro-note-item">{{ m.note }}</div>
+            <div v-if="m.status === 'danger'" class="rp-micro-tag danger">超标</div>
           </div>
         </div>
         <p class="rp-micro-note">覆盖度按方案内食材估算；显示「—」表示该项数据不足，不作为 0 处理。</p>
@@ -166,6 +167,18 @@ function barHeight(d) {
   border-radius: 4px;
   color: var(--text-sub);
   background: var(--bg-soft, #f2f3f5);
+}
+
+.rp-micro-tag.danger {
+  color: var(--chart-danger);
+  background: rgba(239, 83, 80, 0.12);
+}
+
+.rp-micro-note-item {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-sub);
+  white-space: nowrap;
 }
 
 .rp-micro-note {
