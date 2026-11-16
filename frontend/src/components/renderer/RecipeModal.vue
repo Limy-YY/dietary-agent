@@ -19,7 +19,8 @@
             <span class="rm-dish-amount">{{ dish.amount }}</span>
             <span v-if="dish.kcal" class="rm-dish-kcal">{{ dish.kcal }} kcal</span>
           </div>
-          <div v-if="dish.tip" class="rm-dish-tip">{{ dish.tip }}</div>
+          <div v-if="dish.ingredients && dish.ingredients.length" class="rm-dish-tip"><b>食材</b> {{ dish.ingredients.join('；') }}</div>
+          <div v-if="dish.tip" class="rm-dish-tip"><b>做法</b> {{ dish.tip }}</div>
         </div>
         <div v-if="!meal.dishes.length" class="rm-dish-tip">暂无菜品明细</div>
       </div>

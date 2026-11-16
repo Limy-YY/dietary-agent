@@ -72,7 +72,9 @@ function dishView(d) {
     role: str(pick(d, 'role'), ''),
     amount: str(pick(d, 'portion_text'), '') || (estimated === null ? '—' : `约 ${estimated} g`),
     kcal: null,
-    tip: str(pick(d, 'method_override'), ''),
+    // 做法要点：method_override（换做法覆盖）优先，缺省回落到 core.dish 的 method_text
+    tip: str(pick(d, 'method_override', 'method_text'), ''),
+    ingredients: arr(pick(d, 'ingredients')),
     steps: arr(pick(d, 'steps')),
     display_order: numOrNull(pick(d, 'display_order')) || 0
   }
@@ -219,12 +221,16 @@ export function normalizeMealCard(payload) {
 
 export function normalizeCurrentPlan(payload) {
   const p = payload || {}
-  const hasPlan = Boolean(pick(p, 'has_plan')) && pick(p, 'meal_plan_id') != null
+  // 真后端 /meal-plan/current 返回 _serialize_plan（无 has_plan 字段），以 meal_plan_id 判有无方案
+  const hasPlan = pick(p, 'meal_plan_id') != null
   if (!hasPlan) {
     return { type: 'current_plan', has_plan: false, plan: null }
   }
   const planType = str(pick(p, 'plan_type'), '日')
   const slots = arr(p.slots).map((s) => {
+    // 真后端：槽位带 candidates → 走标准 normalizeSlot（含菜名/热量）
+    if (arr(s.candidates).length) return normalizeSlot(s)
+    // 旧 Mock 扁平结构（dish_names/dish_ids/kcal），保留兼容，待 Mock 对齐后端结构后删除
     const view = normalizeSlot({ ...s, candidates: [] })
     const names = arr(pick(s, 'dish_names')).map((n) => str(n))
     const kcal = numOrNull(pick(s, 'kcal'))

@@ -167,19 +167,47 @@ def _get_plan(db: Session, meal_plan_id: int) -> MealPlan:
     return plan
 
 
-def _dish_names(db: Session, dish_ids) -> dict[str, str]:
-    """按 dish_id 批量取菜名。菜名在 core.dish，meal_candidate_dish 关联表只有 dish_id。"""
+def _g(value) -> str:
+    """克数 → '150g'（整数值不显示小数点）。"""
+    if value is None:
+        return ""
+    f = float(value)
+    return f"{f:g}g"
+
+
+def _dish_details(db: Session, dish_ids) -> dict[str, dict]:
+    """按 dish_id 批量取菜名 / 做法 / 食材。菜名与做法在 core.dish，食材在 dish_ingredient 关联表。"""
     ids = sorted({str(x) for x in dish_ids if x})
     if not ids:
         return {}
-    rows = db.execute(
-        text("SELECT dish_id, name FROM core.dish WHERE dish_id = ANY(:ids)"),
+    dish_rows = db.execute(
+        text("SELECT dish_id, name, method_text FROM core.dish WHERE dish_id = ANY(:ids)"),
         {"ids": ids},
     ).mappings().all()
-    return {r["dish_id"]: r["name"] for r in rows}
+    ing_rows = db.execute(
+        text(
+            "SELECT di.dish_id, i.name, di.amount_g, di.role "
+            "FROM core.dish_ingredient di "
+            "JOIN core.ingredient i ON i.ingredient_id = di.ingredient_id "
+            "WHERE di.dish_id = ANY(:ids) "
+            "ORDER BY di.dish_id, di.role, i.name"
+        ),
+        {"ids": ids},
+    ).mappings().all()
+    details: dict[str, dict] = {
+        r["dish_id"]: {"name": r["name"], "method_text": r["method_text"], "ingredients": []}
+        for r in dish_rows
+    }
+    for r in ing_rows:
+        detail = details.get(r["dish_id"])
+        if detail is None:
+            continue
+        role = r["role"] or ""
+        detail["ingredients"].append(f"{r['name']} {_g(r['amount_g'])}" + (f"（{role}）" if role else ""))
+    return details
 
 
-def _serialize_candidate(c: MealCandidate, names: dict[str, str]) -> dict:
+def _serialize_candidate(c: MealCandidate, details: dict[str, dict]) -> dict:
     return {
         "candidate_id": c.candidate_id,
         "rank": c.rank,
@@ -194,7 +222,9 @@ def _serialize_candidate(c: MealCandidate, names: dict[str, str]) -> dict:
         "dishes": [
             {
                 "dish_id": d.dish_id,
-                "name": names.get(d.dish_id, ""),
+                "name": (details.get(d.dish_id) or {}).get("name", ""),
+                "method_text": (details.get(d.dish_id) or {}).get("method_text") or "",
+                "ingredients": (details.get(d.dish_id) or {}).get("ingredients", []),
                 "role": d.role,
                 "servings": _f(d.servings, 2),
                 "estimated_g": _f(d.estimated_g),
@@ -213,7 +243,7 @@ def _selected_candidate(slot: MealSlot) -> MealCandidate | None:
     )
 
 
-def _serialize_slot(slot: MealSlot, names: dict[str, str]) -> dict:
+def _serialize_slot(slot: MealSlot, details: dict[str, dict]) -> dict:
     picked = _selected_candidate(slot)
     return {
         "meal_slot_id": slot.meal_slot_id,
@@ -222,13 +252,13 @@ def _serialize_slot(slot: MealSlot, names: dict[str, str]) -> dict:
         "display_order": slot.display_order,
         "target_macro": slot.target_macro or {},
         "selected_candidate_id": slot.selected_candidate_id,
-        "selected_candidate": _serialize_candidate(picked, names) if picked else None,
-        "candidates": [_serialize_candidate(c, names) for c in slot.candidates],
+        "selected_candidate": _serialize_candidate(picked, details) if picked else None,
+        "candidates": [_serialize_candidate(c, details) for c in slot.candidates],
     }
 
 
 def _serialize_plan(plan: MealPlan, db: Session) -> dict:
-    _names = _dish_names(db, [d.dish_id for s in plan.slots for c in s.candidates for d in c.dishes])
+    _details = _dish_details(db, [d.dish_id for s in plan.slots for c in s.candidates for d in c.dishes])
     return {
         "meal_plan_id": plan.meal_plan_id,
         "user_id": plan.user_id,
@@ -247,7 +277,7 @@ def _serialize_plan(plan: MealPlan, db: Session) -> dict:
         "fixed_at": _iso(plan.fixed_at),
         "created_at": _iso(plan.created_at),
         "updated_at": _iso(plan.updated_at),
-        "slots": [_serialize_slot(s, _names) for s in sorted(plan.slots, key=lambda x: (x.slot_date, x.display_order))],
+        "slots": [_serialize_slot(s, _details) for s in sorted(plan.slots, key=lambda x: (x.slot_date, x.display_order))],
     }
 
 
@@ -476,7 +506,7 @@ def swap_candidate(
             "meal_slot_id": slot.meal_slot_id,
             "selected_candidate_id": target.candidate_id,
             "previous_candidate_id": previous_id,
-            "candidate": _serialize_candidate(target, _dish_names(db, [d.dish_id for d in target.dishes])),
+            "candidate": _serialize_candidate(target, _dish_details(db, [d.dish_id for d in target.dishes])),
             "macro_delta": delta,
         }
     )
