@@ -2,11 +2,12 @@
 --
 -- 用法（Windows PowerShell，deploy 容器的库）：
 --   docker cp scripts/grant_readonly.sql diet-agent-db:/tmp/grant_readonly.sql
---   docker exec diet-agent-db psql -U diet_app -d diet_agent -f /tmp/grant_readonly.sql
+--   docker exec diet-agent-db psql -U postgres -d diet_agent -f /tmp/grant_readonly.sql
 --
 -- 用法（bash）：
---   docker exec -i diet-agent-db psql -U diet_app -d diet_agent < scripts/grant_readonly.sql
+--   docker exec -i diet-agent-db psql -U postgres -d diet_agent < scripts/grant_readonly.sql
 --
+-- 注意：须以 postgres 超级用户身份执行（diet_app 是 NOLOGIN 角色会直接失败）。
 -- 结果：diet_ro / diet_ro_readonly，仅能 SELECT app / core / knowledge 三个 schema，
 -- 写操作（INSERT / UPDATE / DELETE / DDL）一律 permission denied。
 
