@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.errors import BizCode, BizError
+from app.core.security import decode_token
 from app.db import get_db
 from app.routers.mealplan import _get_plan, _serialize_plan
 from app.schemas.chat import ChatRequest
@@ -211,6 +212,16 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
                 # Agent 侧的其它事件（如有）不在契约内，忽略
 
 
+def _extract_bearer(authorization: str | None) -> str | None:
+    """从 Authorization 头提取 Bearer token；兼容大小写、前导/多余空格、缺 token。"""
+    if not authorization:
+        return None
+    parts = authorization.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1].strip():
+        return parts[1].strip()
+    return None
+
+
 @router.post("/chat")
 def agent_chat(
     req: ChatRequest,
@@ -218,11 +229,12 @@ def agent_chat(
     authorization: str | None = Header(default=None),
 ) -> StreamingResponse:
     """与营养智能体多轮对话（SSE 流式；会话缺省自动创建）。"""
-    token = (
-        authorization[7:].strip()
-        if authorization and authorization.lower().startswith("bearer ")
-        else None
-    )
+    token = _extract_bearer(authorization)
+    # 身份源对齐（评审 P1）：会话/消息落库、Agent 回调后端 REST 都认同一个身份。
+    # token 有效则以 token.sub 为准覆盖 body 的 user_id，避免「会话存 A、方案写 B」静默错位；
+    # 无 token 时保持 body 原值（兼容内部调用），非法 token 直接抛 401。
+    if token:
+        req.user_id = decode_token(token)
     conversation_id = _get_or_create_conversation(req, db)
     _save_message(conversation_id, "user", req.message, db)
 
