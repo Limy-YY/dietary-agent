@@ -10,8 +10,9 @@
         :question="message.clarify.question || message.text"
         :missing-fields="message.clarify.missing_fields || []"
       />
-      <div v-else-if="message.text" class="bubble">
-        {{ message.text }}<span v-if="message.status === 'streaming'" class="caret"></span>
+      <div v-else-if="message.text" class="bubble md-bubble">
+        <div class="md" v-html="renderMarkdown(message.text)"></div>
+        <span v-if="message.status === 'streaming'" class="caret"></span>
       </div>
       <div v-else-if="message.status === 'streaming'" class="typing"><i></i><i></i><i></i></div>
 
@@ -37,7 +38,35 @@
 <script setup>
 import RendererHost from '@/components/renderer/RendererHost.vue'
 import ClarifyBlock from './ClarifyBlock.vue'
+import { renderMarkdown } from '@/utils/markdown.js'
 
 defineProps({ message: { type: Object, required: true } })
 defineEmits(['phrase', 'retry'])
 </script>
+
+<style scoped>
+/* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */
+.md :deep(p) { margin: 0 0 8px; }
+.md :deep(p:last-child) { margin-bottom: 0; }
+.md :deep(ul),
+.md :deep(ol) { margin: 0 0 8px; padding-left: 18px; }
+.md :deep(li) { margin: 3px 0; }
+.md :deep(h1),
+.md :deep(h2),
+.md :deep(h3),
+.md :deep(h4) { margin: 12px 0 6px; font-weight: 600; line-height: 1.4; }
+.md :deep(h2) { font-size: 16px; }
+.md :deep(h3) { font-size: 15px; }
+.md :deep(strong) { font-weight: 600; }
+.md :deep(code) {
+  background: #f2f4f3;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.md :deep(pre) { background: #f2f4f3; padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 0 0 8px; }
+.md :deep(pre code) { background: none; padding: 0; }
+.md :deep(blockquote) { border-left: 3px solid #4a7c59; margin: 0 0 8px; padding: 2px 0 2px 10px; color: #7a7a7a; }
+.md :deep(a) { color: #4a7c59; }
+</style>

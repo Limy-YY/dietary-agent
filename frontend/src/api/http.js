@@ -107,6 +107,32 @@ http.interceptors.response.use(
       return Promise.reject(new ApiError('CANCELED', '请求已取消'))
     }
     const status = error.response ? error.response.status : 0
+    const body = error.response && error.response.data
+
+    // 后端业务错误可能带 4xx/5xx HTTP 状态（如「暂无报告」= HTTP 404 + code 1004），
+    // 优先按业务码处理，否则会把业务态误报成「接口不存在」。
+    if (body && typeof body === 'object' && typeof body.code === 'number') {
+      if (body.code === 1004) return null
+      if (body.code === 2005) {
+        return Promise.reject(new ApiError(2005, body.message || CODE_MESSAGES[2005], { status }))
+      }
+      if (body.code === 1002) {
+        ElMessage.error(CODE_MESSAGES[1002])
+        setToken('')
+        window.dispatchEvent(new CustomEvent('sz:unauthorized'))
+        return Promise.reject(new ApiError(1002, body.message || CODE_MESSAGES[1002], { status }))
+      }
+      const hint = CODE_MESSAGES[body.code] || '请求失败，请稍后再试'
+      ElMessage.error(body.message || hint)
+      return Promise.reject(
+        new ApiError(body.code, body.message || hint, {
+          status,
+          retryable: RETRYABLE_CODES.includes(body.code)
+        })
+      )
+    }
+
+    // 无业务码：按 HTTP 状态兜底
     const msg =
       status === 401
         ? CODE_MESSAGES[1002]
