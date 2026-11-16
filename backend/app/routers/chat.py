@@ -185,7 +185,7 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
         "token": token,
     }
     timeout = httpx.Timeout(settings.AGENT_TIMEOUT_S, connect=10.0)
-    with httpx.Client(timeout=timeout) as client:
+    with httpx.Client(timeout=timeout, trust_env=False) as client:  # 本机互调不走系统代理（否则开 Clash/V2Ray 时 localhost 也被路由导致 502）
         with client.stream("POST", url, json=body) as resp:
             if resp.status_code != 200:
                 raise BizError(

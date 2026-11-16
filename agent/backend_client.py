@@ -13,6 +13,11 @@ import config
 BASE = config.BACKEND_BASE_URL.rstrip("/")
 _TIMEOUT = 30
 
+# 本机回连后端（127.0.0.1）不走系统代理：requests 默认 trust_env 会读系统代理，
+# 在开了 Clash/V2Ray 等代理的机器上会把 localhost 也路由到代理导致 502。
+_session = requests.Session()
+_session.trust_env = False
+
 # 后端业务接口都要 JWT（403/401 否则），Agent 由后端 /agent/chat 代调时必须复用调用方身份。
 # 后端在请求体里带上 token，main.py 收到后调 set_token()。
 # 用 ContextVar 而非模块级全局变量：SSE 是流式的，并发请求各有独立 ASGI task context，
@@ -48,7 +53,7 @@ def _parse(resp: requests.Response):
 
 def _get(path: str, params: dict | None = None):
     try:
-        resp = requests.get(f"{BASE}{path}", params=params, headers=_auth_headers(), timeout=_TIMEOUT)
+        resp = _session.get(f"{BASE}{path}", params=params, headers=_auth_headers(), timeout=_TIMEOUT)
     except requests.RequestException as e:
         raise BackendError(f"请求后端失败：{e}")
     return _parse(resp)
@@ -56,7 +61,7 @@ def _get(path: str, params: dict | None = None):
 
 def _post(path: str, payload: dict | None = None):
     try:
-        resp = requests.post(f"{BASE}{path}", json=payload, headers=_auth_headers(), timeout=_TIMEOUT)
+        resp = _session.post(f"{BASE}{path}", json=payload, headers=_auth_headers(), timeout=_TIMEOUT)
     except requests.RequestException as e:
         raise BackendError(f"请求后端失败：{e}")
     return _parse(resp)
@@ -64,7 +69,7 @@ def _post(path: str, payload: dict | None = None):
 
 def _put(path: str, payload: dict | None = None):
     try:
-        resp = requests.put(f"{BASE}{path}", json=payload, headers=_auth_headers(), timeout=_TIMEOUT)
+        resp = _session.put(f"{BASE}{path}", json=payload, headers=_auth_headers(), timeout=_TIMEOUT)
     except requests.RequestException as e:
         raise BackendError(f"请求后端失败：{e}")
     return _parse(resp)
