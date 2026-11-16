@@ -386,20 +386,8 @@ PostgreSQL 18.7（/usr/lib/postgresql/18）+ postgresql-18-pgvector 0.8.7，干�
        · 未做：docker build。云主机是无特权容器（grep Cap /proc/self/status 全 0、systemd-detect-virt=container-other、
          docker: command not found），本机 Windows 无 Docker/WSL，所以镜像一层都没真正构建过。
          第一次 build 可能要调 pgvector/pgvector:pg18 的 PGDATA/健康检查细节与 COPY 通配，见 docker/README.md。
-       · 2026-11-16 后端补做（本机 Windows + Docker Desktop，非云主机）：
-         `docker build -f docker/Dockerfile -t diet-agent-db:v1.2r1 .`（context 取仓库根）构建成功；
-         空数据卷 `docker compose -f docker/docker-compose.yml up -d --build` 首启约 6 秒跑完八步，
-         8/8 rc=0、整链 0 ERROR，随后 04 摘要 11 项全绿（dishes 60 / goal_mappings 5 / ingredients 128 /
-         key_micronutrients 7 / legacy_plans_preserved 3 / r1b 1 / r1 1 / schema_migration 1 /
-         staging_schema_removed true / test_rows_after_rollback 3 / test_view_removed true），
-         另测 knowledge_doc=43、v_embedding_backlog=43、health_condition=4、迁移标记 4 条、pgvector 0.8.7、PG 18.7。
-         账号模型：`POSTGRES_USER=postgres` 作超级用户，`diet_app` 由 03 建，实测 `rolsuper=false`；
-         旧 `deploy/docker-compose.yml` 写的是 `POSTGRES_USER: diet_app`，会让应用账号带超级用户权限，
-         这是作废该目录的直接原因（其初始化链路缺少 19，且卷与目录都不再维护）。
-         说明：`docker/` 12 个文件此前未入仓（09 已登记其 sha256），本次按 07/08 描述重建等价实现并实测，
-         数据岗原版补传后以原版替换并同步更新 09 的 docker 段校验值；首启日志摘录见 docker/README.md。
 
   C-8  仍未验证
-       · 镜像 build 与容器内首次启动 —— 2026-11-16 已完成（本机 Docker，结论见 C-7 末段），不再是缺口
+       · 镜像 build 与容器内首次启动（原因见 C-7）
        · 真实嵌入模型 bge-m3（1024 维）与 p_min_similarity 默认 0.5 的实际召回质量
        · 19 的 17 篇主题未经业务/营养岗审稿（口径问题找谁改，见 17 第十节）

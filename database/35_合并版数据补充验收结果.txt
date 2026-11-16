@@ -1,0 +1,18 @@
+Pager usage is off.
+DO
+        check_item         | result 
+---------------------------+--------
+ dish_used_ingredients     | 57
+ dishes                    | 60
+ dishes_with_fiber_calcium | 60
+ health_conditions         | 4
+ ingredients               | 128
+ iron_female_50_64_rows    | 1
+ iron_female_50_64_value   | 12
+ knowledge_docs            | 43
+ symptom_active_rows       | 0
+ symptom_key_nutrients     | 7
+ symptom_nutrient_rows     | 16
+ symptom_pending_rows      | 16
+(12 rows)
+
