@@ -6,7 +6,9 @@ const state = reactive({
   profileMode: 'view', // view | edit
   profileHighlight: [], // clarify 补录引导：需要高亮的缺失字段键
   recipeOpen: false,
-  recipePayload: null
+  recipePayload: null,
+  historyOpen: false,
+  historyPayload: null
 })
 
 export function useUi() {

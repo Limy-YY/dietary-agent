@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
@@ -96,6 +96,12 @@ class FixRequest(BaseModel):
 
     meal_plan_id: int
     selections: list[Selection] | None = None
+
+
+class ExecutedRequest(BaseModel):
+    """API-26 入参：标记方案是否已执行。"""
+
+    executed: bool
 
 
 # ---------------------------------------------------------------- 工具函数
@@ -264,10 +270,12 @@ def _serialize_plan(plan: MealPlan, db: Session) -> dict:
         "user_id": plan.user_id,
         "plan_type": plan.plan_type,
         "status": plan.status,
+        "is_executed": plan.is_executed,
         "plan_date": str(plan.plan_date),
         "start_date": str(plan.start_date),
         "end_date": str(plan.end_date),
         "goal_energy_kcal": _f(plan.goal_energy_kcal),
+        "goal_code": (plan.generation_context or {}).get("goal_code"),
         "macro_ratio": plan.macro_ratio or {},
         "generation_context": plan.generation_context or {},
         "micro_balance_window_start": _iso(plan.micro_balance_window_start),
@@ -287,6 +295,7 @@ def _persist_plan(
     request: GenerateRequest,
     plan_type: str,
     result,
+    derived_from_plan_id: int | None = None,
 ) -> MealPlan:
     """把 PlanResult 落到四级表，并把候选序号重映射为全局 candidate_id。"""
     balance = result.balance
@@ -298,6 +307,7 @@ def _persist_plan(
         start_date=request.start_date,
         end_date=request.end_date,
         goal_energy_kcal=Decimal(str(round(result.targets.energy_kcal, 1))),
+        derived_from_plan_id=derived_from_plan_id,
         macro_ratio=result.targets.as_dict().get("macro_ratio") or {},
         meals={},
         sources={"rule_engine": "v1.2", "goal_code": result.targets.goal_code},
@@ -375,13 +385,13 @@ def _persist_plan(
 # ---------------------------------------------------------------- API-22 生成
 
 
-@router.post("/week/generate")
-def generate_week_plan(
+def _generate_and_persist(
+    db: Session,
+    user_id: str,
     req: GenerateRequest,
-    user_id: str = CurrentUser,
-    db: Session = Depends(get_db),
-) -> ApiResponse[dict]:
-    """生成用户自定范围的方案（API-22）。"""
+    derived_from_plan_id: int | None = None,
+) -> MealPlan:
+    """校验 → 规则引擎生成 → 落库（API-22 与 API-27 共用）。"""
     if req.end_date < req.start_date:
         raise BizError(BizCode.PARAM_ERROR, "end_date 不能早于 start_date")
     span = (req.end_date - req.start_date).days + 1
@@ -419,12 +429,23 @@ def generate_week_plan(
         raise BizError(BizCode.CALC_FAILED, f"方案生成异常: {exc}") from exc
 
     try:
-        plan = _persist_plan(db, user_id, req, plan_type, result)
+        plan = _persist_plan(db, user_id, req, plan_type, result, derived_from_plan_id)
         db.commit()
     except Exception as exc:
         db.rollback()
         raise BizError(BizCode.PLAN_GENERATION_FAILED, f"方案落库失败: {exc}") from exc
 
+    return plan
+
+
+@router.post("/week/generate")
+def generate_week_plan(
+    req: GenerateRequest,
+    user_id: str = CurrentUser,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """生成用户自定范围的方案（API-22）。"""
+    plan = _generate_and_persist(db, user_id, req)
     return api_success(_serialize_plan(_get_plan(db, plan.meal_plan_id), db))
 
 
@@ -686,7 +707,8 @@ def list_plans(
     rows = db.execute(
         text(
             "SELECT meal_plan_id, plan_type, status, start_date, end_date, "
-            "goal_energy_kcal, created_at FROM app.meal_plan "
+            "goal_energy_kcal, created_at, is_executed, "
+            "generation_context->>'goal_code' AS goal_code FROM app.meal_plan "
             f"WHERE {where} ORDER BY created_at DESC, meal_plan_id DESC "
             "LIMIT :limit OFFSET :offset"
         ),
@@ -701,6 +723,8 @@ def list_plans(
             "start_date": str(r["start_date"]),
             "end_date": str(r["end_date"]),
             "goal_energy_kcal": _f(r["goal_energy_kcal"]),
+            "goal_code": r["goal_code"] or "",
+            "is_executed": bool(r["is_executed"]),
             "created_at": _iso(r["created_at"]),
         }
         for r in rows
@@ -718,3 +742,64 @@ def get_plan(plan_id: int, user_id: str = CurrentUser, db: Session = Depends(get
     if plan.user_id != user_id:
         raise BizError(BizCode.FORBIDDEN, "无权查看他人方案", http_status=403)
     return api_success(_serialize_plan(plan, db))
+
+
+# ---------------------------------------------------------------- API-26 执行标记
+
+
+@router.post("/{plan_id}/executed")
+def set_plan_executed(
+    plan_id: int,
+    req: ExecutedRequest,
+    user_id: str = CurrentUser,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """标记方案「已执行 / 未执行」（历史回顾用，不改动方案状态机）。"""
+    plan = _get_plan(db, plan_id)
+    if plan.user_id != user_id:
+        raise BizError(BizCode.FORBIDDEN, "无权操作他人方案", http_status=403)
+    plan.is_executed = req.executed
+    db.commit()
+    return api_success({"meal_plan_id": plan.meal_plan_id, "is_executed": plan.is_executed})
+
+
+# ---------------------------------------------------------------- API-27 复用生成
+
+
+@router.post("/{plan_id}/regenerate")
+def regenerate_plan(
+    plan_id: int,
+    user_id: str = CurrentUser,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict]:
+    """照某份历史方案「再排一个等长周期」（API-27）。
+
+    复用原方案的 goal_code / 餐次 / 每餐候选数 / 排除食材，日期窗口顺延到
+    原方案结束后下一个等长区间，并按当前档案重跑规则引擎，写 derived_from_plan_id。
+    """
+    source = _get_plan(db, plan_id)
+    if source.user_id != user_id:
+        raise BizError(BizCode.FORBIDDEN, "无权操作他人方案", http_status=403)
+
+    try:
+        orig = json.loads(source.generation_request) if source.generation_request else {}
+    except json.JSONDecodeError:
+        orig = {}
+    orig = orig or {}
+
+    span = (source.end_date - source.start_date).days + 1
+    new_start = source.end_date + timedelta(days=1)
+    new_end = new_start + timedelta(days=span - 1)
+
+    req = GenerateRequest(
+        start_date=new_start,
+        end_date=new_end,
+        plan_type=orig.get("plan_type") or source.plan_type,
+        meal_types=orig.get("meal_types") or ["早", "午", "晚"],
+        candidates_per_slot=int(orig.get("candidates_per_slot") or 3),
+        goal_code=orig.get("goal_code"),
+        exclude_ingredients=orig.get("exclude_ingredients") or [],
+    )
+
+    plan = _generate_and_persist(db, user_id, req, derived_from_plan_id=plan_id)
+    return api_success(_serialize_plan(_get_plan(db, plan.meal_plan_id), db))

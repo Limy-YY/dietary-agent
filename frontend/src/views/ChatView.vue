@@ -17,6 +17,7 @@
 
     <ProfileModal />
     <RecipeModal />
+    <HistoryDetailModal />
   </div>
 </template>
 
@@ -28,6 +29,7 @@ import ChatPane from '@/components/chat/ChatPane.vue'
 import ToolRail from '@/components/tools/ToolRail.vue'
 import ProfileModal from '@/components/profile/ProfileModal.vue'
 import RecipeModal from '@/components/renderer/RecipeModal.vue'
+import HistoryDetailModal from '@/components/tools/panels/HistoryDetailModal.vue'
 import { useProfileStore } from '@/stores/profile.js'
 
 const leftCollapsed = ref(false)

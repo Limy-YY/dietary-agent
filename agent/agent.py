@@ -496,7 +496,7 @@ def run(user_id: str, message: str) -> dict:
         # summary.daily_trend/period_start...），原样交给 report_block，由前端 normalizeReport 渲染，
         # 不再在 Agent 侧转成残缺的「视图」结构。
         return {
-            "text": "已为你生成方案膳食报告。\n(注：完整数据请在右侧面板查看)",
+            "text": "已为你生成方案膳食报告，覆盖能量、宏量供能比与 7 项关键微量。完整数据见右侧「膳食报告」面板。",
             "blocks": [blocks.report_block(report)]
         }
 

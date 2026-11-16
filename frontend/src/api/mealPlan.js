@@ -44,3 +44,13 @@ export async function fixPlan({ mealPlanId, selections }) {
   if (Array.isArray(selections) && selections.length) body.selections = selections
   return (await http.post('/meal-plan/week/fix', body)) || null
 }
+
+/** POST /meal-plan/{id}/executed：标记方案已执行 / 未执行 */
+export async function setPlanExecuted(planId, executed) {
+  return (await http.post(`/meal-plan/${encodeURIComponent(planId)}/executed`, { executed })) || null
+}
+
+/** POST /meal-plan/{id}/regenerate：照历史方案再排一个等长周期 */
+export async function regeneratePlan(planId) {
+  return (await http.post(`/meal-plan/${encodeURIComponent(planId)}/regenerate`, {})) || null
+}

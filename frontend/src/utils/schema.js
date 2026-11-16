@@ -58,6 +58,18 @@ const PLAN_TYPES = { 餐: 'meal', 日: 'day', 多日: 'multi', 周: 'week', 自�
 const PLAN_TITLES = { 餐: '一餐搭配', 日: '今日三餐', 多日: '多日方案', 周: '一周食谱', 自定义: '自定义方案' }
 export const STATUS_LABELS = { draft: '草稿', candidates: '待确认', fixed: '已生效' }
 
+export const GOAL_LABELS = {
+  maintain: '维持',
+  fat_loss: '减脂',
+  muscle_gain: '增肌',
+  glucose_control: '控糖',
+  digestive_health: '改善肠胃'
+}
+
+export function goalLabel(code) {
+  return (code && GOAL_LABELS[code]) || ''
+}
+
 export function planTypeKey(v) {
   return PLAN_TYPES[v] || 'day'
 }
@@ -203,6 +215,7 @@ export function normalizeMealCard(payload) {
     title: planTypeTitle(planType),
     status: str(pick(p, 'status'), 'draft'),
     status_label: STATUS_LABELS[str(pick(p, 'status'), 'draft')] || '草稿',
+    is_executed: Boolean(pick(p, 'is_executed')),
     start_date: str(pick(p, 'start_date'), ''),
     end_date: str(pick(p, 'end_date'), ''),
     range_text:
