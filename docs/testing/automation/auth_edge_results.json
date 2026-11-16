@@ -1,12 +1,48 @@
 {
-  "time": "2026-11-16T17:46:48.633494",
-  "base": null,
+  "time": "2026-11-16T19:15:36.588253",
+  "base": "https://deaths-likelihood-wellington-sophisticated.trycloudflare.com",
   "results": [
     {
       "id": "P0-static",
       "title": "agent 全局 _token 并发串号（源码）",
       "pass": true,
       "note": "未见模块级全局 token"
+    },
+    {
+      "id": "P0-online",
+      "title": "双用户并发 SSE 冒烟（仅佐证）",
+      "pass": true,
+      "note": "A:status=200 bytes=260 error_frame=False | B:status=200 bytes=260 error_frame=False；黑盒不能证明无串号，须代码审查确认"
+    },
+    {
+      "id": "P1",
+      "title": "body user_id 与 token sub 错位",
+      "pass": false,
+      "note": "sub=A / body.user_id=B -> HTTP 200; 未拒绝；须用 diet_ro 查会话/方案归属（会话是否存到 B、方案是否写到 A），不能凭 200 判通过"
+    },
+    {
+      "id": "P2-标准 Bearer",
+      "title": "标准 Bearer",
+      "pass": false,
+      "note": "HTTP 404"
+    },
+    {
+      "id": "P2-Bearer 无空格",
+      "title": "Bearer 无空格",
+      "pass": null,
+      "note": "HTTP 401（异常格式，供人工判定）"
+    },
+    {
+      "id": "P2-前导空格",
+      "title": "前导空格",
+      "pass": null,
+      "note": "HTTP 404（异常格式，供人工判定）"
+    },
+    {
+      "id": "P2-小写 bearer",
+      "title": "小写 bearer",
+      "pass": null,
+      "note": "HTTP 401（异常格式，供人工判定）"
     }
   ]
 }

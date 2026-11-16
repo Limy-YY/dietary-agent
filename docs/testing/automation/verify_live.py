@@ -19,7 +19,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-BASE = os.getenv("LIVE_BASE_URL", "https://salon-posing-stroke-supplier.trycloudflare.com").rstrip("/")
+BASE = os.getenv("LIVE_BASE_URL", "").rstrip("/")
 USER = "TEST-E2E-01"
 HERE = Path(__file__).resolve().parent
 

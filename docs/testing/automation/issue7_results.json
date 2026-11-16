@@ -1,0 +1,31 @@
+{
+  "time": "2026-11-16T19:17:35.870418",
+  "base": "https://deaths-likelihood-wellington-sophisticated.trycloudflare.com",
+  "results": [
+    {
+      "id": "判据1-artifact",
+      "pass": true,
+      "note": "plan_id=24 slots=3 done.meal_plan_id=24"
+    },
+    {
+      "id": "判据1-done一致",
+      "pass": true,
+      "note": "done=24 vs plan_id=24"
+    },
+    {
+      "id": "判据3-首轮建档出方案",
+      "pass": true,
+      "note": "plan_id=25 events=['message', 'message', 'message', 'message', 'message', 'message']"
+    },
+    {
+      "id": "判据3-档案已建",
+      "pass": true,
+      "note": "GET /api/profile -> 200"
+    },
+    {
+      "id": "判据3-二轮不兜底",
+      "pass": true,
+      "note": "plan_id=26 兜底文案=无"
+    }
+  ]
+}
