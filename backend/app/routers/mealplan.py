@@ -41,6 +41,26 @@ MAX_SPAN_DAYS = 31
 VALID_PLAN_TYPES = ("餐", "日", "多日", "周", "自定义")
 VALID_MEAL_TYPES = ("早", "午", "晚", "加餐")
 
+# 查询参数/请求体里的英文餐次别名 → 内部中文口径。
+# Agent 侧按 breakfast/lunch/dinner 传（agent/backend_client.py），契约口径仍是「早/午/晚」，
+# 做一层归一，避免联调期整条生成链路因取值非法失败。
+_MEAL_TYPE_ALIASES = {
+    "breakfast": "早",
+    "lunch": "午",
+    "noon": "午",
+    "dinner": "晚",
+    "supper": "晚",
+    "snack": "加餐",
+    "加餐餐": "加餐",
+}
+
+
+def _normalize_meal_types(meal_types: list[str]) -> list[str]:
+    """把英文/拼音别名归一为中文餐次，未命中的原样保留（交给后续校验报错）。"""
+    return [_MEAL_TYPE_ALIASES.get(m.strip().lower(), m.strip()) if isinstance(m, str) else m
+            for m in meal_types]
+
+
 
 # ---------------------------------------------------------------- 请求模型
 
@@ -325,6 +345,7 @@ def generate_week_plan(
         raise BizError(BizCode.PARAM_ERROR, f"日期跨度上限 {MAX_SPAN_DAYS} 天，当前 {span} 天")
     if not req.meal_types:
         raise BizError(BizCode.PARAM_ERROR, "meal_types 不能为空")
+    req.meal_types = _normalize_meal_types(req.meal_types)
     bad = [m for m in req.meal_types if m not in VALID_MEAL_TYPES]
     if bad:
         raise BizError(BizCode.PARAM_ERROR, f"meal_types 取值非法: {bad}")

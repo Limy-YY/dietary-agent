@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import agent
+import backend_client
 import config
 
 app = FastAPI(title="膳食搭配智能体 - Agent 服务", version="0.1.0")
@@ -26,6 +27,8 @@ class AgentChatRequest(BaseModel):
     user_id: str = "demo-user"
     message: str
     conversation_id: str | int | None = None
+    # 后端 /agent/chat 代调时透传调用方 JWT，Agent 再拿它去调后端 REST（否则一律 401）
+    token: str | None = None
 
 
 def _sse(event: str, data: dict) -> str:
@@ -72,6 +75,8 @@ def _stream(req: AgentChatRequest):
 @app.post("/chat")
 def chat(req: AgentChatRequest) -> StreamingResponse:
     """与智能体对话（SSE）。"""
+    # 后端透传的 JWT 交给 backend_client，后续 REST 调用自动带 Authorization
+    backend_client.set_token(req.token)
     return StreamingResponse(
         _stream(req),
         media_type="text/event-stream",

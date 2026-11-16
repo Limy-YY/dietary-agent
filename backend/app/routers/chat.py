@@ -25,7 +25,7 @@ import json
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -151,11 +151,14 @@ def _block_to_artifact(block: dict) -> dict | None:
     return {"type": artifact_type, "payload": payload}
 
 
-def _agent_events(req: ChatRequest, conversation_id: int):
+def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = None):
     """调用 Agent 服务并产出契约事件。
 
     yield (event, data)；调用方负责补 conversation_id 与 done。
     Agent 不可达时抛 httpx 的传输异常，由调用方降级。
+
+    token：调用方 JWT 原样透传给 Agent —— Agent 内部还要回调后端 REST
+    （档案 / 食材 / 核算 / 生成方案落库），没有它一律 401，会退化成「没有你的档案」。
     """
     settings = get_settings()
     url = settings.AGENT_BASE_URL.rstrip("/") + "/chat"
@@ -163,6 +166,7 @@ def _agent_events(req: ChatRequest, conversation_id: int):
         "user_id": req.user_id,
         "message": req.message,
         "conversation_id": str(conversation_id),
+        "token": token,
     }
     timeout = httpx.Timeout(settings.AGENT_TIMEOUT_S, connect=10.0)
     with httpx.Client(timeout=timeout) as client:
@@ -193,8 +197,17 @@ def _agent_events(req: ChatRequest, conversation_id: int):
 
 
 @router.post("/chat")
-def agent_chat(req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResponse:
+def agent_chat(
+    req: ChatRequest,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
     """与营养智能体多轮对话（SSE 流式；会话缺省自动创建）。"""
+    token = (
+        authorization[7:].strip()
+        if authorization and authorization.lower().startswith("bearer ")
+        else None
+    )
     conversation_id = _get_or_create_conversation(req, db)
     _save_message(conversation_id, "user", req.message, db)
 
@@ -235,7 +248,7 @@ def agent_chat(req: ChatRequest, db: Session = Depends(get_db)) -> StreamingResp
 
                 if finish_reason != "error":
                     try:
-                        for event, data in _agent_events(req, conversation_id):
+                        for event, data in _agent_events(req, conversation_id, token):
                             if event == "message":
                                 assistant_text.append(data.get("content") or "")
                             elif event == "error":

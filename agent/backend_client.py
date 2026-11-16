@@ -11,6 +11,20 @@ import config
 BASE = config.BACKEND_BASE_URL.rstrip("/")
 _TIMEOUT = 30
 
+# 后端业务接口都要 JWT（403/401 否则），Agent 由后端 /agent/chat 代调时必须复用调用方身份。
+# 后端在请求体里带上 token，main.py 收到后调 set_token()。
+_token: str | None = None
+
+
+def set_token(token: str | None) -> None:
+    """设置后续 REST 调用使用的 Bearer token（由后端 /agent/chat 透传）。"""
+    global _token
+    _token = token or None
+
+
+def _auth_headers() -> dict:
+    return {"Authorization": f"Bearer {_token}"} if _token else {}
+
 
 class BackendError(RuntimeError):
     """后端业务错误（code != 0）或网络异常。"""
@@ -28,7 +42,7 @@ def _parse(resp: requests.Response):
 
 def _get(path: str, params: dict | None = None):
     try:
-        resp = requests.get(f"{BASE}{path}", params=params, timeout=_TIMEOUT)
+        resp = requests.get(f"{BASE}{path}", params=params, headers=_auth_headers(), timeout=_TIMEOUT)
     except requests.RequestException as e:
         raise BackendError(f"请求后端失败：{e}")
     return _parse(resp)
@@ -36,7 +50,7 @@ def _get(path: str, params: dict | None = None):
 
 def _post(path: str, payload: dict | None = None):
     try:
-        resp = requests.post(f"{BASE}{path}", json=payload, timeout=_TIMEOUT)
+        resp = requests.post(f"{BASE}{path}", json=payload, headers=_auth_headers(), timeout=_TIMEOUT)
     except requests.RequestException as e:
         raise BackendError(f"请求后端失败：{e}")
     return _parse(resp)
@@ -44,7 +58,7 @@ def _post(path: str, payload: dict | None = None):
 
 def _put(path: str, payload: dict | None = None):
     try:
-        resp = requests.put(f"{BASE}{path}", json=payload, timeout=_TIMEOUT)
+        resp = requests.put(f"{BASE}{path}", json=payload, headers=_auth_headers(), timeout=_TIMEOUT)
     except requests.RequestException as e:
         raise BackendError(f"请求后端失败：{e}")
     return _parse(resp)
