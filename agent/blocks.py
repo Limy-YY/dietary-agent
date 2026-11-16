@@ -15,30 +15,49 @@ SOURCES = [
 ]
 
 
+def _candidate_kcal(candidate: dict | None):
+    """候选热量：契约口径在 macro_estimate.kcal；缺失保持 None（null≠0）。"""
+    if not candidate:
+        return None
+    return (candidate.get("macro_estimate") or {}).get("kcal")
+
+
 def _slot_view(slot: dict) -> dict:
+    candidates = [
+        {
+            "candidate_id": c.get("candidate_id", ""),
+            "name": c.get("name", ""),
+            "rank": c.get("rank"),
+            "why_text": c.get("why_text", ""),
+            "reason_codes": c.get("reason_codes", []),
+            "macro_estimate": c.get("macro_estimate", {}),
+            "micro_estimate": c.get("micro_estimate", {}),
+            "oil_salt_estimate": c.get("oil_salt_estimate", {}),
+            "eating_order_advice": c.get("eating_order_advice", ""),
+            "dishes": c.get("dishes", []),
+        }
+        for c in slot.get("candidates", [])
+    ]
+
+    # 后端 _serialize_slot 直接给 selected_candidate（含 macro_estimate / oil_salt_estimate / dishes）；
+    # 老格式（rule_engine_bridge 的 slot 只有 candidates）回退到第一个候选。
+    picked = slot.get("selected_candidate") or (candidates[0] if candidates else None)
+    picked_dishes = picked.get("dishes", []) if picked else slot.get("dishes", [])
+    picked_oil = (picked.get("oil_salt_estimate") or {}) if picked else {}
+
     return {
         "meal_slot_id": slot.get("meal_slot_id", ""),  # 修改：对齐 v1.2 契约，不用 slot_id
-        "meal_type": slot.get("meal_type", "lunch"),
+        "meal_type": slot.get("meal_type", "午"),
         "label": slot.get("label", ""),
         "time": slot.get("time", ""),
         "color": slot.get("color", ""),
-        "kcal": slot.get("kcal", 0),
-        "oil_g": slot.get("oil_g"),
-        "salt_g": slot.get("salt_g"),
-        "dish_text": slot.get("dish_text", ""),
-        "dish_count": slot.get("dish_count", 0),
-        "dishes": slot.get("dishes", []),
-        "candidates": [
-            {
-                "candidate_id": c.get("candidate_id", ""),
-                "name": c.get("name", ""),
-                "kcal": c.get("kcal", 0),
-                "desc": c.get("desc", ""),
-                "macro_estimate": c.get("macro_estimate", {}), # 新增：补充前端要求的宏量字段
-                "dishes": c.get("dishes", []),
-            }
-            for c in slot.get("candidates", [])
-        ],
+        "kcal": _candidate_kcal(picked) if picked else slot.get("kcal"),
+        "oil_g": picked_oil.get("oil_g") if picked else slot.get("oil_g"),
+        "salt_g": picked_oil.get("salt_g") if picked else slot.get("salt_g"),
+        "dish_text": " + ".join(str(d.get("name", "")) for d in picked_dishes),
+        "dish_count": len(picked_dishes),
+        "dishes": picked_dishes,
+        "candidates": candidates,
         "selected_candidate_id": slot.get("selected_candidate_id", ""),
         "micro": slot.get("micro", []),
     }
@@ -56,45 +75,44 @@ def meal_card_block(plan: dict) -> dict:
     root_slots = plan.get("slots", [])
     first_day = days_list[0] if days_list else {"kcal": plan.get("kcal", 0), "slots": root_slots}
 
-    avg = round(sum(d.get("kcal", 0) for d in days_list) / max(1, len(days_list))) if days_list else 0
+    first_slots = [_slot_view(s) for s in first_day.get("slots", [])]
+    kcal_vals = [s.get("kcal") for s in first_slots if s.get("kcal") is not None]
+    day_kcal = round(sum(kcal_vals), 1) if kcal_vals else None
     candidate_count = len(first_day.get("slots", [{}])[0].get("candidates", [])) if first_day.get("slots") else 0
 
     goal = plan.get("goal_text", "")
-    subtitle = (
-        f"目标：{goal} · {plan.get('range_text', '')} · 日均约 {avg} kcal"
-        if is_week
-        else f"目标：{goal} · 单餐约 {first_day.get('kcal', 0)} kcal · {candidate_count} 个候选"
-        if scope == "meal"
-        else f"目标：{goal} · 全天约 {first_day.get('kcal', 0)} kcal"
-    )
+    kcal_text = f"约 {day_kcal} kcal" if day_kcal is not None else "热量待估"
+    subtitle = f"目标：{goal} · 全天{kcal_text}"
     title = {"week": "📅 一周食谱", "meal": "🍱 午餐搭配", "day": "🗓️ 今日食谱"}.get(scope, "🗓️ 今日食谱")
 
     return {
         "type": "meal_card",
-        "plan_id": real_plan_id,  # 换成兼容后的真实 ID
+        # v1.2 契约字段（前端 normalizeMealCard 读这些；后端 _serialize_plan 已是同构格式）
+        "meal_plan_id": real_plan_id,
+        "plan_type": plan.get("plan_type", "日"),
+        "status": plan.get("status", "draft"),
+        "start_date": plan.get("start_date", ""),
+        "end_date": plan.get("end_date", ""),
+        "goal_code": plan.get("goal_code", ""),
+        "goal_energy_kcal": plan.get("goal_energy_kcal"),
+        "macro_ratio": plan.get("macro_ratio") or {},
+        "why_summary": plan.get("why_summary", ""),
+        "reference_hints": plan.get("reference_hints", []),
+        "data_quality_notes": plan.get("data_quality_notes", []),
+        "slots": first_slots,
+        # 兼容旧字段（chat.py 读 plan_id 回填 done.meal_plan_id；旧调用方读 title/scope/total_kcal）
+        "plan_id": real_plan_id,
         "card_id": f"card_{real_plan_id}",
         "title": title,
         "subtitle": subtitle,
         "scope": scope,
-        "status": plan.get("status", "draft"),
         "goal_text": plan.get("goal_text", ""),
-        "target_kcal": plan.get("goal_energy_kcal", 0),
-        "total_kcal": first_day.get("kcal", 0),
+        "target_kcal": plan.get("goal_energy_kcal"),
+        "total_kcal": day_kcal,
         "range_text": plan.get("range_text", ""),
-        # 取 first_day 里的 slots，现在无论是从 days 里拿的还是外层拿的，都不会为空了
-        "slots": [] if is_week else [_slot_view(s) for s in first_day.get("slots", [])],
-        "days": [
-            {
-                "date": d.get("date", ""),
-                "weekday": d.get("weekday", ""),
-                "is_today": d.get("is_today", False),
-                "kcal": d.get("kcal", 0),
-                "slots": [_slot_view(s) for s in d.get("slots", [])],
-            }
-            for d in days_list
-        ] if is_week else [],
+        "days": [],
         "reason": {
-            "summary": "按档案与近期微量摄入平衡排出这套方案",
+            "summary": plan.get("why_summary") or "按档案与近期微量摄入平衡排出这套方案",
             "points": plan.get("reason_points", []),
         },
         "action_scope_label": {"week": "整周规划", "meal": "这一餐"}.get(scope, "规划"),
