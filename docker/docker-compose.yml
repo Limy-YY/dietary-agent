@@ -3,12 +3,12 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: diet-agent-db:v1.2r1
+    image: diet-agent-pg:1.2r2
     container_name: diet-agent-db
     environment:
       POSTGRES_DB: diet_agent
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_dev
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_dev}
     ports:
       - "5432:5432"
     volumes:
