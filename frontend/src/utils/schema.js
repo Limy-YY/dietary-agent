@@ -346,16 +346,35 @@ function microView(entry, key) {
   const statusZh = str(pick(m, 'status'), '')
   const unit = str(pick(m, 'unit'), '')
   const gap = numOrNull(pick(m, 'gap'))
-  // 只有「完整数据」才给百分比和环：参考提示（无数据/部分数据）时不给数值、环也不画，
-  // 避免「锌 56.5% 但灰环」这种数值与环不同步的误导。
-  const fullData = intake !== null && statusZh !== '参考提示'
+  const covered = numOrNull(pick(m, 'covered_meals'))
+  const total = numOrNull(pick(m, 'selected_meals'))
+
+  // 三档：无数据 / 部分数据（已知餐次的下限估算）/ 完整数据。
+  // 部分数据仍不判达标/超标（null≠0），只展示「至少 X%」+ 覆盖率，避免一缺就整项清空。
+  let level
+  if (intake === null) level = 'none'
+  else if (pct == null) level = 'none' // 有摄入但缺参考值，无法算覆盖度
+  else if (covered != null && total != null) level = covered >= total ? 'full' : 'partial'
+  else level = statusZh === '参考提示' ? 'partial' : 'full'
 
   let note
-  if (intake === null) note = '数据不足'
-  else if (statusZh === '参考提示') note = '部分餐次缺数据'
-  else if (gap != null && gap > 0) note = `已超 ${fmtNum(gap)}${unit}`
-  else if (gap != null && gap < 0) note = `还差 ${fmtNum(-gap)}${unit}`
-  else note = '已达标'
+  let value
+  let status
+  if (level === 'none') {
+    note = intake === null ? '数据不足' : '参考值缺失'
+    value = '—'
+    status = 'neutral'
+  } else if (level === 'partial') {
+    value = `≥${fmtPct(pct)}`
+    note = covered != null && total != null ? `覆盖 ${covered}/${total} 餐` : '部分餐次缺数据'
+    status = 'partial'
+  } else {
+    if (gap != null && gap > 0) note = `已超 ${fmtNum(gap)}${unit}`
+    else if (gap != null && gap < 0) note = `还差 ${fmtNum(-gap)}${unit}`
+    else note = '已达标'
+    value = fmtPct(pct)
+    status = MICRO_STATUS[statusZh] || 'neutral'
+  }
 
   return {
     key,
@@ -364,10 +383,13 @@ function microView(entry, key) {
     unit,
     intake,
     gap,
-    percent: fullData ? pct : null,
-    value: fullData ? fmtPct(pct) : '—',
-    status: MICRO_STATUS[statusZh] || 'neutral',
+    percent: level === 'none' ? null : pct,
+    value,
+    status,
     status_zh: statusZh,
+    level,
+    covered_meals: covered,
+    selected_meals: total,
     note
   }
 }

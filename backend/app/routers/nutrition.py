@@ -399,6 +399,7 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
         ref = refs.get(k) or {}
         target = _num(ref.get("reference_value"))
         intake = agg["micro_daily"][k]
+        covered_meals = int(agg["micro_count"].get(k, 0) or 0)
 
         gap = None
         covered = None
@@ -408,7 +409,7 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
 
         if intake is None or target is None:
             status = "参考提示"
-        elif agg["micro_count"][k] < selected_meals:
+        elif covered_meals < selected_meals:
             # 部分餐次缺该微量数据，不硬性判达标/不足
             status = "参考提示"
         elif covered > 100:
@@ -426,6 +427,9 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
             "intake": intake,
             "gap": gap,
             "covered_pct": covered,
+            "covered_meals": covered_meals,
+            "selected_meals": selected_meals,
+            "coverage": round(covered_meals / selected_meals, 2) if selected_meals else None,
             "status": status,
         }
     return summary, shortfall

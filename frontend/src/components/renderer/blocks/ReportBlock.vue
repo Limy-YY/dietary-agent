@@ -55,9 +55,10 @@
             <div class="rp-micro-note-item">{{ m.note }}</div>
             <div v-if="m.valid_days > 0" class="rp-micro-note-item">{{ fmtNum(m.achieved_days) }}/{{ fmtNum(m.valid_days) }} 天达标</div>
             <div v-if="m.status === 'danger'" class="rp-micro-tag danger">超标</div>
+            <div v-else-if="m.status === 'partial'" class="rp-micro-tag partial">估算</div>
           </div>
         </div>
-        <p class="rp-micro-note">覆盖度按方案内食材估算；显示「—」表示该项数据不足，不作为 0 处理。</p>
+        <p class="rp-micro-note">覆盖度按方案内食材估算；「≥X%」为已知餐次的下限估算，「—」表示数据不足或参考值缺失，均不作为 0 处理。</p>
       </div>
 
       <div v-if="report.daily_trend.length" class="rp-section">
@@ -183,6 +184,11 @@ function barHeight(d) {
 .rp-micro-tag.danger {
   color: var(--chart-danger);
   background: rgba(239, 83, 80, 0.12);
+}
+
+.rp-micro-tag.partial {
+  color: #5c6b7a;
+  background: rgba(154, 165, 177, 0.18);
 }
 
 .rp-micro-note-item {
