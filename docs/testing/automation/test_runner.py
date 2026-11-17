@@ -156,11 +156,14 @@ class FakeRequests:
             raise self.raise_exc
         return self.next or FakeResp({"code": 0, "message": "ok", "data": {"ok": True}})
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, **kw):
         return self._do("GET", url, params=params)
 
-    def post(self, url, json=None, timeout=None):
+    def post(self, url, json=None, timeout=None, **kw):
         return self._do("POST", url, body=json)
+
+    def put(self, url, json=None, timeout=None, **kw):
+        return self._do("PUT", url, body=json)
 
 
 # ---------------------------------------------------------------- G1 数值口径
@@ -489,6 +492,10 @@ def g2r_backend(bc):
     G = "G2R 后端封装契约"
     fake = FakeRequests()
     bc.requests = fake
+    # 3c93b62 起 backend_client 改用模块级 _session（trust_env=False）发请求，
+    # 仅替换 bc.requests 不再生效，须同步替换 _session 才能拦截真实 HTTP。
+    if hasattr(bc, "_session"):
+        bc._session = fake
 
     def call(fn, *a, **kw):
         fake.calls.clear()
@@ -496,18 +503,18 @@ def g2r_backend(bc):
 
     call(bc.get_profile, "u_test_001")
     c = fake.calls[-1]
-    truth("C-42", G, "get_profile 走 GET /api/users/{id}/profile", "API-20, T12",
-          "GET .../api/users/u_test_001/profile",
-          c["method"] == "GET" and c["url"].endswith("/api/users/u_test_001/profile"),
+    truth("C-42", G, "get_profile 走 GET /api/profile（身份由 token 承载）", "API-20, T12",
+          "GET .../api/profile",
+          c["method"] == "GET" and c["url"].endswith("/api/profile"),
           note=f"实际 {c['method']} {c['url']}")
 
     call(bc.upsert_profile, "u_zhangsan", sex="男", age=28)
     c = fake.calls[-1]
-    truth("C-43", G, "upsert_profile 走 POST /api/profile 且 user_id 在 body", "API-01",
-          "POST /api/profile，body 含 user_id",
-          c["method"] == "POST" and c["url"].endswith("/api/profile")
+    truth("C-43", G, "upsert_profile 走 PUT /api/profile 且 user_id 在 body", "API-01",
+          "PUT /api/profile，body 含 user_id",
+          c["method"] == "PUT" and c["url"].endswith("/api/profile")
           and (c["json"] or {}).get("user_id") == "u_zhangsan",
-          note=f"{c['json']}")
+          note=f"{c['method']} {c['json']}")
 
     call(bc.search_ingredients, "西红柿", 10)
     c = fake.calls[-1]
@@ -533,19 +540,21 @@ def g2r_backend(bc):
           and body.get("target_type") == "ingredient" and body.get("items")
           and body.get("include_micro") is True, note=f"{body}")
 
-    call(bc.weekly_report, "u_test_001", "2026-10-19")
+    call(bc.period_analysis, "week", 7)
     c = fake.calls[-1]
-    truth("C-47", G, "weekly_report 走 GET 带 user_id/week_start", "API-13",
-          "params week_start=2026-10-19",
-          c["method"] == "GET" and (c["params"] or {}).get("week_start") == "2026-10-19",
-          note=f"{c['params']}")
+    body47 = c["json"] or {}
+    truth("C-47", G, "period_analysis 走 POST /api/nutrition/period-analysis，report_type/window_days 齐全", "API-25b",
+          "POST，body 含 report_type=week、window_days=7",
+          c["method"] == "POST" and c["url"].endswith("/api/nutrition/period-analysis")
+          and body47.get("report_type") == "week" and body47.get("window_days") == 7,
+          note=f"{c['method']} {body47}")
 
     fake.next = FakeResp({"code": 4040, "message": "profile not found", "data": None})
     err = _catch(lambda: bc.get_profile("u_none"))
-    truth("C-48", G, "后端业务错误（code≠0）→ 抛 BackendError 且带 code", "3.5.2 可靠性",
-          "BackendError 含 4040",
-          err is not None and "BackendError" in type(err).__name__ and "4040" in str(err),
-          note=str(err)[:120])
+    truth("C-48", G, "后端业务错误（code≠0）→ 抛 BackendError 且 code 在 .code 属性", "3.5.2 可靠性",
+          "BackendError.code == 4040",
+          err is not None and "BackendError" in type(err).__name__ and getattr(err, "code", None) == 4040,
+          note=f"code={getattr(err, 'code', None)} msg={err}")
 
     fake.next = None
     fake.raise_exc = FakeRequests.RequestException("Connection refused")
