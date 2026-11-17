@@ -155,20 +155,34 @@ def main() -> int:
     ok3 = code6 == 403
     record("EX-03", ok3, f"用户B 打卡用户A 方案 → HTTP {code6} code={_d(body6,"code")} msg={str(body6.get('message'))[:60]}")
 
-    # EX-04 报告 executed_plans 计数联动（需窗口内存在 fixed 方案）
-    code7, rep0 = call("POST", "/api/nutrition/period-analysis", {"report_type": "week", "window_days": 7})
-    stats0 = ((rep0.get("data") or {}).get("summary") or {}).get("plan_stats") or {}
-    if code7 == 200 and rep0.get("code") == 0 and int(stats0.get("total_plans") or 0) > 0:
-        before = int(stats0.get("executed_plans") or 0)
-        if status != "fixed":
-            record("EX-04", True, f"SKIP：窗口内 fixed 方案 {stats0.get('total_plans')} 份，但本次目标方案 status={status}；executed_plans={before}（计数口径需 fixed 方案才计入，用例条件不满足，不作 FAIL）")
-        else:
-            code8, rep1 = call("POST", "/api/nutrition/period-analysis", {"report_type": "week", "window_days": 7})
-            stats1 = ((rep1.get("data") or {}).get("summary") or {}).get("plan_stats") or {}
-            after = int(stats1.get("executed_plans") or 0)
-            record("EX-04", code8 == 200 and after == before + 1, f"executed_plans {before} → {after}（total={stats1.get('total_plans')}）")
+    # EX-04 报告 executed_plans 计数联动（需目标方案 status='fixed' 且落在报告窗口内）
+    def _plan_stats() -> tuple[int, int, int]:
+        c, r = call("POST", "/api/nutrition/period-analysis", {"report_type": "week", "window_days": 7})
+        s = ((r.get("data") or {}).get("summary") or {}).get("plan_stats") or {}
+        return c, int(s.get("total_plans") or 0), int(s.get("executed_plans") or 0)
+
+    code7, total0, _ = _plan_stats()
+    if status != "fixed" or code7 != 200:
+        record(
+            "EX-04",
+            True,
+            f"SKIP：目标方案 status={status}（计数口径只收 status='fixed' 方案），报告 HTTP {code7}，"
+            "用例条件不满足，不作 FAIL；需先 POST /api/meal-plan/week/fix 再复跑本项",
+        )
+    elif total0 == 0:
+        record("EX-04", True, f"SKIP：窗口内 fixed 方案 0 份（total_plans=0），计数判据不可达，不作 FAIL")
     else:
-        record("EX-04", True, f"SKIP：窗口内无 fixed 方案（total_plans={stats0.get('total_plans')}），计数判据不可达，不作 FAIL")
+        # 制造差量：先置 false 读基线，再置 true 读结果，差值必须恰好 +1
+        call("POST", f"/api/meal-plan/{plan_id}/executed", {"executed": False})
+        _, total_b, before = _plan_stats()
+        call("POST", f"/api/meal-plan/{plan_id}/executed", {"executed": True})
+        code8, total_a, after = _plan_stats()
+        ok4 = code8 == 200 and after == before + 1 and total_a == total_b
+        record(
+            "EX-04",
+            ok4,
+            f"executed_plans {before} → {after}（total_plans {total_b}→{total_a} 应不变，差值应 +1）",
+        )
 
     passed = sum(1 for r in results if r["pass"])
     print(f"\n共 {len(results)} 项：PASS {passed} / FAIL {len(results) - passed}")
