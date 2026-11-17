@@ -306,14 +306,6 @@ def _load_profile(user_id: str) -> dict | None:
         return None
 
 
-def _goal_text(profile: dict) -> str:
-    extras = profile.get("extras") or {}
-    goals = extras.get("goals") or []
-    if goals:
-        return "、".join(goals)
-    return profile.get("goal") or "维持"
-
-
 # ---------------------------------------------------------------- 方案动作
 
 def _gen(user_id: str, params: dict, profile: dict) -> dict:
@@ -842,53 +834,6 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
         # 建档后交给 LLM 工具循环排当天方案
         return _agent_loop(user_id, profile, message, history, on_status)
 
-    # 生成方案
-    if kind in ("plan_day", "plan_week", "plan_meal", "plan_custom"):
-        if profile is None:
-            return {"text": "还没有你的档案。可以先告诉我：性别、年龄、身高体重、目标和过敏，我建档后马上配餐。 ",
-                    "blocks": []}
-
-        _st("正在生成配餐方案")
-        gp = _resolve_gen_params(kind, intent)
-        start_date, end_date, req_meal_types, scope_label = (
-            gp["start_date"], gp["end_date"], gp["meal_types"], gp["scope_label"])
-
-        try:
-            # 直接走网络请求调后端真实 API（后端 /meal-plan/week/generate 已支持任意日期区间与餐次子集）
-            plan = bc.generate_meal_plan(
-                user_id=user_id,
-                start_date=start_date,
-                end_date=end_date,
-                meal_types=req_meal_types,
-            )
-            # 生成后写入内存态，供「换候选 / 确认」读取
-            _user_state(user_id)["current_plan"] = plan
-        except Exception as e:
-            return {"text": f"方案没排出来：{e}", "blocks": []}
-
-        goal = _goal_text(profile)
-        base_fallback = {
-            "plan_week": f"收到！按你的{goal}档案排了接下来七天（{start_date} 至 {end_date}）的三餐，食材尽量不重复：",
-            "plan_meal": "给你挑了三个方向，热量都落在本餐区间，点一个就能确认：",
-            "plan_day": f"收到！已结合你的{goal}档案，为你生成了今天的方案：",
-            "plan_custom": f"收到！已按你的{goal}档案，为你排了 {scope_label} 的方案：",
-        }[kind]
-        fallback = base_fallback
-        context = (
-            f"动作：为「{scope_label}」生成了配餐方案。\n"
-            f"档案目标：{goal}\n"
-            f"方案内容：\n{_plan_brief(plan)}\n"
-            "引导：餐卡已在对话里展示，可直接点「换一换」换候选；点「确认方案」固定后，才会同步到右侧「当前规划」面板并生成食材清单。"
-        )
-        narration = _narrate(message, context, fallback, history)
-
-        return {
-            "narration": narration,
-            "blocks": [
-                blocks.meal_card_block(plan)
-            ],
-        }
-
     # 换候选
     if kind == "swap_candidate":
         st = _user_state(user_id)
@@ -1131,23 +1076,6 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
             "blocks": [blocks.meal_card_block(plan)]
         }
 
-    if kind == "shopping_list":
-        plan = _user_state(user_id).get("current_plan")
-        if not plan or plan.get("status") != "fixed":
-            return {
-                "text": "方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类，你可以在右侧工具栏里打开食材清单。",
-                "blocks": []}
-
-        fallback = "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。"
-        context = "动作：查看食材清单。引导：清单在右侧「食材清单」面板，可边买边勾。"
-        _st("正在整理食材清单")
-        narration = _narrate(message, context, fallback, history)
-        # 【改进】清单住右侧工具栏：显式索要也只引导去面板，不在对话里贴清单块
-        return {
-            "narration": narration,
-            "blocks": []
-        }
-
     # 反向营养 / 症状咨询
     if kind == "reverse_nutrition":
         _st("正在分析症状线索")
@@ -1222,18 +1150,8 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
         # 【修改】停用 rag_sources 卡片，来源通过 LLM 文本呈现
         return {"narration": narration, "blocks": []}
 
-    # 兜底
-    # 【修改】停用 anchor_block
-    fallback = "这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告。\n(右侧工具栏可打开食材清单、当前规划、膳食报告等面板)"
-    context = (
-        "动作：用户的消息没有命中明确的配餐/调整/报告/营养问答意图。\n"
-        "引导：友好回应，并把用户引向可用功能——生成一日三餐 / 一周食谱 / 推荐一餐 / 生成膳食报告 / 咨询营养知识。"
-    )
-    narration = _narrate(message, context, fallback, history)
-    return {
-        "narration": narration,
-        "blocks": [],
-    }
+    # 兜底（理论上不可达：classify 的 intent 均有分支，chat/plan_*/shopping_list 已路由到 _agent_loop）
+    return {"text": "这个我暂时答不好。可以让我排今天的三餐、换候选、或生成膳食报告。", "blocks": []}
 
 
 def _week_start() -> str:
