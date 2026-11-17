@@ -3,6 +3,7 @@
     v-model="open"
     :title="mode === 'edit' ? '编辑档案' : '个人档案'"
     width="560px"
+    top="8vh"
     append-to-body
     @open="onOpen"
   >
@@ -22,7 +23,7 @@
           </div>
           <div>
             <div class="ph-name">{{ p.name || '小膳' }}</div>
-            <div class="ph-sub">目标：{{ p.goal_name || GOAL_OPTIONS.find((g) => g.value === p.goal_code)?.label || '未设置' }}</div>
+            <div class="ph-sub">目标：<span class="ph-goal">{{ goalLabel }}</span></div>
           </div>
         </div>
 
@@ -44,9 +45,13 @@
             <span class="pf-v">{{ fmtValue(p.weight_kg, 'kg') }}</span>
           </div>
           <div class="pf-li">
+            <span class="pf-k">BMI</span>
+            <span class="pf-v">{{ profile.bmi || '—' }}</span>
+          </div>
+          <div class="pf-li">
             <span class="pf-k">健康目标</span>
             <div class="pf-v pf-tags">
-              <span class="pf-tag">{{ p.goal_name || GOAL_OPTIONS.find((g) => g.value === p.goal_code)?.label || '未设置' }}</span>
+              <span class="pf-tag">{{ goalLabel }}</span>
             </div>
           </div>
           <div class="pf-li">
@@ -62,7 +67,9 @@
               <span v-for="item in conditionList" :key="item.id" class="pf-tag" :class="'cond-' + item.status">
                 {{ item.label }} · {{ CONDITION_STATUS[item.status] }}
               </span>
-              <span v-if="!conditionList.length" class="pf-tag">无</span>
+              <span v-if="hasUnknownConditions" class="pf-tag pf-tag-muted">
+                {{ conditionList.length ? '其余' : '' }}{{ CONDITION_STATUS.unknown }}
+              </span>
             </div>
           </div>
           <div class="pf-li">
@@ -81,7 +88,7 @@
           </div>
           <div class="pf-li">
             <span class="pf-k">能量目标</span>
-            <span class="pf-v">{{ p.target_calories == null ? '后端尚未计算' : p.target_calories + ' kcal' }}</span>
+            <span class="pf-v">{{ targetKcalText }}</span>
           </div>
         </div>
       </template>
@@ -90,18 +97,21 @@
     <!-- 编辑态 -->
     <div v-else>
       <el-form label-position="top" :model="form">
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="昵称">
-              <el-input v-model="form.name" maxlength="10" placeholder="怎么称呼你" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="头像（emoji 也可以）">
-              <el-input v-model="form.avatar" maxlength="2" placeholder="🍃" />
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <div class="pf-group">
+          <div class="pf-avatar-name">
+            <div class="avatar-big" title="点击上传图片" @click="pickAvatar">
+              <img v-if="isFormImageAvatar" :src="form.avatar" alt="头像" />
+              <span v-else>{{ form.avatar || '🍃' }}</span>
+            </div>
+            <div class="pf-avatar-name-field">
+              <el-form-item label="昵称" style="margin-bottom: 4px">
+                <el-input v-model="form.name" maxlength="10" placeholder="怎么称呼你" />
+              </el-form-item>
+              <div class="avatar-upload-tip">点击头像可上传图片，自动裁成圆形</div>
+            </div>
+          </div>
+          <input ref="avatarFileInput" type="file" accept="image/*" class="pf-file" @change="onAvatarFile" />
+        </div>
 
         <el-row :gutter="12">
           <el-col :span="8">
@@ -145,12 +155,14 @@
         </div>
 
         <div class="pf-group" :class="{ 'pf-hl-group': isHl('conditions') }">
-          <span class="field-label">疾病情况（三态）</span>
-          <div v-for="id in conditionIds" :key="id" class="cond-row">
-            <span class="cond-name">{{ conditionLabels[id] }}</span>
-            <el-select v-model="form.conditions[id]" size="small" style="width: 120px">
-              <el-option v-for="(label, key) in CONDITION_STATUS" :key="key" :label="label" :value="key" />
-            </el-select>
+          <span class="field-label">疾病情况</span>
+          <div class="cond-grid">
+            <div v-for="id in conditionIds" :key="id" class="cond-row">
+              <span class="cond-name">{{ conditionLabels[id] }}</span>
+              <el-select v-model="form.conditions[id]" size="small" style="width: 120px">
+                <el-option v-for="(label, key) in CONDITION_STATUS" :key="key" :label="label" :value="key" />
+              </el-select>
+            </div>
           </div>
           <div v-if="!conditionIds.length" class="cond-empty">疾病项目录加载中或为空，暂无法编辑疾病限制</div>
         </div>
@@ -166,7 +178,7 @@
         </div>
       </el-form>
       <div class="modal-note">
-        保存走 PUT /api/profile，只提交 11 个可写字段；能量目标由后端按 BMR×1.4 计算，请求体里的值会被忽略。
+        能量目标会根据你的身高、体重、年龄、性别自动计算，无需手动填写。
       </div>
     </div>
 
@@ -234,6 +246,19 @@ const mode = computed({
 
 const p = computed(() => profile.profile || {})
 const isImageAvatar = computed(() => String(p.value.avatar || '').startsWith('data:image'))
+const goalLabel = computed(
+  () => p.value.goal_name || GOAL_OPTIONS.find((g) => g.value === p.value.goal_code)?.label || '未设置'
+)
+/** 铁律 null≠0：只有 null/undefined 才判「未计算」，0 或非法值也如实呈现为数字，不做假兜底 */
+const targetKcalText = computed(() => {
+  const v = p.value.target_calories
+  if (v == null) return '未计算'
+  const n = Number(v)
+  return Number.isFinite(n) ? `约 ${Math.round(n)} kcal` : '未计算'
+})
+
+const avatarFileInput = ref(null)
+const isFormImageAvatar = computed(() => String(form.avatar || '').startsWith('data:image'))
 
 const conditionList = computed(() => {
   const c = p.value.conditions || {}
@@ -242,6 +267,13 @@ const conditionList = computed(() => {
     label: conditionLabels.value[id] || id,
     status: c[id].status
   }))
+})
+
+/** 三态下「未填写」≠「无」：只要还有未核查的疾病项就提示，避免把 unknown 误读成「无病」 */
+const hasUnknownConditions = computed(() => {
+  const c = p.value.conditions || {}
+  if (!conditionIds.value.length) return true
+  return conditionIds.value.some((id) => !c[id] || !c[id].status || c[id].status === 'unknown')
 })
 
 function fmtValue(v, unit) {
@@ -272,6 +304,12 @@ function emptyConditions() {
   return out
 }
 
+/** 空列表或含「无」→ 回显为 ['无']，与后端「空数组=无限制」口径对齐，保证编辑态能看到选中态 */
+function toNoneList(list) {
+  const arr = list || []
+  return arr.length && !arr.includes('无') ? [...arr] : ['无']
+}
+
 function fillForm() {
   const pr = profile.profile || {}
   form.name = pr.name || '小膳'
@@ -282,8 +320,8 @@ function fillForm() {
   form.weight_kg = Number(pr.weight_kg) || 58
   form.goal_code = pr.goal_code || 'fat_loss'
   form.cooking_equipment = [...(pr.cooking_equipment || [])]
-  form.allergies = [...(pr.allergies || [])]
-  form.religious_ethical = [...(pr.religious_ethical || [])]
+  form.allergies = toNoneList(pr.allergies)
+  form.religious_ethical = toNoneList(pr.religious_ethical)
   const cond = emptyConditions()
   conditionIds.value.forEach((id) => {
     const st = pr.conditions && pr.conditions[id] && pr.conditions[id].status
@@ -314,6 +352,51 @@ async function onOpen() {
   if (!profile.profile) profile.load()
   await loadConditionCatalog()
   backup.value = fillForm()
+}
+
+function pickAvatar() {
+  avatarFileInput.value && avatarFileInput.value.click()
+}
+
+async function onAvatarFile(e) {
+  const file = e.target.files && e.target.files[0]
+  e.target.value = '' // 允许重复选择同一张图
+  if (!file) return
+  if (!/^image\//.test(file.type)) {
+    ElMessage.warning('请选择图片文件')
+    return
+  }
+  const dataUrl = await cropAvatar(file)
+  if (dataUrl) form.avatar = dataUrl
+}
+
+/** 居中裁成方形、压到 160px 再存 dataURL，避免大图撑爆档案字段 */
+function cropAvatar(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const size = 160
+        const canvas = document.createElement('canvas')
+        canvas.width = size
+        canvas.height = size
+        const ctx = canvas.getContext('2d')
+        ctx.fillStyle = '#fff'
+        ctx.fillRect(0, 0, size, size)
+        const s = Math.min(img.width, img.height)
+        ctx.drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, size, size)
+        resolve(canvas.toDataURL('image/jpeg', 0.88))
+      }
+      img.onerror = () => {
+        ElMessage.error('这张图读不出来，换一张试试')
+        resolve(null)
+      }
+      img.src = reader.result
+    }
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
 }
 
 function cancelEdit() {
@@ -365,10 +448,27 @@ onMounted(loadConditionCatalog)
   padding: 8px 0;
 }
 
+.pf-avatar-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.pf-avatar-name-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.cond-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 32px;
+}
+
 .cond-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   padding: 4px 0;
 }
 

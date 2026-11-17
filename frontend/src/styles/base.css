@@ -3292,9 +3292,14 @@ button {
 }
 
 .profile-hero .ph-sub {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text-sub);
   margin-top: 3px;
+}
+
+.profile-hero .ph-goal {
+  color: var(--brand-hover);
+  font-weight: 600;
 }
 
 .pf-list {
@@ -3344,6 +3349,13 @@ button {
   padding: 2px 10px;
   font-weight: 500;
   line-height: 1.6;
+}
+
+.pf-tag-muted {
+  color: var(--text-sub);
+  background: #f7f9f8;
+  border-color: var(--border);
+  font-weight: 400;
 }
 
 .pk-empty {
@@ -3439,6 +3451,37 @@ button {
 
 .pf-group {
   margin-bottom: 18px;
+}
+
+/* 档案头像上传 */
+.avatar-big {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--brand-medium);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: box-shadow 0.15s;
+}
+
+.avatar-big:hover {
+  box-shadow: 0 0 0 3px var(--brand-light);
+}
+
+.avatar-upload-tip {
+  font-size: 12.5px;
+  color: var(--text-sub);
+  line-height: 1.7;
+}
+
+.pf-file {
+  display: none;
 }
 
 /* 报告详情弹窗 */

@@ -12,7 +12,9 @@ export const useProfileStore = defineStore('profile', () => {
   const avatar = computed(() => profile.value?.avatar || '🍃')
   const goalText = computed(() => profile.value?.goal_name || '')
   const targetKcal = computed(() => {
-    const n = Number(profile.value?.target_calories)
+    const v = profile.value?.target_calories
+    if (v == null) return null
+    const n = Number(v)
     return Number.isFinite(n) ? n : null
   })
   const bmi = computed(() => {

@@ -44,7 +44,8 @@ function toggle(opt) {
   const list = [...props.modelValue]
   const NONE = '无'
   if (opt === NONE) {
-    emit('update:modelValue', list.includes(NONE) ? [] : [NONE])
+    // 「无」= 清空其它选项（无限制）；再点一次仍保持「无」，不进入「什么都没选」的歧义态
+    emit('update:modelValue', [NONE])
     return
   }
   const idx = list.indexOf(opt)
