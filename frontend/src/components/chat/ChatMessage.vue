@@ -92,27 +92,39 @@ const thinkingRecord = computed(() => {
 
 /* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */
 /* white-space 必须 normal：父级 .bubble 的 pre-wrap 会把 markdown 块间换行渲染成可见空行 */
-.md { white-space: normal; }
+.md { white-space: normal; font-size: 15px; line-height: 1.75; }
 /* .bubble .md 提升优先级，压过 base.css 里 .msg.ai .bubble p{margin:0} */
-.bubble .md :deep(p) { margin: 0 0 8px; }
+.bubble .md :deep(p) { margin: 0 0 10px; }
 .bubble .md :deep(p:last-child) { margin-bottom: 0; }
-.md :deep(ul),
-.md :deep(ol) { margin: 0 0 8px; padding-left: 18px; }
-.md :deep(li) { margin: 2px 0; }
+
+/* 标题：深色 + 字号阶梯 + 上大下小间距（对齐主流 LLM 客户端，不用彩色标题） */
 .md :deep(h1),
 .md :deep(h2),
 .md :deep(h3),
-.md :deep(h4) { margin: 12px 0 4px; font-weight: 600; line-height: 1.4; }
-.md :deep(h2),
-.md :deep(h3) { color: #4a7c59; }
-.md :deep(h2) { font-size: 16px; }
-.md :deep(h3) { font-size: 15px; }
-.md :deep(strong) { font-weight: 600; }
-.md :deep(hr) { border: none; border-top: 1px solid var(--border-soft, #e5e7eb); margin: 8px 0; }
-.md :deep(table) { border-collapse: collapse; margin: 0 0 8px; font-size: 13.5px; max-width: 100%; }
+.md :deep(h4) { color: var(--text-main); font-weight: 700; line-height: 1.35; }
+.md :deep(h1) { font-size: 21px; margin: 22px 0 12px; }
+.md :deep(h2) { font-size: 19px; margin: 20px 0 10px; }
+.md :deep(h3) { font-size: 17px; margin: 18px 0 10px; }
+.md :deep(h4) { font-size: 15px; font-weight: 650; margin: 14px 0 8px; }
+/* 首个元素贴顶，避免开头空一块 */
+.md :deep(> :first-child) { margin-top: 0; }
+
+/* 列表：项间距放大 + 圆点浅品牌色 */
+.md :deep(ul),
+.md :deep(ol) { margin: 0 0 10px; padding-left: 20px; }
+.md :deep(li) { margin: 4px 0; line-height: 1.7; }
+.md :deep(li::marker) { color: var(--brand-medium); }
+
+.md :deep(strong) { font-weight: 650; }
+.md :deep(hr) { border: none; border-top: 1px solid var(--border-soft, #e5e7eb); margin: 12px 0; }
+
+/* 表格：字号与正文同级、表头浅底、行 hover */
+.md :deep(table) { border-collapse: collapse; margin: 0 0 12px; font-size: 14px; width: 100%; max-width: 100%; }
 .md :deep(th),
-.md :deep(td) { border: 1px solid var(--border-soft, #e5e7eb); padding: 6px 10px; text-align: left; vertical-align: top; }
-.md :deep(th) { background: #f2f4f3; font-weight: 600; }
+.md :deep(td) { border: 1px solid var(--border-soft, #e5e7eb); padding: 8px 12px; text-align: left; vertical-align: top; }
+.md :deep(th) { background: #f7faf8; font-weight: 600; color: var(--text-sub); }
+.md :deep(tbody tr:hover) { background: #fafcfa; }
+
 .md :deep(code) {
   background: #f2f4f3;
   padding: 1px 5px;
@@ -120,8 +132,8 @@ const thinkingRecord = computed(() => {
   font-size: 0.9em;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
-.md :deep(pre) { background: #f2f4f3; padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 0 0 8px; }
+.md :deep(pre) { background: #f2f4f3; padding: 10px 12px; border-radius: 6px; overflow-x: auto; margin: 0 0 10px; }
 .md :deep(pre code) { background: none; padding: 0; }
-.md :deep(blockquote) { border-left: 3px solid #4a7c59; margin: 0 0 8px; padding: 2px 0 2px 10px; color: #7a7a7a; }
+.md :deep(blockquote) { border-left: 3px solid #4a7c59; margin: 8px 0 0; padding: 2px 0 2px 10px; color: #9a9a9a; font-size: 12.5px; }
 .md :deep(a) { color: #4a7c59; }
 </style>

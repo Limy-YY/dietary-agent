@@ -91,15 +91,17 @@ SYSTEM_INSTRUCTION = (
 )
 
 
-# 排版要求（自由文本回复统一注入）：让 LLM 输出紧凑、有层级的 Markdown，配合前端 normalizeSpacing 兜底。
+# 排版要求（自由文本回复统一注入）：让 LLM 输出紧凑、有层级、结论先行的 Markdown，配合前端 normalizeSpacing 兜底。
 # 仅约束 LLM 文本正文（explain / rag_qa / reverse_nutrition），结构化 block 不受影响。
 _FMT = (
     "排版要求（务必遵守，输出要像主流大模型那样简洁美观）：\n"
-    "- 小节标题独占一行、用「### 标题」（如「### 能量」「### 蛋白」），不要只写裸文字「能量」；\n"
+    "- 结论先行：第一句直接回答用户、点明主旨，不要客套铺垫；\n"
+    "- 小节标题独占一行、用「### 标题」；标题图标由前端自动加，你【不要】自己加 emoji；\n"
     "- 标题与正文之间、列表项之间都【不要空行】，连续空行会渲染成大片空白；\n"
-    "- 子点用「- 」列表，一条一点，每条 1~2 行，不要每个点都另起一个空行段落；\n"
+    "- 要点用「- 」列表，一条一点，每条尽量 1 行、最多 2 行；\n"
+    "- 多组数值优先用表格「| a | b |」+ 下一行「|---|---|」，不要用制表符；\n"
     "- 关键数值与结论用 **加粗**；禁止「---」分隔线；\n"
-    "- 需要表格用「| a | b |」并在下一行写「|---|---|」，不要用制表符。"
+    "- 口径/免责类说明（如「成品口径」「仅供参考」）放到最后一行小字，不要在正文反复强调。"
 )
 
 
@@ -339,6 +341,31 @@ def _candidate_name(candidate: dict) -> str:
 
 # ---------------------------------------------------------------- 主执行
 
+# 规则引擎内部依据码 → 面向用户的中文表述（喂给 LLM 前先翻译，避免把原始码念给用户）。
+REASON_CODE_ZH = {
+    "staple_anchored": "主食打底",
+    "veg_plus_protein": "蔬菜与蛋白并行",
+    "low_oil_method": "蒸/拌为主、用油少",
+    "low_salt": "低盐",
+    "micro_coverage_high": "微量覆盖较好",
+    "micro_balance_adjusted": "已做跨日微量平衡",
+    "oil_salt_tightened": "油盐按收紧标准控制",
+    "partial_data": "部分营养数据待核查",
+}
+
+# 7 种关键微量的中文名（micro_estimate 的键是 nutrient_id，转成中文再喂给 LLM）。
+_MICRO_NAME_ZH = {
+    "calcium": "钙", "iron": "铁", "zinc": "锌",
+    "vitamin_a": "维生素A", "vitamin_b1": "维生素B1",
+    "vitamin_b2": "维生素B2", "vitamin_c": "维生素C",
+}
+
+
+def _source_footer() -> str:
+    """确定性来源页脚：数值口径来自固定参考（食物成分表 / 膳食指南 / DRIs），不靠 LLM 编造。"""
+    names = " · ".join(s["title"] for s in blocks.SOURCES)
+    return f"\n\n> 📚 数值口径来源：{names}"
+
 
 def _explain_material(plan: dict) -> dict:
     """从当前方案抽取「为什么这样搭」的解释素材（只取后端/规则引擎给的数据，不自行计算）。"""
@@ -348,6 +375,7 @@ def _explain_material(plan: dict) -> dict:
         if not picked:
             continue
         macro = picked.get("macro_estimate") or {}
+        micro = picked.get("micro_estimate") or {}
         meals.append({
             "餐次": s.get("meal_type"),
             "菜": [f"{d.get('name', '')}（{d.get('portion_text', '')}）" for d in picked.get("dishes", [])],
@@ -356,8 +384,9 @@ def _explain_material(plan: dict) -> dict:
             "脂肪_g": macro.get("fat_g"),
             "碳水_g": macro.get("carb_g"),
             "膳食纤维_g": macro.get("fiber_g"),
+            "微量": {_MICRO_NAME_ZH.get(k, k): v for k, v in micro.items()},
             "搭配说明": picked.get("why_text"),
-            "依据码": picked.get("reason_codes"),
+            "搭配依据": [REASON_CODE_ZH.get(c, c) for c in picked.get("reason_codes", [])],
             "进食顺序建议": picked.get("eating_order_advice"),
         })
     return {
@@ -777,15 +806,19 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
         fallback = "这套方案是结合你的档案与目标排的：主食打底保证供能，配菜兼顾蛋白质与蔬菜，具体依据如下…"
         narration = _llm_reply(
             SYSTEM_INSTRUCTION
-            + "\n用下方方案数据解释「为什么这样搭」。\n"
-              "按「能量 / 蛋白 / 微量 / 结构 / 油盐」五条组织，每条 1~3 行，没数据的字段一句话写「该项未提供」，不要空谈；\n"
-              "禁止逐字复述餐卡里已展示的数据；结尾 2~3 行总结；不编造、不下达标结论（null≠0，依据码不能代替实测）。\n"
+            + "\n用下方方案数据解释「为什么这样搭」。先一句话给结论，再按骨架展开：\n"
+              "### 好在哪\n- 3~4 条要点说清核心思路（蛋白怎么分散到三餐、蔬菜怎么安排、油盐/做法怎么控），每条 1 行；\n"
+              "### 三餐怎么搭\n- 一张表格列三餐：餐次 | 能量 | 蛋白 | 核心菜；\n"
+              "### 要注意\n- 只写真正影响决策的 1~2 条口径或风险（如「成品口径、热量是量级参考」「部分微量待核查」），没有就省略这一节；\n"
+              "结尾一句自然的下一步引导。\n"
+              "禁止：逐字复述餐卡；出现「后端/依据码/筛选逻辑」等内部细节；把「该项未提供」当内容硬凑；下「达标」结论（null≠0，单餐微量是贡献值、不是全天达标）。\n"
             + _FMT,
             f"用户问：{message}\n方案数据：{json.dumps(material, ensure_ascii=False)}",
             fallback,
             history,
         )
-        return {"narration": narration, "blocks": []}
+        # 确定性来源页脚：流式正文结束后追加，不依赖 LLM
+        return {"narration": narration, "suffix": _source_footer(), "blocks": []}
 
     if kind == "rag_qa":
         _st("正在检索营养知识")

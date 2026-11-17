@@ -44,20 +44,45 @@ const H2_HEADINGS = new Set(['为什么这样搭', '搭配依据', '搭配理由
 const H3_HEADINGS = new Set([
   '能量', '蛋白', '蛋白质', '脂肪', '碳水', '碳水化合物',
   '微量', '微量元素', '维生素', '矿物质', '膳食纤维', '结构', '油盐', '总结',
+  '好在哪', '三餐怎么搭', '要注意',
 ])
 
+// 标题 → 图标：前端确定性加图标，不依赖 LLM 输出 emoji（模型输出不稳定、易漏易乱）。
+const HEADING_ICONS = {
+  '为什么这样搭': '🧭', '搭配依据': '🧭', '搭配理由': '🧭',
+  '好在哪': '✨', '三餐怎么搭': '📋', '要注意': '⚠️',
+  '能量': '🍚', '蛋白': '🥚', '蛋白质': '🥚',
+  '脂肪': '🥑', '碳水': '🍞', '碳水化合物': '🍞',
+  '微量': '🥦', '微量元素': '🥦', '维生素': '🥦', '矿物质': '🥦',
+  '膳食纤维': '🌾', '结构': '🍱', '油盐': '🧂', '总结': '📌',
+}
+
+// 标题装饰：h3 小节标题按文档顺序编号（1. 2. 3.），h2 总标题只加图标、不编号；
+// 序号与 emoji 都由前端确定性生成，不依赖 LLM 输出（避免模型漏标/乱标）。
 function normalizeSpacing(text) {
   const out = []
+  let h3Index = 0
   for (const raw of String(text).split('\n')) {
     const line = raw.replace(/[ \t]+$/, '') // 去行尾空格，防「两个空格+换行」触发硬换行 <br>
     const t = line.trim()
+    let processed = line
     if (t && !t.startsWith('#')) {
-      if (H2_HEADINGS.has(t)) out.push('## ' + t)
-      else if (H3_HEADINGS.has(t)) out.push('### ' + t)
-      else out.push(line)
-    } else {
-      out.push(line)
+      if (H2_HEADINGS.has(t)) processed = '## ' + t
+      else if (H3_HEADINGS.has(t)) processed = '### ' + t
     }
+    const m = processed.match(/^(#{1,4})\s*(.+?)\s*$/)
+    if (m) {
+      const level = m[1].length
+      const text = m[2]
+      const icon = HEADING_ICONS[text] ? `${HEADING_ICONS[text]} ` : ''
+      if (level === 3) {
+        h3Index += 1
+        processed = `### ${h3Index}. ${icon}${text}`
+      } else if (icon) {
+        processed = `${m[1]} ${icon}${text}`
+      }
+    }
+    out.push(processed)
   }
   // 连续 3 个及以上换行压成 1 个空行（段间隔）；2 个换行保持正常段落分隔。
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim()
