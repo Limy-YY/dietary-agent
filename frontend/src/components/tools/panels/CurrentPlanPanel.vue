@@ -68,7 +68,9 @@
         <button class="plan-btn-secondary" @click="openRecipe">看完整食谱</button>
         <button v-if="!isFixed" class="fix-btn" @click="send(PHRASE.confirm)">确认方案</button>
       </div>
-      <button class="cp-report-link" @click="openReport">📊 查看这份方案的膳食报告 →</button>
+      <button class="cp-report-link" :disabled="reportLoading" @click="openReport">
+        📊 {{ reportLoading ? '正在查看…' : '查看这份方案的膳食报告' }} →
+      </button>
       <div class="panel-note">{{ isFixed ? '💡 方案已生效，右侧「食材清单」已按天同步采购项，建议分批购买。' : '💡 确认方案后，「食材清单」才会同步更新采购项。' }}</div>
     </template>
 
@@ -94,6 +96,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchCurrentPlan } from '@/api/mealPlan.js'
+import { fetchReport } from '@/api/nutrition.js'
 import { fmtKcal, normalizeCurrentPlan } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
 import { PHRASE } from '@/constants/actions.js'
@@ -112,6 +115,8 @@ const plan = ref(null)
 const openDays = ref([])
 // 正在「换一换」的餐位 slot_id（用于按钮 spinner / 禁用）
 const swapping = ref('')
+// 正在检查/加载方案级膳食报告
+const reportLoading = ref(false)
 
 const isFixed = computed(() => plan.value?.status === 'fixed')
 const updatedText = computed(() => {
@@ -176,8 +181,31 @@ async function swap(slot) {
   }
 }
 
-function openReport() {
-  panel.open('report')
+async function openReport() {
+  if (reportLoading.value) return
+  const pid = plan.value?.plan_id
+  if (!pid) return
+  reportLoading.value = true
+  try {
+    // 已有方案级复盘 → 直接弹报告弹窗（只读，符合「面板只承载展示」）
+    const existing = await fetchReport({ mealPlanId: pid })
+    if (existing) {
+      ui.reportPayload = existing
+      ui.reportOpen = true
+      return
+    }
+    // 无复盘：未固定先引导固定（draft/candidates 没有已选候选，无法分析）
+    if (!isFixed.value) {
+      ElMessage('请先「确认方案」，方案固定后才能生成营养复盘')
+      return
+    }
+    // 已固定 → 走对话生成（对话为唯一入口），报告内嵌进对话气泡并落库
+    chat.send(PHRASE.report)
+  } catch (e) {
+    // 拦截器已对业务/网络错误统一 toast，这里只重置状态，避免重复提示
+  } finally {
+    reportLoading.value = false
+  }
 }
 
 async function load() {
@@ -268,5 +296,10 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
 
 .cp-report-link:hover {
   text-decoration: underline;
+}
+
+.cp-report-link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 </style>
