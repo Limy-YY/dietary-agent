@@ -1,0 +1,12 @@
+{
+  "base": "https://touring-exception-divisions-map.trycloudflare.com",
+  "plan_id": 37,
+  "status": "candidates",
+  "results": [
+    {
+      "case": "PRE-01",
+      "pass": false,
+      "detail": "BLOCKED：部署后端 openapi 共 22 条 path，无 /api/meal-plan/{plan_id}/executed（API-26 未部署，仓库 de733ab 已实现）→ EX-01~04 无法执行，需后端部署到含 is_executed 的版本"
+    }
+  ]
+}
