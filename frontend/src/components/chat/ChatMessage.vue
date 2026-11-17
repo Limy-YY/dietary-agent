@@ -46,15 +46,20 @@ defineEmits(['phrase', 'retry'])
 
 <style scoped>
 /* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */
-.md :deep(p) { margin: 0 0 6px; }
-.md :deep(p:last-child) { margin-bottom: 0; }
+/* white-space 必须 normal：父级 .bubble 的 pre-wrap 会把 markdown 块间换行渲染成可见空行 */
+.md { white-space: normal; }
+/* .bubble .md 提升优先级，压过 base.css 里 .msg.ai .bubble p{margin:0} */
+.bubble .md :deep(p) { margin: 0 0 8px; }
+.bubble .md :deep(p:last-child) { margin-bottom: 0; }
 .md :deep(ul),
-.md :deep(ol) { margin: 0 0 6px; padding-left: 18px; }
+.md :deep(ol) { margin: 0 0 8px; padding-left: 18px; }
 .md :deep(li) { margin: 2px 0; }
 .md :deep(h1),
 .md :deep(h2),
 .md :deep(h3),
-.md :deep(h4) { margin: 10px 0 4px; font-weight: 600; line-height: 1.4; }
+.md :deep(h4) { margin: 12px 0 4px; font-weight: 600; line-height: 1.4; }
+.md :deep(h2),
+.md :deep(h3) { color: #4a7c59; }
 .md :deep(h2) { font-size: 16px; }
 .md :deep(h3) { font-size: 15px; }
 .md :deep(strong) { font-weight: 600; }

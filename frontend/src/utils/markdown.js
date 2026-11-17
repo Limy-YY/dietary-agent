@@ -37,7 +37,33 @@ function normalizeTables(text) {
   return out.join('\n')
 }
 
+// LLM 常输出「裸小节标题行（如 能量）+ 连续空行 + 独立短段落」，渲染成一片稀疏的 <p>。
+// 这里做确定性收拢：压掉连续空行、去行尾空格，并把「独占一行」的小节标题提升为 markdown 标题，
+// 让层级在前端兜底成立，不依赖模型当天是否遵守排版要求。
+const H2_HEADINGS = new Set(['为什么这样搭', '搭配依据', '搭配理由'])
+const H3_HEADINGS = new Set([
+  '能量', '蛋白', '蛋白质', '脂肪', '碳水', '碳水化合物',
+  '微量', '微量元素', '维生素', '矿物质', '膳食纤维', '结构', '油盐', '总结',
+])
+
+function normalizeSpacing(text) {
+  const out = []
+  for (const raw of String(text).split('\n')) {
+    const line = raw.replace(/[ \t]+$/, '') // 去行尾空格，防「两个空格+换行」触发硬换行 <br>
+    const t = line.trim()
+    if (t && !t.startsWith('#')) {
+      if (H2_HEADINGS.has(t)) out.push('## ' + t)
+      else if (H3_HEADINGS.has(t)) out.push('### ' + t)
+      else out.push(line)
+    } else {
+      out.push(line)
+    }
+  }
+  // 连续 3 个及以上换行压成 1 个空行（段间隔）；2 个换行保持正常段落分隔。
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 export function renderMarkdown(text) {
   if (!text) return ''
-  return md.render(normalizeTables(String(text)))
+  return md.render(normalizeTables(normalizeSpacing(String(text))))
 }
