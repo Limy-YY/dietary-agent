@@ -826,13 +826,15 @@ button {
 
 .week-day {
   border-bottom: 1px solid #f0f0f0;
+  transition: background 0.15s;
 }
 
 .week-day:last-child {
   border-bottom: none;
 }
 
-.week-day.is-today {
+/* 展开的那一天用品牌绿浅底，用于区分展开/收起；「今天」不再单独着色，靠「今天」徽标标识 */
+.week-day.open {
   background: #f5faf6;
 }
 
