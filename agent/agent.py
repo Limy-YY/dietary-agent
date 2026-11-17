@@ -102,6 +102,17 @@ _FMT = (
 )
 
 
+# 叙事系统指令（结构化动作的正文生成用）：铁律之上加 persona 与「不重复卡片」约束。
+_NARRATE_SYSTEM = (
+    SYSTEM_INSTRUCTION
+    + "\n你是「膳宝」，一个友好、简洁的膳食搭配助手，用「你」称呼用户，语气轻松不生硬。\n"
+    "你现在要针对刚刚完成的一个动作写一句到三句的短回应，用自然段落即可，不要用标题、列表或表格。\n"
+    "重要：结构化结果（食谱卡片/膳食报告）已经由前端单独渲染，你的文字不要整段复述卡片里的数据，"
+    "只需自然点出关键信息（如本餐/本周的核心菜、热量量级、状态变化）并引导下一步。\n"
+    "所有数值只能引用「本轮结果」里给出的，不得自行计算或编造。"
+)
+
+
 _DATE_TOKEN_RE = re.compile(
     r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?|(\d{1,2})月(\d{1,2})[日号]"
 )
@@ -204,19 +215,33 @@ def classify(message: str) -> dict:
 
 # ---------------------------------------------------------------- LLM 文本
 
-def _llm_text(system: str, user: str, fallback: str) -> str:
+def _llm_text(system: str, user: str, fallback: str, history: list | None = None, temperature: float = 0.4) -> str:
     client = _llm()
     if client is None:
         return fallback
+    messages: list[dict] = [{"role": "system", "content": system}]
+    # 多轮上下文：只取 user/assistant 文本轮，role 白名单防注入 tool/system。
+    for h in history or []:
+        role = h.get("role")
+        content = h.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)})
+    messages.append({"role": "user", "content": user})
     try:
         resp = client.chat.completions.create(
             model=config.DEEPSEEK_MODEL,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0.4,
+            messages=messages,
+            temperature=temperature,
         )
         return resp.choices[0].message.content.strip() or fallback
     except Exception:
         return fallback
+
+
+def _narrate(user_message: str, context: str, fallback: str, history: list | None = None) -> str:
+    """结构化动作的正文：把「用户原话 + 本轮工具结果」交给 LLM 写成应景短回应；无 LLM 时回退固定话术。"""
+    prompt = f"用户消息：{user_message}\n\n本轮结果：\n{context}"
+    return _llm_text(_NARRATE_SYSTEM, prompt, fallback, history, temperature=0.6)
 
 
 # ---------------------------------------------------------------- 档案
@@ -323,8 +348,28 @@ def _explain_material(plan: dict) -> dict:
     }
 
 
-def run(user_id: str, message: str) -> dict:
-    """执行一条用户消息，返回 {text, blocks}。"""
+def _plan_brief(plan: dict, limit: int = 6) -> str:
+    """从方案抽取供 LLM 包装正文用的关键信息（只读后端已给字段，不自行计算）。"""
+    slots = list(_iter_slots(plan))
+    lines = []
+    for s in slots[:limit]:
+        picked = s.get("selected_candidate") or ((s.get("candidates") or [None])[0])
+        dishes = (picked or {}).get("dishes") or []
+        names = "、".join(str(d.get("name", "")) for d in dishes if d.get("name"))
+        kcal = ((picked or {}).get("macro_estimate") or {}).get("kcal")
+        kcal_txt = f"约 {kcal} kcal" if kcal is not None else "热量待估"
+        meal = s.get("meal_type") or s.get("label") or ""
+        if names:
+            lines.append(f"{meal}：{names}（{kcal_txt}）")
+    if len(slots) > limit:
+        lines.append(f"……（共 {len(slots)} 餐，完整内容见卡片）")
+    if not lines:
+        lines.append("（方案内容见卡片）")
+    return "\n".join(lines)
+
+
+def run(user_id: str, message: str, history: list | None = None) -> dict:
+    """执行一条用户消息，返回 {text, blocks}。history 为最近若干轮 user/assistant 文本。"""
     intent = classify(message)
     kind = intent.get("intent", "chat")
     profile = _load_profile(user_id)
@@ -385,16 +430,24 @@ def run(user_id: str, message: str) -> dict:
             return {"text": f"方案没排出来：{e}", "blocks": []}
 
         goal = _goal_text(profile)
-        if kind == "plan_week":
+        base_fallback = {
             # 去掉了对 plan['range_text'] 的依赖，避免后端新 JSON 没有该字段报错
-            text = f"收到！按你的{goal}档案排了接下来七天（{today} 至 {end_day}）的三餐，食材尽量不重复："
-        elif kind == "plan_meal":
-            text = "给你挑了三个方向，热量都落在本餐区间，点一个就能确认："
-        else:
-            text = f"收到！已结合你的{goal}档案，为你生成了今天的方案："
+            "plan_week": f"收到！按你的{goal}档案排了接下来七天（{today} 至 {end_day}）的三餐，食材尽量不重复：",
+            "plan_meal": "给你挑了三个方向，热量都落在本餐区间，点一个就能确认：",
+            "plan_day": f"收到！已结合你的{goal}档案，为你生成了今天的方案：",
+        }[kind]
+        fallback = base_fallback + "\n(注：以上知识由权威文献提供；生病请及时就医。可在面板中查看当前规划。)"
+        scope_label = {"plan_week": "接下来 7 天", "plan_day": "今天", "plan_meal": "一餐"}[kind]
+        context = (
+            f"动作：为「{scope_label}」生成了配餐方案。\n"
+            f"档案目标：{goal}\n"
+            f"方案内容：\n{_plan_brief(plan)}\n"
+            "引导：右侧「当前规划」面板可查看；餐卡可「换一换」换候选，确认后固定并生成食材清单。"
+        )
+        text = _narrate(message, context, fallback, history)
 
         return {
-            "text": text + "\n(注：以上知识由权威文献提供；生病请及时就医。可在面板中查看当前规划。)",
+            "text": text,
             "blocks": [
                 blocks.meal_card_block(plan)
             ],
@@ -433,8 +486,16 @@ def run(user_id: str, message: str) -> dict:
                 if k is not None:
                     kcal_text = f"{k} kcal"
 
+            fallback = f"换好啦！给你换成了 {new_dish_text}，这一顿 {kcal_text}。你觉得怎么样？\n(可在面板中查看当前规划)"
+            context = (
+                f"动作：更换「{intent.get('meal_type') or '午餐'}」候选。\n"
+                f"新候选：{new_dish_text}\n"
+                f"该餐热量：{kcal_text}\n"
+                "引导：卡片已更新，可继续换或确认。"
+            )
+            text = _narrate(message, context, fallback, history)
             return {
-                "text": f"换好啦！给你换成了 {new_dish_text}，这一顿 {kcal_text}。你觉得怎么样？\n(可在面板中查看当前规划)",
+                "text": text,
                 # 【核心修改】只发前端认的 meal_card，删掉废弃的 anchor_block
                 "blocks": [blocks.meal_card_block(updated_plan)]
             }
@@ -478,8 +539,17 @@ def run(user_id: str, message: str) -> dict:
 
             kcal = (target.get("macro_estimate") or {}).get("kcal")
             kcal_text = f"{kcal} kcal" if kcal is not None else "热量待估"
+            name = _candidate_name(target)
+            fallback = f"已选定 {name}，这一顿 {kcal_text}。"
+            context = (
+                f"动作：选定「{intent.get('meal_type') or '午餐'}」候选。\n"
+                f"选定菜品：{name}\n"
+                f"该餐热量：{kcal_text}\n"
+                "引导：卡片已更新，可继续调整或确认。"
+            )
+            text = _narrate(message, context, fallback, history)
             return {
-                "text": f"已选定 {_candidate_name(target)}，这一顿 {kcal_text}。",
+                "text": text,
                 "blocks": [blocks.meal_card_block(updated_plan)]
             }
         except Exception as e:
@@ -506,10 +576,18 @@ def run(user_id: str, message: str) -> dict:
             st["current_plan"] = updated_plan
             st["plans"].insert(0, dict(updated_plan))
 
-            tail = "已取代同期的旧方案。" if replace else ""
+            fallback = (
+                f"已确认，方案已生效。{'已取代同期的旧方案。' if replace else ''}\n"
+                "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。"
+            )
+            context = (
+                "动作：确认/固定当前方案。\n"
+                f"是否取代同期的旧方案：{'是' if replace else '否'}\n"
+                "引导：方案已生效（餐卡翻「已生效」）；食材清单已生成，右侧「食材清单」面板可查看并边买边勾。"
+            )
+            text = _narrate(message, context, fallback, history)
             return {
-                "text": f"已确认，方案已生效。{tail}\n"
-                        "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。",
+                "text": text,
                 # 【改进】发带 fixed 状态的餐卡：前端按 meal_plan_id 就地更新原卡（翻成「已生效」并禁用按钮），
                 # 不在对话里追加新卡；清单只引导去右侧工具栏。
                 "blocks": [blocks.meal_card_block(updated_plan)]
@@ -552,9 +630,18 @@ def run(user_id: str, message: str) -> dict:
                 if scope == "custom"
                 else "近 7 天" if scope == "week" else "近 30 天"
             )
+            fallback = (
+                f"已为你生成{label}膳食报告，覆盖能量、宏量供能比与 7 项关键微量"
+                f"（按窗口内已固定方案聚合）。"
+            )
+            context = (
+                f"动作：生成{label}膳食报告。\n"
+                "报告维度：能量、宏量供能比、7 项关键微量（按窗口内已固定方案聚合）。\n"
+                "引导：报告卡片在下方；右侧「膳食报告」面板可回看历史。"
+            )
+            text = _narrate(message, context, fallback, history)
             return {
-                "text": f"已为你生成{label}膳食报告，覆盖能量、宏量供能比与 7 项关键微量"
-                        f"（按窗口内已固定方案聚合）。",
+                "text": text,
                 "blocks": [blocks.report_block(report)],
             }
 
@@ -576,8 +663,15 @@ def run(user_id: str, message: str) -> dict:
         except Exception as e:
             return {"text": f"方案复盘失败：{e}。可能是方案未落库或后端未响应。", "blocks": []}
 
+        fallback = "已为你复盘这份方案的营养，覆盖能量、宏量供能比与 7 项关键微量。"
+        context = (
+            "动作：复盘当前方案营养。\n"
+            "报告维度：能量、宏量供能比、7 项关键微量。\n"
+            "引导：报告卡片在下方。"
+        )
+        text = _narrate(message, context, fallback, history)
         return {
-            "text": "已为你复盘这份方案的营养，覆盖能量、宏量供能比与 7 项关键微量。",
+            "text": text,
             "blocks": [blocks.report_block(report)]
         }
 
@@ -586,9 +680,12 @@ def run(user_id: str, message: str) -> dict:
         plan = _user_state(user_id).get("current_plan")
         if not plan:
             return {"text": "还没有方案可以展开。要先排今天的三餐吗？", "blocks": []}
+        fallback = "完整食谱卡片已送达，每道菜都有估量和热量。"
+        context = "动作：展开完整食谱。引导：卡片已更新，每道菜含估量与热量。"
+        text = _narrate(message, context, fallback, history)
         # 【修改】原本发 3 种废弃卡片，现在严格遵照清单要求改发 meal_card_block
         return {
-            "text": "完整食谱卡片已送达，每道菜都有估量和热量。",
+            "text": text,
             "blocks": [blocks.meal_card_block(plan)]
         }
 
@@ -599,9 +696,12 @@ def run(user_id: str, message: str) -> dict:
                 "text": "方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类，你可以在右侧工具栏里打开食材清单。",
                 "blocks": []}
 
+        fallback = "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。"
+        context = "动作：查看食材清单。引导：清单在右侧「食材清单」面板，可边买边勾。"
+        text = _narrate(message, context, fallback, history)
         # 【改进】清单住右侧工具栏：显式索要也只引导去面板，不在对话里贴清单块
         return {
-            "text": "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。",
+            "text": text,
             "blocks": []
         }
 
@@ -618,6 +718,7 @@ def run(user_id: str, message: str) -> dict:
             SYSTEM_INSTRUCTION + "\n针对症状咨询：给出可能的营养线索，措辞用「可能缺乏 / 建议关注」，不给定论，并注明仅供参考、不构成诊断、建议就医。" + _FMT,
             f"症状：{message}\n检索线索：{content or '无'}",
             "单看症状无法下结论，建议先就医检查；饮食上注意均衡，可结合档案做针对性调整（仅供参考，不构成诊断）。",
+            history,
         )
         # 【修改】就医提醒和文献来源已由 LLM 融入正文，不再发废弃的 medical_hint 和 sources 卡片
         return {"text": text + "\n\n(注：以上信息由文献库提供参考，不可替代专业医疗诊断，如有不适请及时就医。)",
@@ -641,6 +742,7 @@ def run(user_id: str, message: str) -> dict:
             + _FMT,
             f"用户问：{message}\n方案数据：{json.dumps(material, ensure_ascii=False)}",
             "这套方案是结合你的档案与目标排的：主食打底保证供能，配菜兼顾蛋白质与蔬菜，具体依据如下…",
+            history,
         )
         return {"text": text, "blocks": []}
 
@@ -658,14 +760,21 @@ def run(user_id: str, message: str) -> dict:
             SYSTEM_INSTRUCTION + "\n用检索到的资料回答，结论标注出处，注意双口径（生重/成品）与油盐话术。" + _FMT,
             f"问题：{message}\n检索资料：{content or '无'}",
             "这个问题建议结合权威膳食指南理解；如需针对性建议，我可以按你的档案给出更具体的方案。",
+            history,
         )
         # 【修改】停用 rag_sources 卡片，来源通过 LLM 文本呈现
         return {"text": text, "blocks": []}
 
     # 兜底
     # 【修改】停用 anchor_block
+    fallback = "这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告。\n(功能面板可在左下角菜单中找到)"
+    context = (
+        "动作：用户的消息没有命中明确的配餐/调整/报告/营养问答意图。\n"
+        "引导：友好回应，并把用户引向可用功能——生成一日三餐 / 一周食谱 / 推荐一餐 / 生成膳食报告 / 咨询营养知识。"
+    )
+    text = _narrate(message, context, fallback, history)
     return {
-        "text": "这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告。\n(功能面板可在左下角菜单中找到)",
+        "text": text,
         "blocks": [],
     }
 

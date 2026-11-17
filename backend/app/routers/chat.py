@@ -115,6 +115,19 @@ def _save_message(conversation_id: int, role: str, content: str, db: Session) ->
     db.commit()
 
 
+def _load_history(db: Session, conversation_id: int, limit: int = 8) -> list[dict]:
+    """读最近 N 轮历史（user/assistant 文本），正序返回，供 Agent 多轮上下文。"""
+    rows = db.execute(
+        text(
+            "SELECT role, content FROM app.message WHERE conversation_id = :cid "
+            "AND role IN ('user', 'assistant') AND content IS NOT NULL "
+            "ORDER BY message_id DESC LIMIT :limit"
+        ),
+        {"cid": conversation_id, "limit": limit},
+    ).mappings().all()
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
 def _profile_exists(db: Session, user_id: str) -> bool:
     row = db.execute(
         text("SELECT 1 FROM app.profile WHERE user_id = :uid"), {"uid": user_id}
@@ -168,7 +181,7 @@ def _block_to_artifact(block: dict) -> dict | None:
     return {"type": artifact_type, "payload": payload}
 
 
-def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = None):
+def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = None, history: list[dict] | None = None):
     """调用 Agent 服务并产出契约事件。
 
     yield (event, data)；调用方负责补 conversation_id 与 done。
@@ -176,6 +189,7 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
 
     token：调用方 JWT 原样透传给 Agent —— Agent 内部还要回调后端 REST
     （档案 / 食材 / 核算 / 生成方案落库），没有它一律 401，会退化成「没有你的档案」。
+    history：最近若干轮 user/assistant 文本，透传给 Agent 做多轮上下文。
     """
     settings = get_settings()
     url = settings.AGENT_BASE_URL.rstrip("/") + "/chat"
@@ -184,6 +198,7 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
         "message": req.message,
         "conversation_id": str(conversation_id),
         "token": token,
+        "history": history or [],
     }
     timeout = httpx.Timeout(settings.AGENT_TIMEOUT_S, connect=10.0)
     with httpx.Client(timeout=timeout, trust_env=False) as client:  # 本机互调不走系统代理（否则开 Clash/V2Ray 时 localhost 也被路由导致 502）
@@ -237,6 +252,7 @@ def agent_chat(
     if token:
         req.user_id = decode_token(token)
     conversation_id = _get_or_create_conversation(req, db)
+    history = _load_history(db, conversation_id)
     _save_message(conversation_id, "user", req.message, db)
 
     def _stream():
@@ -277,7 +293,7 @@ def agent_chat(
 
                 if finish_reason != "error":
                     try:
-                        for event, data in _agent_events(req, conversation_id, token):
+                        for event, data in _agent_events(req, conversation_id, token, history):
                             if event == "message":
                                 assistant_text.append(data.get("content") or "")
                             elif event == "artifact":

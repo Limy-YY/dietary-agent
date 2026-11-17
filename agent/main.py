@@ -31,6 +31,8 @@ class AgentChatRequest(BaseModel):
     conversation_id: str | int | None = None
     # 后端 /agent/chat 代调时透传调用方 JWT，Agent 再拿它去调后端 REST（否则一律 401）
     token: str | None = None
+    # 最近若干轮 user/assistant 历史（后端已落库，代调时透传），供 LLM 多轮上下文
+    history: list[dict] | None = None
 
 
 def _sse(event: str, data: dict) -> str:
@@ -54,7 +56,7 @@ async def _stream(req: AgentChatRequest):
     # 当前 ASGI task 的 ContextVar（token）会被复制到线程，agent 内的 REST 调用
     # 因此带上本请求的身份；并发请求各自独立 task，不串号。
     try:
-        result = await run_in_threadpool(agent.run, req.user_id, req.message)
+        result = await run_in_threadpool(agent.run, req.user_id, req.message, req.history)
     except Exception as e:  # 生成中失败 → error 事件，前端可重试
         yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
         return
