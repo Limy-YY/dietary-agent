@@ -18,18 +18,27 @@
           <span class="type-tag" :class="isFixed ? 'live' : 'archive'">{{ isFixed ? '已生效' : '待确认' }}</span>
         </div>
         <div class="po-cal-compact">
-          <span class="num">{{ fmtKcal(plan.goal_energy_kcal) }}</span>
-          <span class="unit">kcal 目标</span>
+          <span class="num">{{ fmtKcal(actualKcal) }}</span>
+          <span class="unit">{{ kcalLabel }} · 目标 {{ fmtKcal(plan.goal_energy_kcal) }} kcal</span>
         </div>
+        <div v-if="kcalPct !== null" class="po-cal-bar">
+          <div class="po-cal-fill" :style="{ width: kcalPct + '%' }"></div>
+        </div>
+        <div class="po-cal-sub">目标为份量量级参考，不做热量缺口/盈余</div>
+      </div>
+
+      <div class="section-head-row">
+        <div class="section-head-title">🍽️ 食谱概览</div>
+        <button class="expand-all-btn" @click="toggleAllDays">{{ allOpen ? '全部收起' : '全部展开' }}</button>
       </div>
 
       <div
         v-for="(day, di) in plan.days"
         :key="day.iso + di"
         class="plan-day"
-        :class="{ open: openDay === di }"
+        :class="{ open: isOpen(di) }"
       >
-        <div class="plan-day-head" @click="openDay = openDay === di ? -1 : di">
+        <div class="plan-day-head" @click="toggleDay(di)">
           <span class="pd-label">{{ day.is_today ? '今天' : day.weekday }} · {{ day.date }}</span>
           <span class="pd-kcal">{{ fmtKcal(day.kcal) }} kcal</span>
           <span class="pd-chevron">▾</span>
@@ -37,11 +46,17 @@
         <div class="plan-day-body">
           <div class="meal-overview-wrap">
             <table class="meal-table">
+              <thead>
+                <tr><th class="mt-meal">餐次</th><th class="mt-dish">菜品</th><th class="mt-kcal">热量</th></tr>
+              </thead>
               <tbody>
                 <tr v-for="(slot, si) in day.slots" :key="si">
                   <td class="mt-meal">{{ slot.label }}</td>
                   <td class="mt-dish">{{ slot.dish_text || '—' }}</td>
-                  <td class="mt-kcal"><span class="num">{{ fmtKcal(slot.kcal) }}</span></td>
+                  <td class="mt-kcal">
+                    <span class="num">{{ fmtKcal(slot.kcal) }}</span>
+                    <button v-if="!isFixed" class="cp-swap" :disabled="!slot.candidates.length" @click="swap(slot)">换一换</button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -51,8 +66,10 @@
 
       <div class="plan-actions">
         <button class="plan-btn-secondary" @click="openRecipe">看完整食谱</button>
-        <button v-if="!isFixed" class="fix-btn" @click="send('确认当前方案')">确认方案</button>
+        <button v-if="!isFixed" class="fix-btn" @click="send(PHRASE.confirm)">确认方案</button>
       </div>
+      <button class="cp-report-link" @click="openReport">📊 查看这份方案的膳食报告 →</button>
+      <div class="panel-note">{{ isFixed ? '💡 方案已生效，右侧「食材清单」已按天同步采购项，建议分批购买。' : '💡 确认方案后，「食材清单」才会同步更新采购项。' }}</div>
     </template>
 
     <template v-else-if="error">
@@ -78,6 +95,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { fetchCurrentPlan } from '@/api/mealPlan.js'
 import { fmtKcal, normalizeCurrentPlan } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
+import { PHRASE } from '@/constants/actions.js'
 import { usePanelStore } from '@/stores/panel.js'
 import { useChatStore } from '@/stores/chat.js'
 import { useUi } from '@/composables/useUi.js'
@@ -90,13 +108,67 @@ const ui = useUi()
 const loading = ref(false)
 const error = ref('')
 const plan = ref(null)
-const openDay = ref(0)
+const openDays = ref([])
 
 const isFixed = computed(() => plan.value?.status === 'fixed')
 const updatedText = computed(() => {
   const t = plan.value?.fixed_at
   return t ? fmtDateTime(t) : '—'
 })
+
+/** 实际热量：单餐/单日取总量，多日取日均（goal_energy_kcal 为每日量级） */
+const actualKcal = computed(() => {
+  const days = plan.value?.days || []
+  const known = days
+    .map((d) => d.kcal)
+    .filter((v) => v !== null && v !== undefined && Number.isFinite(Number(v)))
+  if (!known.length) return null
+  const total = known.reduce((s, v) => s + Number(v), 0)
+  return plan.value?.plan_type === '餐' || days.length <= 1 ? total : total / known.length
+})
+
+const kcalLabel = computed(() => {
+  if (plan.value?.plan_type === '餐') return '本餐'
+  if ((plan.value?.days?.length || 0) <= 1) return '全天'
+  return '日均'
+})
+
+/** 达成度：仅作量级参考展示，cap 在 0~100 */
+const kcalPct = computed(() => {
+  const a = actualKcal.value
+  const g = plan.value?.goal_energy_kcal
+  if (a == null || g == null || !(g > 0)) return null
+  return Math.min(100, Math.max(0, Math.round((a / g) * 100)))
+})
+
+const allOpen = computed(() => {
+  const n = plan.value?.days?.length || 0
+  return n > 0 && openDays.value.length === n
+})
+
+function isOpen(di) {
+  return openDays.value.includes(di)
+}
+
+function toggleDay(di) {
+  const i = openDays.value.indexOf(di)
+  if (i >= 0) openDays.value.splice(i, 1)
+  else openDays.value.push(di)
+}
+
+function toggleAllDays() {
+  const days = plan.value?.days || []
+  openDays.value = allOpen.value ? [] : days.map((_, i) => i)
+}
+
+function swap(slot) {
+  if (isFixed.value) return
+  send(PHRASE.swap(slot.label || '这一餐'))
+}
+
+function openReport() {
+  panel.open('report')
+}
 
 async function load() {
   loading.value = true
@@ -105,7 +177,9 @@ async function load() {
     const raw = await fetchCurrentPlan()
     const view = raw ? normalizeCurrentPlan(raw) : null
     plan.value = view && view.has_plan ? view.plan : null
-    openDay.value = Math.max(0, plan.value?.days?.findIndex((d) => d.is_today) ?? 0)
+    const days = plan.value?.days || []
+    const todayIdx = days.findIndex((d) => d.is_today)
+    openDays.value = days.length ? [todayIdx >= 0 ? todayIdx : 0] : []
   } catch (e) {
     error.value = e.message || '方案加载失败'
     plan.value = null
@@ -142,5 +216,42 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
 <style scoped>
 .sk-wrap {
   padding-top: 8px;
+}
+
+.cp-swap {
+  display: block;
+  margin-top: 4px;
+  margin-left: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 11.5px;
+  color: var(--brand-hover);
+  cursor: pointer;
+}
+
+.cp-swap:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.cp-swap:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cp-report-link {
+  display: block;
+  margin-top: 10px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 12.5px;
+  color: var(--brand-hover);
+  cursor: pointer;
+  text-align: left;
+}
+
+.cp-report-link:hover {
+  text-decoration: underline;
 }
 </style>

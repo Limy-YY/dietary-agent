@@ -2777,6 +2777,57 @@ button {
   color: var(--text-sub);
 }
 
+.po-cal-bar {
+  height: 8px;
+  background: #fff;
+  border-radius: 99px;
+  margin: 12px 0 6px;
+  overflow: hidden;
+}
+
+.po-cal-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--brand), var(--chart-protein));
+  border-radius: 99px;
+}
+
+.po-cal-sub {
+  font-size: 11.5px;
+  color: var(--text-sub);
+}
+
+.section-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 0 10px;
+}
+
+.section-head-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.expand-all-btn {
+  font-size: 12px;
+  color: var(--brand-hover);
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.expand-all-btn:hover {
+  background: var(--brand-light);
+  border-color: var(--brand);
+}
+
 .plan-day {
   border: 1px solid var(--border);
   border-radius: 12px;
