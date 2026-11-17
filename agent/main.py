@@ -34,6 +34,9 @@ class AgentChatRequest(BaseModel):
     token: str | None = None
     # 最近若干轮 user/assistant 历史（后端已落库，代调时透传），供 LLM 多轮上下文
     history: list[dict] | None = None
+    # 静默按钮动作（换一换/选用/确认）：跳过 LLM 叙事，直接下发结构化 block + done。
+    # 前端 silentAction 只消费 meal_card、正文被丢弃，叙事纯属浪费 DeepSeek 数秒延迟。
+    silent: bool = False
 
 
 def _sse(event: str, data: dict) -> str:
@@ -79,8 +82,9 @@ async def _stream(req: AgentChatRequest):
 
     # 正文先行：narration 走真 token 流（LLM stream=True），否则整段下发固定文本。
     # 先说话、再落卡，避免「静默蹦卡」的突兀感（对齐主流客户端：文字先导，产物随后淡入）。
+    # silent：静默按钮动作直接跳过叙事（前端已丢弃正文），落卡 + done 即可。
     narration = result.get("narration")
-    if narration is not None:
+    if narration is not None and not req.silent:
         # 工具已跑完，进入「组织回复」阶段：覆盖最后一条工具状态，填补 LLM 首 token 前的空档
         yield _sse("status", {"stage": "正在整理回复"})
         token_q: asyncio.Queue[str | None] = asyncio.Queue()
@@ -102,7 +106,7 @@ async def _stream(req: AgentChatRequest):
         suffix = result.get("suffix")
         if suffix:
             yield _sse("message", {"delta": suffix})
-    else:
+    elif narration is None and not req.silent:
         text = result.get("text") or ""
         if text:
             yield _sse("message", {"delta": text})

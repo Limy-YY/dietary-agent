@@ -179,6 +179,8 @@ async function swap(slot) {
   } finally {
     swapping.value = ''
   }
+  // 换完本地刷新自身：面板可能正在展示这份「待确认」方案，而换候选只改草稿、不再触发全局 bump
+  await load()
 }
 
 async function openReport() {

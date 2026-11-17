@@ -10,10 +10,13 @@ import { getToken, apiBase, ApiError } from './http.js'
  *   done     → { conversation_id, meal_plan_id, finish_reason }
  * 请求体：{ conversation_id?, message, context?{ meal_plan_id } }
  */
-export async function streamChat({ conversationId, message, context, signal, onEvent }) {
+export async function streamChat({ conversationId, message, context, signal, onEvent, silent = false }) {
   // user_id 由后端从 Authorization 的 token 解析（chat.py 用 token.sub 覆盖请求体），
   // 这里发空串只为通过 ChatRequest 的必填校验；真值以后端 token 为准。
   const bodyPayload = { message, user_id: '' }
+  // 静默按钮动作（换一换/选用/确认）：告诉 Agent 跳过 LLM 叙事，直接落卡 + done，
+  // 否则每次点候选都要等 DeepSeek 生成一段被前端丢弃的正文，几秒才返回，表现为「不灵敏」。
+  if (silent) bodyPayload.silent = true
   // 真后端 conversation_id 是整数；Mock 时代遗留的 'conv_...' 字符串会导致 Pydantic int 校验失败，这里只发整数。
   const cid = Number(conversationId)
   if (conversationId != null && conversationId !== '' && Number.isInteger(cid)) {

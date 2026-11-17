@@ -199,6 +199,7 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
         "conversation_id": str(conversation_id),
         "token": token,
         "history": history or [],
+        "silent": bool(req.silent),
     }
     timeout = httpx.Timeout(settings.AGENT_TIMEOUT_S, connect=10.0)
     with httpx.Client(timeout=timeout, trust_env=False) as client:  # 本机互调不走系统代理（否则开 Clash/V2Ray 时 localhost 也被路由导致 502）

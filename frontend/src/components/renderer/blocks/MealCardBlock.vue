@@ -198,6 +198,8 @@ function isSwapping(slot) {
 
 async function pickCandidate(c) {
   if (isFixed.value || chat.sending || swapping.value) return
+  // 点的是当前已选中的候选：后端会报「该候选已是当前选中」，直接忽略，避免误弹「选用失败」
+  if (c.candidate_id === pickedCandidateId.value) return
   const label = slots.value[0]?.label || MEAL_LABELS[slots.value[0]?.meal_type] || '这一餐'
   const prev = pickedId.value
   pickedCandidateId.value = c.candidate_id // 乐观选中，失败回退

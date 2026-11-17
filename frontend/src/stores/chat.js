@@ -290,7 +290,7 @@ export const useChatStore = defineStore('chat', () => {
 
       if (aiMsg.status === 'streaming') aiMsg.status = 'done'
       session.updatedAt = new Date().toISOString()
-      // 对话完成后通知面板刷新：确认/换候选都可能在服务端改了数据
+      // 对话完成后通知面板刷新：生成/确认/报告都可能在服务端改了固定方案、清单、历史或报告
       panel.bump()
     } catch (e) {
       if (e.name === 'AbortError' || e.code === 'CANCELED') {
@@ -317,7 +317,6 @@ export const useChatStore = defineStore('chat', () => {
     if (!content || sending.value) return false
 
     const session = ensureSession()
-    const panel = usePanelStore()
 
     sending.value = true
     const controller = new AbortController()
@@ -329,6 +328,7 @@ export const useChatStore = defineStore('chat', () => {
         conversationId: session.conversationId,
         message: content,
         signal: controller.signal,
+        silent: true,
         onEvent: (evt) => {
           const payload = evt.data && typeof evt.data === 'object' ? evt.data : {}
           // 只消费方案卡，丢弃正文文本（静默，不产生对话气泡）
@@ -347,8 +347,8 @@ export const useChatStore = defineStore('chat', () => {
       })
 
       if (errorMsg) throw new Error(errorMsg)
-      // 换/选都在服务端改了数据，通知右侧面板刷新
-      panel.bump()
+      // 换候选/选用只改「草稿候选」的选中项，不影响固定方案/食材清单/历史/报告，
+      // 故不触发全局面板刷新（否则点「换一换」右侧工具栏会整体重载）。
       return true
     } catch (e) {
       if (e.name === 'AbortError' || e.code === 'CANCELED') return false
