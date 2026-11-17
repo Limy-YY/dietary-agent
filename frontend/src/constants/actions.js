@@ -17,7 +17,8 @@ export const PRESET_CHIPS = [
   { key: 'day', text: '🥗 生成一日三餐', phrase: '生成一日三餐' },
   { key: 'week', text: '📅 生成一周食谱', phrase: '生成一周食谱' },
   { key: 'meal', text: '🍱 推荐一餐搭配', phrase: '推荐一餐搭配' },
-  { key: 'report', text: '📊 生成方案膳食报告', phrase: PHRASE.report, report: true }
+  { key: 'week_report', text: '📊 生成周膳食报告', phrase: '生成周膳食报告', report: true },
+  { key: 'month_report', text: '📈 生成月膳食报告', phrase: '生成月膳食报告', report: true }
 ]
 
 export const MEAL_LABELS = {
