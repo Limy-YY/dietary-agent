@@ -10,7 +10,8 @@ payload = result.as_dict()          # 直接映射 MealCard payload
 
 设计要点：
 - 只做计算，不写库；写库（meal_plan / meal_slot / meal_candidate）由接口层负责；
-- 同一餐次的候选池只枚举一次，多日方案复用同一池（避免重复组合爆炸）；
+- 同一餐次的候选池只枚举一次，多日方案复用同一池（避免重复组合爆炸），
+  但第 3 步对主菜做「当天跨餐 + 同餐跨日」两级去重，让多日方案一周不重样；
 - 硬约束（过敏原/宗教/忌口/厨具）永不放开；放宽只针对宏量区间，并且必须记入 notes；
 - 每餐候选数目标 2~3，不足时说明原因（不静默降级）。
 """
@@ -202,31 +203,48 @@ def generate_plan(
             diagnostics,
         )
 
-    # 3) 差异化：每餐挑 2~3 个候选
+    # 3) 差异化：每餐挑 2~3 个候选；主菜做两级去重——
+    # ① 当天跨餐：晚餐不重复当天早餐/午餐的主菜（主食重复是可接受的）；
+    # ② 同餐跨日：同一餐次在窗口内尽量不重复「首选」主菜，让多日方案一周不重样。
     slots: list[SlotResult] = []
     slot_notes: list[str] = []
+    window_picked_mains: dict[str, set[str]] = {mt: set() for mt in meal_order}
+    cross_day_noted: set[str] = set()
     for slot_date in dates:
-        # 同一天内跨餐去重：晚餐不重复用早餐的主菜（主食重复是可接受的）
-        used_mains: set[str] = set()
+        day_used_mains: set[str] = set()
         for index, meal_type in enumerate(meal_order):
             target = targets.meal_targets[meal_type]
-            pool = [clone_candidate(c) for c in templates[meal_type]]
-            fresh = [c for c in pool if c.signature[0] not in used_mains]
-            fresh_mains = {c.signature[0] for c in fresh}
             need = max(2, int(request.candidates_per_slot))
-            if len(fresh_mains) >= need:
-                # 未重复的主菜种类足够，整餐都用新主菜
-                pool = fresh
+            pool = [clone_candidate(c) for c in templates[meal_type]]
+
+            # ① 当天跨餐去重：保留当天还没用过的主菜，不足时退回已用主菜（复用）
+            day_fresh = [c for c in pool if c.signature[0] not in day_used_mains]
+            day_fresh_mains = {c.signature[0] for c in day_fresh}
+            if len(day_fresh_mains) >= need:
+                pool = day_fresh
             else:
-                # 主菜种类不够：保留未重复主菜优先，再补已用主菜，并如实记一条说明
-                if fresh_mains:
+                if day_fresh_mains:
                     slot_notes.append(
-                        f"{slot_date} {meal_type}餐当天未重复的主菜只有 {len(fresh_mains)} 种"
+                        f"{slot_date} {meal_type}餐当天未重复的主菜只有 {len(day_fresh_mains)} 种"
                         f"（目标 {need} 种），跨餐存在主菜重复"
                     )
-                pool = fresh + [c for c in pool if c.signature[0] in used_mains]
+                pool = day_fresh + [c for c in pool if c.signature[0] in day_used_mains]
+
+            # ② 同餐跨日：把前几日该餐「首选」没选过的主菜排到最前，让首选主菜逐日错开
+            prev_picked = window_picked_mains[meal_type]
+            cross_fresh = [c for c in pool if c.signature[0] not in prev_picked]
+            if cross_fresh:
+                pool = cross_fresh + [c for c in pool if c.signature[0] in prev_picked]
+            elif meal_type not in cross_day_noted:
+                cross_day_noted.add(meal_type)
+                slot_notes.append(
+                    f"{meal_type}餐在窗口内可用的不重复主菜已用尽，后续与前几日存在主菜重复"
+                )
+
             picked = diversify(pool, request.candidates_per_slot, start_id=1)
-            used_mains |= {c.signature[0] for c in picked}
+            if picked:
+                window_picked_mains[meal_type].add(picked[0].signature[0])
+            day_used_mains |= {c.signature[0] for c in picked}
             for cand in picked:
                 _fill_copy(cand, target, targets)
             if len(picked) < 2:
