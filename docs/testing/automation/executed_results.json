@@ -1,0 +1,27 @@
+{
+  "base": "https://touring-exception-divisions-map.trycloudflare.com",
+  "plan_id": 37,
+  "status": "fixed",
+  "results": [
+    {
+      "case": "EX-01",
+      "pass": true,
+      "detail": "POST executed=true→200/{'meal_plan_id': 37, 'is_executed': True}；GET 详情 is_executed=True"
+    },
+    {
+      "case": "EX-02",
+      "pass": true,
+      "detail": "true→false(200:False)→true(200)→重复 true(200)"
+    },
+    {
+      "case": "EX-03",
+      "pass": true,
+      "detail": "用户B 打卡用户A 方案 → HTTP 403 code=1003 msg=无权操作他人方案"
+    },
+    {
+      "case": "EX-04",
+      "pass": true,
+      "detail": "executed_plans 0 → 1（total_plans 1→1 应不变，差值应 +1）"
+    }
+  ]
+}
