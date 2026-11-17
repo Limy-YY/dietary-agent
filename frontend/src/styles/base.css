@@ -1533,6 +1533,10 @@ button {
   stroke: var(--chart-danger);
 }
 
+.progress.partial {
+  stroke: var(--chart-estimate);
+}
+
 .micro-val {
   position: absolute;
   top: 50%;
