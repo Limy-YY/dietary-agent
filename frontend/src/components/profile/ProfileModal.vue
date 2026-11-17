@@ -475,6 +475,9 @@ onMounted(loadConditionCatalog)
 .cond-name {
   font-size: 13px;
   color: var(--text-main, #333);
+  /* 固定名称宽度，让「痛风/高血压」等字数不同的病种其输入框左缘对齐 */
+  width: 3em;
+  flex-shrink: 0;
 }
 
 /* clarify 补录引导：缺失字段高亮 */
