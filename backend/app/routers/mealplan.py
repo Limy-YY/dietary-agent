@@ -96,6 +96,7 @@ class FixRequest(BaseModel):
 
     meal_plan_id: int
     selections: list[Selection] | None = None
+    replace: bool = False  # 若与已有 fixed 方案餐位重叠，是否取代旧方案
 
 
 class ExecutedRequest(BaseModel):
@@ -171,6 +172,53 @@ def _get_plan(db: Session, meal_plan_id: int) -> MealPlan:
     if plan is None:
         raise BizError(BizCode.NOT_FOUND, f"方案不存在: {meal_plan_id}", http_status=404)
     return plan
+
+
+def _overlapping_fixed_plans(db: Session, user_id: str, plan: MealPlan) -> list[dict]:
+    """与本方案存在「同一天同一餐次」餐位重叠的、仍为 fixed 未删除的方案。
+
+    以餐位（slot_date + meal_type）粒度判冲突，而非整个日期区间：用户给某天
+    单排一餐（如晚餐）不应误伤同天已固定的早/午餐。
+    返回每个重叠方案的信息：overlap_start/end 为重叠日期区间，fully_covered 表示
+    旧方案是否被新方案完全覆盖（只有完全覆盖才能无损失地整份取代）。
+    """
+    new_slots = db.execute(
+        text("SELECT slot_date, meal_type FROM app.meal_slot WHERE meal_plan_id = :pid"),
+        {"pid": plan.meal_plan_id},
+    ).all()
+    new_set = {(str(r[0]), r[1]) for r in new_slots}
+
+    rows = db.execute(
+        text(
+            "SELECT p.meal_plan_id, p.fixed_at, s.slot_date, s.meal_type "
+            "FROM app.meal_plan p "
+            "JOIN app.meal_slot s ON s.meal_plan_id = p.meal_plan_id "
+            "WHERE p.user_id = :uid AND p.status = 'fixed' AND NOT p.is_deleted "
+            "  AND p.meal_plan_id <> :pid "
+            "ORDER BY p.fixed_at ASC NULLS LAST, p.meal_plan_id ASC, s.slot_date, s.meal_type"
+        ),
+        {"uid": user_id, "pid": plan.meal_plan_id},
+    ).all()
+
+    by_plan: dict[int, list] = {}
+    for r in rows:
+        by_plan.setdefault(int(r[0]), []).append(r)
+
+    result: list[dict] = []
+    for pid, slots in by_plan.items():
+        overlap_dates = sorted({str(r[2]) for r in slots if (str(r[2]), r[3]) in new_set})
+        if not overlap_dates:
+            continue
+        covered = sum(1 for r in slots if (str(r[2]), r[3]) in new_set)
+        result.append(
+            {
+                "meal_plan_id": pid,
+                "overlap_start": overlap_dates[0],
+                "overlap_end": overlap_dates[-1],
+                "fully_covered": covered == len(slots),
+            }
+        )
+    return result
 
 
 def _g(value) -> str:
@@ -537,23 +585,26 @@ def swap_candidate(
 
 
 def _shopping_items(db: Session, plan: MealPlan) -> list[dict]:
-    """按选中候选展开到食材级（库内平铺，分组留给返回层）。
+    """按选中候选展开到食材级，并保留「天」维度（库内平铺，分组留给返回层）。
 
     契约 §3.6：清单项是食材（`ingredient_id / name / estimated_quantity / unit`），
     不是菜品。数量为估算值：菜品每份用量 × 该菜在方案内累计份数。
+    周/多日方案按 `slot_date` 分天累计，单项带 `day_date`，支撑前端按天分列与分批采购；
+    单餐/单日方案同天归并，返回层会自动退化为纯类别分组。
     可选配料（`is_optional`）不计入采购。
     """
-    servings_by_dish: dict[str, float] = {}
+    # (dish_id, day) -> 累计份数；day 取 slot_date 的 ISO 日期，跨天不合并
+    dish_day_servings: dict[tuple[str, str], float] = {}
     for slot in plan.slots:
         cand = _selected_candidate(slot)
         if cand is None:
             continue
+        day = str(slot.slot_date) if slot.slot_date else ""
         for d in cand.dishes:
-            servings_by_dish[d.dish_id] = servings_by_dish.get(d.dish_id, 0.0) + float(
-                d.servings or 1
-            )
+            key = (str(d.dish_id), day)
+            dish_day_servings[key] = dish_day_servings.get(key, 0.0) + float(d.servings or 1)
 
-    if not servings_by_dish:
+    if not dish_day_servings:
         return []
 
     rows = db.execute(
@@ -564,32 +615,35 @@ def _shopping_items(db: Session, plan: MealPlan) -> list[dict]:
             "JOIN core.ingredient i ON i.ingredient_id = di.ingredient_id "
             "WHERE di.dish_id = ANY(:ids)"
         ),
-        {"ids": list(servings_by_dish)},
+        {"ids": list({dish_id for dish_id, _ in dish_day_servings})},
     ).mappings().all()
 
-    agg: dict[int, dict] = {}
+    agg: dict[tuple[str, int], dict] = {}
     for r in rows:
         if r["is_optional"]:
             continue
-        key = r["ingredient_id"]
-        item = agg.setdefault(
-            key,
-            {
-                "ingredient_id": r["food_id"] or str(key),
-                "name": r["name"],
-                "category": r["category"] or "未分类",
-                "estimated_quantity": 0.0,
-                "unit": "g",
-            },
-        )
-        item["estimated_quantity"] += float(r["amount_g"] or 0) * servings_by_dish.get(
-            r["dish_id"], 0.0
-        )
+        for (dish_id, day), servings in dish_day_servings.items():
+            if str(dish_id) != str(r["dish_id"]):
+                continue
+            ingredient_id = r["ingredient_id"]
+            key = (day, ingredient_id)
+            item = agg.setdefault(
+                key,
+                {
+                    "ingredient_id": r["food_id"] or str(ingredient_id),
+                    "name": r["name"],
+                    "category": r["category"] or "未分类",
+                    "estimated_quantity": 0.0,
+                    "unit": "g",
+                    "day_date": day,
+                },
+            )
+            item["estimated_quantity"] += float(r["amount_g"] or 0) * servings
 
     items = list(agg.values())
     for it in items:
         it["estimated_quantity"] = round(it["estimated_quantity"], 1)
-    return sorted(items, key=lambda x: (x["category"], x["name"]))
+    return sorted(items, key=lambda x: (x["day_date"], x["category"], x["name"]))
 
 
 @router.post("/week/fix")
@@ -598,7 +652,11 @@ def fix_plan(
     user_id: str = CurrentUser,
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
-    """固定方案（API-24），成功后同步刷新食材清单。"""
+    """固定方案（API-24），成功后同步刷新食材清单。
+
+    若本方案与用户已有的固定方案在「同一天同一餐次」上重叠，默认拒绝并提示用
+    replace=true 取代旧方案，避免同一时间段多份 fixed 方案叠加进膳食报告。
+    """
     plan = _get_plan(db, req.meal_plan_id)
     if plan.user_id != user_id:
         raise BizError(BizCode.FORBIDDEN, "无权操作他人方案", http_status=403)
@@ -606,6 +664,25 @@ def fix_plan(
         raise BizError(BizCode.PLAN_STATE_CONFLICT, "方案已固定，不可重复固定")
     if plan.status != "candidates":
         raise BizError(BizCode.PLAN_STATE_CONFLICT, f"当前状态 {plan.status} 不可固定")
+
+    overlaps = _overlapping_fixed_plans(db, user_id, plan)
+    if overlaps and not req.replace:
+        full = [o for o in overlaps if o["fully_covered"]]
+        partial = [o for o in overlaps if not o["fully_covered"]]
+        parts: list[str] = []
+        if full:
+            ids = ",".join(str(o["meal_plan_id"]) for o in full)
+            parts.append(f"已有覆盖同期的已固定方案（id={ids}），替换会将其整份作废")
+        for o in partial:
+            parts.append(
+                f"方案 {o['meal_plan_id']} 与本方案在 {o['overlap_start']}~{o['overlap_end']} "
+                f"部分重叠，整份替换会让它其余日期一并失效"
+            )
+        raise BizError(
+            BizCode.PLAN_STATE_CONFLICT,
+            "；".join(parts) + "。",
+            http_status=409,
+        )
 
     slot_by_id = {s.meal_slot_id: s for s in plan.slots}
     for sel in req.selections or []:
@@ -643,6 +720,20 @@ def fix_plan(
         ),
         {"pid": plan.meal_plan_id, "items": json.dumps(items, ensure_ascii=False)},
     )
+
+    # 取代旧方案：把重叠的 fixed 方案标记为 superseded（fixed_at 清空以符合 check 约束）。
+    # 完全覆盖与部分重叠统一整份取代——部分重叠时「其余日期一并失效」已在追问里如实告知。
+    if overlaps:
+        db.execute(
+            text(
+                "UPDATE app.meal_plan "
+                "SET status = 'superseded', fixed_at = NULL, "
+                "    superseded_at = now(), superseded_by_plan_id = :new_id "
+                "WHERE meal_plan_id = ANY(:ids)"
+            ),
+            {"new_id": plan.meal_plan_id, "ids": [o["meal_plan_id"] for o in overlaps]},
+        )
+
     db.commit()
 
     db.refresh(plan)
@@ -692,7 +783,7 @@ def list_plans(
     db: Session = Depends(get_db),
 ) -> ApiResponse[PageData[dict]]:
     """历史方案列表（API-05，摘要不含 slots）。"""
-    if status is not None and status not in ("draft", "candidates", "fixed"):
+    if status is not None and status not in ("draft", "candidates", "fixed", "superseded"):
         raise BizError(BizCode.PARAM_ERROR, f"status 取值非法: {status}")
 
     where = "user_id = :uid AND is_deleted = false"

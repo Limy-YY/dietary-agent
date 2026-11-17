@@ -124,6 +124,8 @@ def _regex_intent(message: str) -> dict | None:
         return {"intent": "choose_candidate", "meal_type": label, "name": m}
     if has(r"确认|固定|就这个|就它|就选|就这么|定了|替换|覆盖|取代"):
         return {"intent": "confirm", "replace": has(r"替换|覆盖|取代")}
+    if has(r"取消|算了|不用了|先不用"):
+        return {"intent": "cancel"}
     if has(r"报告|复盘|回顾|总结|吃得(怎么样|如何|怎样|好不好)|饮食(情况|状况|回顾|复盘|怎么样)"):
         rng = _parse_date_range(m)
         if rng:
@@ -482,6 +484,10 @@ def run(user_id: str, message: str) -> dict:
         except Exception as e:
             return {"text": f"选用失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
 
+    # 取消（覆盖追问的否定回答）
+    if kind == "cancel":
+        return {"text": "好的，已保留旧方案，没有改动。", "blocks": []}
+
     # 确认 / 固定
     if kind == "confirm":
         st = _user_state(user_id)
@@ -499,28 +505,29 @@ def run(user_id: str, message: str) -> dict:
             st["current_plan"] = updated_plan
             st["plans"].insert(0, dict(updated_plan))
 
-            # 清单直接取后端 /shopping-list（fix 已按食材级落库），不再本地按 days 重算
-            shop = _shopping_list(updated_plan)
-            total = shop.get("total_items") or sum(len(g.get("items", [])) for g in shop.get("groups", []))
-
             tail = "已取代同期的旧方案。" if replace else ""
             return {
-                "text": f"已确认，方案已生效。食材清单共 {total} 项，按类别分好了。{tail}\n(点击左下角菜单可查看历史方案与食材清单)",
-                # 【核心修改】保留 meal_card 和 shopping_list，删掉废弃的 anchor_block
-                "blocks": [
-                    blocks.meal_card_block(updated_plan),
-                    blocks.shopping_list_block(shop)
-                ]
+                "text": f"已确认，方案已生效。{tail}\n"
+                        "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。",
+                # 【改进】确认后不在对话里重发餐卡/清单，只给一句确认 + 引导去右侧工具栏
+                "blocks": []
             }
         except bc.BackendError as e:
             if getattr(e, "code", None) == 2005:  # PLAN_STATE_CONFLICT：同期已有固定方案
+                # 后端消息已完整（含冲突说明），不再重复追加提示，也不重复渲染方案卡片；
+                # 改用行内快捷按钮让用户二选一，点击后发「替换/取消」固定话术走意图路由。
                 return {
-                    "text": f"{e}\n回复「替换」我就在确认这份时覆盖同期的旧方案；若不想动旧方案，回复「取消」即可。",
-                    "blocks": [blocks.meal_card_block(plan)],
+                    "text": str(e),
+                    "blocks": [
+                        blocks.quick_actions_block([
+                            {"label": "替换", "phrase": "替换"},
+                            {"label": "取消", "phrase": "取消"},
+                        ])
+                    ],
                 }
-            return {"text": f"确认方案失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
+            return {"text": f"确认方案失败：{e}", "blocks": []}
         except Exception as e:
-            return {"text": f"确认方案失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
+            return {"text": f"确认方案失败：{e}", "blocks": []}
 
     if kind == "report":
         scope = intent.get("scope") or "plan"

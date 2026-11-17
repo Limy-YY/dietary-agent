@@ -11,6 +11,7 @@ import MealCardBlock from './blocks/MealCardBlock.vue'
 import ReportBlock from './blocks/ReportBlock.vue'
 import ShoppingBlock from './blocks/ShoppingBlock.vue'
 import CurrentPlanBlock from './blocks/CurrentPlanBlock.vue'
+import ActionsBlock from './blocks/ActionsBlock.vue'
 import FallbackBlock from './blocks/FallbackBlock.vue'
 
 const props = defineProps({ block: { type: Object, required: true } })
@@ -24,7 +25,8 @@ const REGISTRY = {
   meal_card: MealCardBlock,
   shopping_list: ShoppingBlock,
   current_plan: CurrentPlanBlock,
-  nutrition_report: ReportBlock
+  nutrition_report: ReportBlock,
+  quick_actions: ActionsBlock
 }
 
 const comp = computed(() => REGISTRY[props.block.type] || null)

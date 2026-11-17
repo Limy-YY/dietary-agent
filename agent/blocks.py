@@ -212,3 +212,12 @@ def report_block(report: dict) -> dict:
     # 契约 artifact "nutrition_report"；直接发 "nutrition_report" 会被当未知 type 丢弃。
     # 这里原样透传后端 /nutrition/analysis 的方案级报告，由前端 normalizeReport 渲染。
     return {"type": "report", **report, "expanded": False}
+
+
+def quick_actions_block(actions: list[dict]) -> dict:
+    """行内快捷按钮：点击发固定话术（phrase）走 SSE，由 Agent 意图路由。
+
+    用于「替换 / 取消」这类需要用户做二选一决定的追问，前端渲染成按钮。
+    actions 形如 [{"label": "替换", "phrase": "替换"}, ...]。
+    """
+    return {"type": "quick_actions", "actions": actions}

@@ -574,5 +574,13 @@ export function normalizeArtifact(type, payload) {
     }
   }
   if (type === 'nutrition_report') return { type: 'nutrition_report', ...normalizeReport(payload) }
+  if (type === 'quick_actions') {
+    return {
+      type: 'quick_actions',
+      actions: Array.isArray(payload.actions)
+        ? payload.actions.map((a) => ({ label: str(pick(a, 'label'), ''), phrase: str(pick(a, 'phrase'), '') }))
+        : []
+    }
+  }
   return { type: 'unknown', raw_type: str(type, ''), payload }
 }

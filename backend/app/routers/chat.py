@@ -70,6 +70,7 @@ _ARTIFACT_TYPE_MAP = {
     "shopping_list": "shopping_list",
     "report": "nutrition_report",
     "current_plan": "current_plan",
+    "quick_actions": "quick_actions",
 }
 
 
