@@ -21,14 +21,14 @@
         <span v-if="dailyAvg !== null" class="hd-avg">{{ payload.days.length > 1 ? '日均约 ' : '全天约 ' }}{{ dailyAvg }} kcal</span>
       </div>
       <div v-for="(day, di) in payload.days" :key="di" class="hd-day">
-        <div class="hd-day-head">{{ day.weekday }} · {{ day.date }}<span>{{ fmtKcal(day.kcal) }} kcal</span></div>
+        <div v-if="payload.days.length > 1" class="hd-day-head">{{ day.weekday }} · {{ day.date }}<span class="hd-day-kcal">{{ fmtKcal(day.kcal) }} kcal</span></div>
         <div class="meal-overview-wrap">
           <table class="meal-table">
             <tbody>
               <tr v-for="(s, si) in day.slots" :key="si">
                 <td class="mt-meal">{{ s.label }}</td>
                 <td class="mt-dish">{{ s.dish_text || '—' }}</td>
-                <td class="mt-kcal"><span class="num">{{ fmtKcal(s.kcal) }}</span></td>
+                <td class="mt-kcal"><span class="num">{{ fmtKcal(s.kcal) }}</span><span class="unit"> kcal</span></td>
               </tr>
             </tbody>
           </table>
@@ -37,11 +37,13 @@
 
       <div class="hd-toggle-row">
         <div class="hd-section-title" style="margin: 0">👩‍🍳 详细食谱</div>
-        <button class="hd-toggle-btn" @click="showDetail = !showDetail">{{ showDetail ? '收起做法' : '展开做法' }}</button>
+        <div class="hd-toggle-cell">
+          <button class="hd-toggle-btn" @click="showDetail = !showDetail">{{ showDetail ? '收起做法' : '展开做法' }}</button>
+        </div>
       </div>
       <div v-if="showDetail">
         <div v-for="(day, di) in payload.days" :key="'dish-' + di" class="hd-day">
-          <div class="hd-day-head">{{ day.weekday }} · {{ day.date }}</div>
+          <div v-if="payload.days.length > 1" class="hd-day-head">{{ day.weekday }} · {{ day.date }}</div>
           <div v-for="(s, si) in day.slots" :key="si" class="hd-slot-group">
             <div class="hd-slot-head">{{ s.label }} {{ s.time }}</div>
             <div v-for="(dish, fi) in s.dishes" :key="fi" class="hd-dish">
@@ -176,7 +178,7 @@ watch(visible, (v) => {
 }
 
 .hd-section-title {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-main);
   margin: 18px 0 10px;
@@ -196,16 +198,25 @@ watch(visible, (v) => {
 .hd-day-head {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--brand-hover);
   margin-bottom: 6px;
-  padding-right: 76px; /* 与 .meal-table 的 mt-kcal 热量列（76px）左缘对齐 */
 }
 
-.hd-day-head span {
+/* 天头热量：固定 76px 盒、居中，与 .meal-table .mt-kcal（76px 列）共享中轴 */
+.hd-day-kcal {
+  width: 76px;
+  text-align: center;
+  flex-shrink: 0;
   font-weight: 400;
   color: var(--text-sub);
+}
+
+/* 本弹窗内热量列居中（与天头热量共享中轴）；scoped 覆盖，避免影响右侧「当前规划」面板 */
+.hd .meal-table .mt-kcal {
+  text-align: center;
 }
 
 .hd-toggle-row {
@@ -213,20 +224,32 @@ watch(visible, (v) => {
   align-items: center;
   justify-content: space-between;
   margin: 18px 0 10px;
-  padding-right: 76px; /* 「展开做法」与热量列左缘对齐，而不是贴死弹窗右缘 */
+}
+
+/* 「展开做法」按钮：胶囊样式，放进固定 76px 盒居中，与热量列中轴对齐 */
+.hd-toggle-cell {
+  width: 76px;
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .hd-toggle-btn {
-  font-size: 12px;
-  color: var(--brand);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--brand-hover);
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: #fff;
   cursor: pointer;
-  border: none;
-  background: none;
-  padding: 0;
+  transition: all 0.2s;
+  white-space: nowrap;
 }
 
 .hd-toggle-btn:hover {
-  color: var(--brand-hover);
+  background: var(--brand-light);
+  border-color: var(--brand);
 }
 
 .hd-slot-group {
@@ -234,10 +257,10 @@ watch(visible, (v) => {
 }
 
 .hd-slot-head {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--brand-hover);
-  margin-bottom: 6px;
+  margin: 12px 0 8px;
   padding-left: 8px;
   border-left: 3px solid var(--brand);
 }
