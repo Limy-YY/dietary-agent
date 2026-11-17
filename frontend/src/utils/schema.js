@@ -346,6 +346,7 @@ function microView(entry, key) {
   const statusZh = str(pick(m, 'status'), '')
   const unit = str(pick(m, 'unit'), '')
   const gap = numOrNull(pick(m, 'gap'))
+  const ul = numOrNull(pick(m, 'ul'))
   const covered = numOrNull(pick(m, 'covered_meals'))
   const total = numOrNull(pick(m, 'selected_meals'))
 
@@ -369,8 +370,10 @@ function microView(entry, key) {
     note = covered != null && total != null ? `覆盖 ${covered}/${total} 餐` : '部分餐次缺数据'
     status = 'partial'
   } else {
-    if (gap != null && gap > 0) note = `已超 ${fmtNum(gap)}${unit}`
-    else if (gap != null && gap < 0) note = `还差 ${fmtNum(-gap)}${unit}`
+    // 达标/不足/超标由 status_zh 决定：超标只看是否超过每日上限（UL），
+    // 超过推荐量（>100%）但未超 UL 仍算达标，避免把「吃够了」误报成「超标」。
+    if (statusZh === '超标') note = ul != null ? `超过每日上限 ${fmtNum(ul)}${unit}` : '超过每日上限'
+    else if (statusZh === '不足') note = gap != null ? `还差 ${fmtNum(-gap)}${unit}` : '未达标'
     else note = '已达标'
     value = fmtPct(pct)
     status = MICRO_STATUS[statusZh] || 'neutral'
@@ -380,6 +383,7 @@ function microView(entry, key) {
     key,
     name: str(pick(m, 'name_zh'), key),
     target: numOrNull(pick(m, 'target')),
+    ul,
     unit,
     intake,
     gap,

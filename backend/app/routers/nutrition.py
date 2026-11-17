@@ -176,7 +176,7 @@ def _load_reference(db: Session, user_id: str):
 
     refs = db.execute(
         text(
-            "SELECT nutrient_id, nutrient_name, unit, reference_value, "
+            "SELECT nutrient_id, nutrient_name, unit, reference_value, ul_value, "
             "       needs_clarification, menstrual_status "
             "FROM app.match_nutrient_reference(:sex, :am, '普通', NULL)"
         ),
@@ -391,13 +391,19 @@ def _macro_summary(agg: dict) -> dict:
 
 
 def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, list[str]]:
-    """返回 (key_micro_summary, 不足项清单)。intake 为日均值，target 为每日参考量。"""
+    """返回 (key_micro_summary, 不足项清单)。intake 为日均值，target 为每日参考量（RNI/AI）。
+
+    达标区间：达到推荐量的 80%（covered>=80）即算达标，且不超过每日可耐受最高摄入量（UL）。
+    「超标」只对 UL 判：超过 RNI/AI（>100%）不算超标，只有超过 UL 才有风险。
+    B1/B2 等无 UL 的微量只判「不足/达标」，永不判超标。
+    """
     summary: dict[str, dict] = {}
     shortfall: list[str] = []
 
     for k in MICRO_IDS:
         ref = refs.get(k) or {}
         target = _num(ref.get("reference_value"))
+        ul = _num(ref.get("ul_value"))
         intake = agg["micro_daily"][k]
         covered_meals = int(agg["micro_count"].get(k, 0) or 0)
 
@@ -412,7 +418,7 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
         elif covered_meals < selected_meals:
             # 部分餐次缺该微量数据，不硬性判达标/不足
             status = "参考提示"
-        elif covered > 100:
+        elif ul is not None and intake > ul:
             status = "超标"
         elif covered >= 80:
             status = "达标"
@@ -424,6 +430,7 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
             "name_zh": ref.get("nutrient_name") or k,
             "unit": ref.get("unit"),
             "target": _r(target, 2),
+            "ul": _r(ul, 2),
             "intake": intake,
             "gap": gap,
             "covered_pct": covered,
@@ -489,6 +496,7 @@ def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
     """达标率：微量按「达标天数 ÷ 有效天数」，宏量按供能比是否落在合理区间。
 
     有效天数只统计当天该微量有值的日子；有效天数为 0 时百分比为 null（不按 0% 论）。
+    单日「达标」与 `_micro_summary` 口径一致：达到推荐量 80% 且未超 UL。
     """
     micro: dict[str, dict] = {}
     pct_list: list[float] = []
@@ -496,6 +504,7 @@ def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
     for k in MICRO_IDS:
         ref = refs.get(k) or {}
         target = _num(ref.get("reference_value"))
+        ul = _num(ref.get("ul_value"))
         valid_days = 0
         achieved_days = 0
         for drow in agg["_by_date"].values():
@@ -503,7 +512,7 @@ def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
             if v is None or not target:
                 continue
             valid_days += 1
-            if v >= target:
+            if v >= target * 0.8 and (ul is None or v <= ul):
                 achieved_days += 1
         pct = round(achieved_days / valid_days * 100, 1) if valid_days else None
         if pct is None:
