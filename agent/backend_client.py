@@ -164,15 +164,21 @@ def reverse_nutrition(symptoms: str, top_k: int = 5):
     return _post("/api/agent/reverse-nutrition", {"symptoms": symptoms, "top_k": top_k})
 
 # ---------------------------------------------------------------- 调用后端接口生成方案并落库
-def generate_meal_plan(user_id: str, scope: str, start_date: str, end_date: str, meal_types: list):
-    """调用后端真实接口生成方案并落库"""
+def generate_meal_plan(user_id: str, start_date: str, end_date: str, meal_types: list,
+                       exclude_ingredients: list[str] | None = None):
+    """调用后端真实接口生成方案并落库。
+
+    后端 /meal-plan/week/generate 已是「用户自定范围」：直接透传任意 start_date/end_date/meal_types，
+    去掉 scope 三档硬编码（后端 GenerateRequest 本就没有 scope 字段，此前被 pydantic 静默忽略）。
+    """
     payload = {
         "user_id": user_id,
-        "scope": scope, # day, week, meal
         "start_date": start_date,
         "end_date": end_date,
-        "meal_types": meal_types
+        "meal_types": meal_types,
     }
+    if exclude_ingredients:
+        payload["exclude_ingredients"] = exclude_ingredients
     return _post("/api/meal-plan/week/generate", payload)
 
 # -----------------------------------------------------------------------------

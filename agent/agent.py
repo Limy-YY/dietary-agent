@@ -57,17 +57,26 @@ def llm_available() -> bool:
 _INTENT_SYSTEM = (
     "你是膳食搭配智能体的意图分类器。把用户消息归入一个意图，只返回 JSON，不要多余文字。\n"
     '意图：plan_day（今日/某天一日三餐）、plan_week（一周食谱）、plan_meal（单餐推荐）、'
+    'plan_custom（自定义范围配餐：N 天、指定日期区间、指定餐次子集，如「三天」「下周一三五」「这周末两天」「只排午餐」）、'
     'profile_build（用户描述身体指标/目标/过敏，需建档）、rag_qa（营养知识问答）、'
     'report（生成/复盘膳食报告，如「生成周/月膳食报告」「看看这周/这个月吃得怎么样」「复盘这段时间」「复盘 11月1日到11月10日」）、'
     'explain（解释当前方案为什么这样搭/搭配理由）、'
     'reverse_nutrition（症状咨询，如口角炎/乏力/掉发）、chat（闲聊）。\n'
     '注意：只有用户明确要求「生成/推荐/安排 菜单、三餐、食谱」时才归 plan_*；'
+    '「一周/七天/7天」归 plan_week，「今天/明天一日三餐」归 plan_day，「推荐一餐」归 plan_meal，'
+    '其余非标准范围（N 天、自定义日期、指定餐次子集）归 plan_custom；'
     '询问营养知识、食物功效、该怎么吃、忌口建议这类问题一律归 rag_qa；'
     '回顾/复盘一段时间或「吃得怎么样」这类话术归 report。\n'
     'JSON 字段：{"intent":"...", "meal_type":"早餐|午餐|晚餐|null", '
     '"scope":"week|month|plan|null", '
+    '"start_date":"YYYY-MM-DD|null", "end_date":"YYYY-MM-DD|null", '
+    '"meal_types":["早餐","午餐","晚餐"]|null, '
     '"profile":{"gender":"男|女","age":0,"height_cm":0,"weight_kg":0,'
     '"goal_code":"maintain|fat_loss|muscle_gain|glucose_control|digestive_health","allergies":[],"conditions":{},"name":""}}。'
+    'plan_custom 必须按下方规则填 start_date/end_date/meal_types，抽不出才留 null，绝不能编造日期：'
+    '「今天」=今天日期，「明天」=明天，「三天/接下来三天」=从今天起连续 3 天，'
+    '「下周一到周三」=下周对应具体日期（只排到周三就只排那几天），'
+    '「只排午餐」=meal_types 只含「午餐」，「早晚餐」=["早餐","晚餐"]，没提餐次=["早餐","午餐","晚餐"]。'
     'report 需填 scope（月→month、周/最近/这段时间→week、自定义日期区间→custom、方案→plan），其余 intent 的 scope 为 null；'
     '仅 profile_build 需要填 profile，其余为 null。'
 )
@@ -137,6 +146,26 @@ def _parse_date_range(message: str) -> tuple[str, str] | None:
     return start.isoformat(), end.isoformat()
 
 
+def _is_custom_span(m: str) -> bool:
+    """是否「自定义范围」配餐请求（应 defer 给 LLM 抽 start_date/end_date/meal_types，正则不抢先）。"""
+    if not m:
+        return False
+    # 明确天数：3天 / 三天 / 五天 / 10天（「1天/一天」是单日、「7天/七天」是周，不算自定义）
+    mm = re.search(r"([0-9一二三四五六七八九十两]+)\s*[天日]", m)
+    if mm and mm.group(1) not in ("1", "一", "7", "七"):
+        return True
+    # 显式日期区间（如「11月1日到11月10日」）
+    if _parse_date_range(m) is not None:
+        return True
+    # 周末 / 下周 / 工作日
+    if re.search(r"周末|下周|工作日", m):
+        return True
+    # 「一周/七天/7天 + 指定餐次子集」（如「一周的午餐」「七天早晚餐」）：范围词后出现早/午/晚任一餐次字
+    if re.search(r"(一周|七天|7天|整周)\s*的?\s*[早午晚]", m):
+        return True
+    return False
+
+
 def _regex_intent(message: str) -> dict | None:
     m = message.strip()
     has = lambda pat: re.search(pat, m) is not None  # noqa: E731
@@ -174,6 +203,9 @@ def _regex_intent(message: str) -> dict | None:
     # 解释「为什么这样搭」：只认明确追问依据的话术，避免「怎么搭配饮食」这类营养咨询被误判成解释
     if has(r"为什么.*(这样|这么|如此).*(搭|配)|搭配(理由|依据)|配餐(理由|依据)"):
         return {"intent": "explain"}
+    # 自定义范围（N 天 / 日期区间 / 周末 / 下周 / 指定餐次子集）交给 LLM 抽参数，正则不抢先
+    if _is_custom_span(m):
+        return None
     if has(r"一周|七天|7天|整周|一周食谱"):
         return {"intent": "plan_week"}
     # 配餐类意图必须带「生成/排/推荐菜单」这类明确动作，不能只靠「推荐/吃什么/食谱/搭配」几个词，
@@ -194,7 +226,7 @@ def _llm_classify(message: str) -> dict:
         resp = client.chat.completions.create(
             model=config.DEEPSEEK_MODEL,
             messages=[
-                {"role": "system", "content": _INTENT_SYSTEM},
+                {"role": "system", "content": _INTENT_SYSTEM + f"\n今天是 {date.today().isoformat()}。"},
                 {"role": "user", "content": message},
             ],
             response_format={"type": "json_object"},
@@ -416,6 +448,51 @@ def _plan_brief(plan: dict, limit: int = 6) -> str:
     return "\n".join(lines)
 
 
+def _norm_date(s: str) -> str | None:
+    """把 LLM 可能返回的日期串统一成 ISO（YYYY-MM-DD / YYYY年M月D日 / YYYY/M/D），失败返回 None。"""
+    s = str(s).strip().replace("/", "-")
+    m = re.match(r"(\d{4})[年\-](\d{1,2})[月\-](\d{1,2})日?", s)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+    except ValueError:
+        return None
+
+
+def _resolve_gen_params(kind: str, intent: dict) -> dict:
+    """意图 → 生成请求的 start_date / end_date / meal_types（英文口径）+ scope_label。
+
+    生成粒度不再限于「day/week/meal」三档：plan_custom 由 LLM 抽好的日期区间与餐次子集决定，
+    plan_day/week/meal 仍走固定快捷路径（无 LLM 或抽不到时回退「今天三餐」）。
+    """
+    today = date.today()
+    today_iso = today.isoformat()
+    mt_map = {"早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner"}
+    all_meals = ["breakfast", "lunch", "dinner"]
+
+    if kind == "plan_custom":
+        start = _norm_date(intent.get("start_date") or "") or today_iso
+        end = _norm_date(intent.get("end_date") or "") or start
+        if end < start:
+            start, end = end, start
+        meals = [mt_map.get(str(x), x) for x in (intent.get("meal_types") or [])]
+        meals = [x for x in meals if x in all_meals] or all_meals
+        label = f"{start} ~ {end}" if start != end else start
+        return {"start_date": start, "end_date": end, "meal_types": meals, "scope_label": label}
+
+    if kind == "plan_week":
+        return {"start_date": today_iso, "end_date": (today + timedelta(days=6)).isoformat(),
+                "meal_types": all_meals, "scope_label": "接下来 7 天"}
+
+    if kind == "plan_meal":
+        mt = mt_map.get(intent.get("meal_type", ""), "lunch")
+        return {"start_date": today_iso, "end_date": today_iso, "meal_types": [mt], "scope_label": "一餐"}
+
+    # plan_day（默认）
+    return {"start_date": today_iso, "end_date": today_iso, "meal_types": all_meals, "scope_label": "今天"}
+
+
 def run(user_id: str, message: str, history: list | None = None, on_status=None) -> dict:
     """执行一条用户消息，返回 {text|narration, blocks, ...}。
     history 为最近若干轮 user/assistant 文本；on_status(stage) 回调用于过程可见（真流式）。
@@ -456,46 +533,37 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
         kind = "plan_day"  # 建档后默认出当天方案
 
     # 生成方案
-    if kind in ("plan_day", "plan_week", "plan_meal"):
+    if kind in ("plan_day", "plan_week", "plan_meal", "plan_custom"):
         if profile is None:
             return {"text": "还没有你的档案。可以先告诉我：性别、年龄、身高体重、目标和过敏，我建档后马上配餐。 ",
                     "blocks": []}
 
-        scope = {"plan_day": "day", "plan_week": "week", "plan_meal": "meal"}[kind]
         _st("正在生成配餐方案")
+        gp = _resolve_gen_params(kind, intent)
+        start_date, end_date, req_meal_types, scope_label = (
+            gp["start_date"], gp["end_date"], gp["meal_types"], gp["scope_label"])
 
         try:
-            # 1. 构造真实后端的日期参数
-            today = date.today()
-            end_day = today + timedelta(days=6) if scope == "week" else today
-
-            # 映射餐位英文（兼容后端标准枚举）
-            mt_map = {"早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner"}
-            req_meal_types = ["breakfast", "lunch", "dinner"] if scope != "meal" else [
-                mt_map.get(intent.get("meal_type", ""), "lunch")]
-
-            # 2. 【核心替换】直接走网络请求调后端真实 API，确保方案落库并生成真实的 ID！
+            # 直接走网络请求调后端真实 API（后端 /meal-plan/week/generate 已支持任意日期区间与餐次子集）
             plan = bc.generate_meal_plan(
                 user_id=user_id,
-                scope=scope,
-                start_date=str(today),
-                end_date=str(end_day),
-                meal_types=req_meal_types
+                start_date=start_date,
+                end_date=end_date,
+                meal_types=req_meal_types,
             )
-            # 生成后写入内存态，供「换候选 / 确认」读取（重构漏写这行会导致确认时报「还没有待确认的方案」）
+            # 生成后写入内存态，供「换候选 / 确认」读取
             _user_state(user_id)["current_plan"] = plan
         except Exception as e:
             return {"text": f"方案没排出来：{e}", "blocks": []}
 
         goal = _goal_text(profile)
         base_fallback = {
-            # 去掉了对 plan['range_text'] 的依赖，避免后端新 JSON 没有该字段报错
-            "plan_week": f"收到！按你的{goal}档案排了接下来七天（{today} 至 {end_day}）的三餐，食材尽量不重复：",
+            "plan_week": f"收到！按你的{goal}档案排了接下来七天（{start_date} 至 {end_date}）的三餐，食材尽量不重复：",
             "plan_meal": "给你挑了三个方向，热量都落在本餐区间，点一个就能确认：",
             "plan_day": f"收到！已结合你的{goal}档案，为你生成了今天的方案：",
+            "plan_custom": f"收到！已按你的{goal}档案，为你排了 {scope_label} 的方案：",
         }[kind]
         fallback = base_fallback
-        scope_label = {"plan_week": "接下来 7 天", "plan_day": "今天", "plan_meal": "一餐"}[kind]
         context = (
             f"动作：为「{scope_label}」生成了配餐方案。\n"
             f"档案目标：{goal}\n"
