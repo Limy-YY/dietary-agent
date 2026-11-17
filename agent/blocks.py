@@ -47,6 +47,11 @@ def _slot_view(slot: dict) -> dict:
 
     return {
         "meal_slot_id": slot.get("meal_slot_id", ""),  # 修改：对齐 v1.2 契约，不用 slot_id
+        # 【P0 修复】补 slot_date / display_order / target_macro：前端按 slot_date 分组折叠成天。
+        # 缺 slot_date 时前端 groupDays 会把 21 个餐位全归到同一空日期，退化成「一日三餐」平铺。
+        "slot_date": slot.get("slot_date", ""),
+        "display_order": slot.get("display_order", 1),
+        "target_macro": slot.get("target_macro", {}),
         "meal_type": slot.get("meal_type", "午"),
         "label": slot.get("label", ""),
         "time": slot.get("time", ""),

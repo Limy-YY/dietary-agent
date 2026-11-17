@@ -129,7 +129,13 @@ const ui = useUi()
 const chat = useChatStore()
 
 const reasonOpen = ref(false)
-const openDay = ref(0)
+// 默认展开「今天」；方案内没有今天时展开第一天
+const openDay = ref(defaultOpenDay())
+
+function defaultOpenDay() {
+  const idx = arr(props.block.days).findIndex((d) => d.is_today)
+  return idx >= 0 ? idx : 0
+}
 // 正在「换一换」的餐位 slot_id（用于按钮 spinner / 禁用）
 const swapping = ref('')
 

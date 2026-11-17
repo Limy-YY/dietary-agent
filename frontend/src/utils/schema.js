@@ -205,7 +205,7 @@ function groupDays(slots) {
     date: mdOf(iso),
     iso,
     weekday: weekdayOf(iso),
-    is_today: iso === new Date().toISOString().slice(0, 10),
+    is_today: iso === todayIso(),
     kcal: sumKnown(list.map((s) => s.kcal)),
     slots: sortSlots(list)
   }))
