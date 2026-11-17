@@ -55,7 +55,7 @@
                   <td class="mt-dish">{{ slot.dish_text || '—' }}</td>
                   <td class="mt-kcal">
                     <span class="num">{{ fmtKcal(slot.kcal) }}</span>
-                    <button v-if="!isFixed" class="cp-swap" :disabled="!slot.candidates.length" @click="swap(slot)">换一换</button>
+                    <button v-if="!isFixed" class="cp-swap" :disabled="!slot.candidates.length || swapping === slot.slot_id" @click="swap(slot)">{{ swapping === slot.slot_id ? '换一换…' : '换一换' }}</button>
                   </td>
                 </tr>
               </tbody>
@@ -92,6 +92,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { fetchCurrentPlan } from '@/api/mealPlan.js'
 import { fmtKcal, normalizeCurrentPlan } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
@@ -109,6 +110,8 @@ const loading = ref(false)
 const error = ref('')
 const plan = ref(null)
 const openDays = ref([])
+// 正在「换一换」的餐位 slot_id（用于按钮 spinner / 禁用）
+const swapping = ref('')
 
 const isFixed = computed(() => plan.value?.status === 'fixed')
 const updatedText = computed(() => {
@@ -161,9 +164,16 @@ function toggleAllDays() {
   openDays.value = allOpen.value ? [] : days.map((_, i) => i)
 }
 
-function swap(slot) {
-  if (isFixed.value) return
-  send(PHRASE.swap(slot.label || '这一餐'))
+async function swap(slot) {
+  if (isFixed.value || chat.sending || swapping.value) return
+  swapping.value = slot.slot_id
+  try {
+    await chat.silentAction(PHRASE.swap(slot.label || '这一餐'))
+  } catch (e) {
+    ElMessage(e.message || '换候选失败，请重试')
+  } finally {
+    swapping.value = ''
+  }
 }
 
 function openReport() {

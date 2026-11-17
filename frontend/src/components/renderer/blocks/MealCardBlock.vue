@@ -45,8 +45,8 @@
           <div class="meal-meta">{{ slot.dish_count }} 道菜 · 点这里看用量和做法</div>
         </div>
         <div class="action-col">
-          <button class="swap-btn" :disabled="isFixed || !slot.candidates.length" @click.stop="swap(slot)">
-            换一换
+          <button class="swap-btn" :disabled="isFixed || !slot.candidates.length || isSwapping(slot)" @click.stop="swap(slot)">
+            {{ isSwapping(slot) ? '换一换…' : '换一换' }}
           </button>
         </div>
       </div>
@@ -82,8 +82,8 @@
             </div>
             <div class="wd-meal-side">
               <span class="wd-meal-kcal">{{ fmtKcal(s.kcal) }} kcal</span>
-              <button class="wd-swap" :disabled="isFixed || !s.candidates.length" @click.stop="swap(s)">
-                换一换
+              <button class="wd-swap" :disabled="isFixed || !s.candidates.length || isSwapping(s)" @click.stop="swap(s)">
+                {{ isSwapping(s) ? '换一换…' : '换一换' }}
               </button>
             </div>
           </div>
@@ -117,16 +117,21 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { MEAL_LABELS, PHRASE } from '@/constants/actions.js'
 import { arr, fmtKcal } from '@/utils/schema.js'
 import { useUi } from '@/composables/useUi.js'
+import { useChatStore } from '@/stores/chat.js'
 
 const props = defineProps({ block: { type: Object, required: true } })
 const emit = defineEmits(['phrase'])
 const ui = useUi()
+const chat = useChatStore()
 
 const reasonOpen = ref(false)
 const openDay = ref(0)
+// 正在「换一换」的餐位 slot_id（用于按钮 spinner / 禁用）
+const swapping = ref('')
 
 const scope = computed(() => props.block.plan_key || props.block.scope || 'day')
 const isMultiDay = computed(() => days.value.length > 1)
@@ -181,17 +186,35 @@ const reasonPoints = computed(() => {
   return [...hints, ...notes]
 })
 
-function pickCandidate(c) {
-  if (isFixed.value) return
-  pickedCandidateId.value = c.candidate_id
-  const label = slots.value[0]?.label || MEAL_LABELS[slots.value[0]?.meal_type] || '这一餐'
-  emit('phrase', PHRASE.choose(label, c.name))
+function isSwapping(slot) {
+  return !!swapping.value && swapping.value === slot.slot_id
 }
 
-function swap(slot) {
-  if (isFixed.value) return
+async function pickCandidate(c) {
+  if (isFixed.value || chat.sending || swapping.value) return
+  const label = slots.value[0]?.label || MEAL_LABELS[slots.value[0]?.meal_type] || '这一餐'
+  const prev = pickedId.value
+  pickedCandidateId.value = c.candidate_id // 乐观选中，失败回退
+  try {
+    const ok = await chat.silentAction(PHRASE.choose(label, c.name))
+    if (!ok) pickedCandidateId.value = prev
+  } catch (e) {
+    ElMessage(e.message || '选用失败，请重试')
+    pickedCandidateId.value = prev
+  }
+}
+
+async function swap(slot) {
+  if (isFixed.value || chat.sending || swapping.value) return
   const label = slot.label || MEAL_LABELS[slot.meal_type] || '这一餐'
-  emit('phrase', PHRASE.swap(label))
+  swapping.value = slot.slot_id
+  try {
+    await chat.silentAction(PHRASE.swap(label))
+  } catch (e) {
+    ElMessage(e.message || '换候选失败，请重试')
+  } finally {
+    swapping.value = ''
+  }
 }
 
 function onConfirm() {

@@ -39,6 +39,23 @@ function loadSessions() {
   }
 }
 
+/** 就地更新同一 meal_plan_id 的方案卡：找到更早消息里的同 raw_id 卡就 splice 替换。返回是否命中。 */
+function replaceMealCardInPlace(session, block, excludeMsg = null) {
+  if (!block || block.type !== 'meal_card' || !block.raw_id) return false
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i]
+    if (excludeMsg && msg === excludeMsg) continue
+    const idx = (msg.blocks || []).findIndex(
+      (b) => b.type === 'meal_card' && b.raw_id === block.raw_id
+    )
+    if (idx >= 0) {
+      msg.blocks.splice(idx, 1, block)
+      return true
+    }
+  }
+  return false
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref(loadSessions())
   const activeId = ref(sessions.value[0]?.id || '')
@@ -216,11 +233,18 @@ export const useChatStore = defineStore('chat', () => {
           if (evt.event === 'artifact') {
             if (!payload.type) return
             const block = normalizeArtifact(payload.type, payload.payload || {})
-            const sameIndex = aiMsg.blocks.findIndex(
-              (b) => b.type === block.type && (!b.raw_id || b.raw_id === block.raw_id)
-            )
-            if (sameIndex >= 0) aiMsg.blocks.splice(sameIndex, 1, block)
-            else aiMsg.blocks.push(block)
+
+            // 方案卡就地更新：同一 meal_plan_id 的卡若已出现在更早的消息里，就原地替换，
+            // 不再往当前气泡追加（换候选/选用/确认都复用同一张卡，避免对话里堆出多张过期卡）。
+            const replacedInPlace = replaceMealCardInPlace(session, block, aiMsg)
+            if (!replacedInPlace) {
+              const sameIndex = aiMsg.blocks.findIndex(
+                (b) => b.type === block.type && (!b.raw_id || b.raw_id === block.raw_id)
+              )
+              if (sameIndex >= 0) aiMsg.blocks.splice(sameIndex, 1, block)
+              else aiMsg.blocks.push(block)
+            }
+
             if (block.type === 'nutrition_report' && block.report_type !== 'plan') panel.markReportUnread()
             session.updatedAt = new Date().toISOString()
           }
@@ -269,6 +293,59 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /**
+   * 静默动作：不发 user/AI 气泡，只消费结构化产物并把方案卡就地更新。
+   * 用于「换一换 / 选用候选」这类轻量按钮操作——聊天流不产生任何消息，
+   * 仅卡片 spinner + 原地刷新；失败时抛错，由调用方 toast 提示。
+   */
+  async function silentAction(text) {
+    const content = String(text || '').trim()
+    if (!content || sending.value) return false
+
+    const session = ensureSession()
+    const panel = usePanelStore()
+
+    sending.value = true
+    const controller = new AbortController()
+    abortController.value = controller
+
+    let errorMsg = ''
+    try {
+      await streamChat({
+        conversationId: session.conversationId,
+        message: content,
+        signal: controller.signal,
+        onEvent: (evt) => {
+          const payload = evt.data && typeof evt.data === 'object' ? evt.data : {}
+          // 只消费方案卡，丢弃正文文本（静默，不产生对话气泡）
+          if (evt.event === 'artifact' && payload.type === 'meal_card') {
+            const block = normalizeArtifact(payload.type, payload.payload || {})
+            replaceMealCardInPlace(session, block)
+            session.updatedAt = new Date().toISOString()
+          }
+          if (evt.event === 'done' && payload.conversation_id) {
+            session.conversationId = payload.conversation_id
+          }
+          if (evt.event === 'error') {
+            errorMsg = payload.message || '操作失败'
+          }
+        }
+      })
+
+      if (errorMsg) throw new Error(errorMsg)
+      // 换/选都在服务端改了数据，通知右侧面板刷新
+      panel.bump()
+      return true
+    } catch (e) {
+      if (e.name === 'AbortError' || e.code === 'CANCELED') return false
+      throw e
+    } finally {
+      sending.value = false
+      abortController.value = null
+      persist()
+    }
+  }
+
   /** 重新生成最后一条回复 */
   async function retry(messageId) {
     const session = activeSession.value
@@ -304,6 +381,7 @@ export const useChatStore = defineStore('chat', () => {
     renameSession,
     removeSession,
     send,
+    silentAction,
     retry,
     stop,
     persist,

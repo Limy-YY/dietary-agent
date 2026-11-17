@@ -90,6 +90,18 @@ SYSTEM_INSTRUCTION = (
 )
 
 
+# 排版要求（自由文本回复统一注入）：让 LLM 输出紧凑、有层级的 Markdown，配合前端 normalizeSpacing 兜底。
+# 仅约束 LLM 文本正文（explain / rag_qa / reverse_nutrition），结构化 block 不受影响。
+_FMT = (
+    "排版要求（务必遵守，输出要像主流大模型那样简洁美观）：\n"
+    "- 小节标题独占一行、用「### 标题」（如「### 能量」「### 蛋白」），不要只写裸文字「能量」；\n"
+    "- 标题与正文之间、列表项之间都【不要空行】，连续空行会渲染成大片空白；\n"
+    "- 子点用「- 」列表，一条一点，每条 1~2 行，不要每个点都另起一个空行段落；\n"
+    "- 关键数值与结论用 **加粗**；禁止「---」分隔线；\n"
+    "- 需要表格用「| a | b |」并在下一行写「|---|---|」，不要用制表符。"
+)
+
+
 _DATE_TOKEN_RE = re.compile(
     r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?|(\d{1,2})月(\d{1,2})[日号]"
 )
@@ -230,17 +242,6 @@ def _gen(user_id: str, params: dict, profile: dict) -> dict:
     plan = reb.generate_plan_dict(user_id, profile, params)
     _user_state(user_id)["current_plan"] = plan
     return plan
-
-
-def _shopping_list(plan: dict) -> dict:
-    """取方案食材清单：直接走后端 /shopping-list（fix 时已按食材级生成落库），Agent 不重算。
-
-    后端返回 {shopping_list_id, meal_plan_id, total_items, groups[{category,
-    items[{ingredient_id, name, estimated_quantity, unit}]}]}，与前端
-    normalizeGroups 期望的食材级结构一致（数量为估算克数，非菜名拼接）。
-    """
-    meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
-    return bc.get_shopping_list(meal_plan_id)
 
 
 # 餐次口径归一：中文全称 / 英文 / 单字 → 统一单字（早/午/晚）。
@@ -409,7 +410,7 @@ def run(user_id: str, message: str) -> dict:
         # 找到要换的是哪一餐
         slot = _find_slot(plan, intent.get("meal_type") or "午餐")
         if not slot:
-            return {"text": "没找到对应的餐位。", "blocks": [blocks.meal_card_block(plan)]}
+            return {"text": "没找到对应的餐位。", "blocks": []}
 
         try:
             meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
@@ -438,7 +439,7 @@ def run(user_id: str, message: str) -> dict:
                 "blocks": [blocks.meal_card_block(updated_plan)]
             }
         except Exception as e:
-            return {"text": f"换候选失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
+            return {"text": f"换候选失败：{e}", "blocks": []}
 
     # 选用候选
     if kind == "choose_candidate":
@@ -449,7 +450,7 @@ def run(user_id: str, message: str) -> dict:
 
         slot = _find_slot(plan, intent.get("meal_type") or "午餐")
         if not slot:
-            return {"text": "没找到这一餐。", "blocks": [blocks.meal_card_block(plan)]}
+            return {"text": "没找到这一餐。", "blocks": []}
 
         # 候选没有 name 字段（菜名在 dishes[].name）。用「菜名串完整出现在消息里」匹配，
         # 取最长命中（最具体）避免子集候选误命中（如单菜「米饭」被「米饭 + 清炒西兰花」抢走）。
@@ -462,7 +463,7 @@ def run(user_id: str, message: str) -> dict:
                     target = c
         if not target:
             return {"text": "我没听清是哪个候选，可以把候选名称发我，或直接点候选卡片。",
-                    "blocks": [blocks.meal_card_block(plan)]}
+                    "blocks": []}
 
         try:
             # 【核心修改】选用指定候选：多传 candidate_id；接口只落库，完整方案再按 id 拉取。
@@ -482,7 +483,7 @@ def run(user_id: str, message: str) -> dict:
                 "blocks": [blocks.meal_card_block(updated_plan)]
             }
         except Exception as e:
-            return {"text": f"选用失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
+            return {"text": f"选用失败：{e}", "blocks": []}
 
     # 取消（覆盖追问的否定回答）
     if kind == "cancel":
@@ -509,8 +510,9 @@ def run(user_id: str, message: str) -> dict:
             return {
                 "text": f"已确认，方案已生效。{tail}\n"
                         "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。",
-                # 【改进】确认后不在对话里重发餐卡/清单，只给一句确认 + 引导去右侧工具栏
-                "blocks": []
+                # 【改进】发带 fixed 状态的餐卡：前端按 meal_plan_id 就地更新原卡（翻成「已生效」并禁用按钮），
+                # 不在对话里追加新卡；清单只引导去右侧工具栏。
+                "blocks": [blocks.meal_card_block(updated_plan)]
             }
         except bc.BackendError as e:
             if getattr(e, "code", None) == 2005:  # PLAN_STATE_CONFLICT：同期已有固定方案
@@ -593,20 +595,14 @@ def run(user_id: str, message: str) -> dict:
     if kind == "shopping_list":
         plan = _user_state(user_id).get("current_plan")
         if not plan or plan.get("status") != "fixed":
-            # 【修改】去掉了 anchor_block
             return {
-                "text": "方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类，你可以在菜单里打开食材清单。",
+                "text": "方案还没确认，清单暂时是空的。确认后我会按三餐把食材归好类，你可以在右侧工具栏里打开食材清单。",
                 "blocks": []}
 
-        try:
-            shop = _shopping_list(plan)
-            total = shop.get("total_items") or sum(len(g.get("items", [])) for g in shop.get("groups", []))
-        except Exception as e:
-            return {"text": f"食材清单读取失败：{e}", "blocks": []}
-        # 【修改】只发 shopping_list_block
+        # 【改进】清单住右侧工具栏：显式索要也只引导去面板，不在对话里贴清单块
         return {
-            "text": f"清单已经整理好，共 {total} 项，按类别分好了。\n(点击左下角菜单可查看完整食材清单)",
-            "blocks": [blocks.shopping_list_block(shop)]
+            "text": "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。",
+            "blocks": []
         }
 
     # 反向营养 / 症状咨询
@@ -619,7 +615,7 @@ def run(user_id: str, message: str) -> dict:
             content = ""
 
         text = _llm_text(
-            SYSTEM_INSTRUCTION + "\n针对症状咨询：给出可能的营养线索，措辞用「可能缺乏 / 建议关注」，不给定论，并注明仅供参考、不构成诊断、建议就医。",
+            SYSTEM_INSTRUCTION + "\n针对症状咨询：给出可能的营养线索，措辞用「可能缺乏 / 建议关注」，不给定论，并注明仅供参考、不构成诊断、建议就医。" + _FMT,
             f"症状：{message}\n检索线索：{content or '无'}",
             "单看症状无法下结论，建议先就医检查；饮食上注意均衡，可结合档案做针对性调整（仅供参考，不构成诊断）。",
         )
@@ -640,17 +636,13 @@ def run(user_id: str, message: str) -> dict:
         text = _llm_text(
             SYSTEM_INSTRUCTION
             + "\n用下方方案数据解释「为什么这样搭」。\n"
-              "排版要求（务必遵守，输出要像主流大模型那样简洁美观）：\n"
-              "- 小节标题用「### 」，要点用「- 」或「1. 2. 3.」列表，关键数值与结论用 **加粗**；\n"
-              "- 列表项之间、标题与正文之间都不要留空行（空行会让页面出现大片空白、显得稀疏）；\n"
-              "- 禁止「---」分隔线、禁止逐字复述餐卡里已展示的数据；\n"
-              "- 需要表格时用「| 列1 | 列2 |」并在下一行写「|---|---|」，不要用制表符；\n"
-              "- 按「能量 / 蛋白 / 微量 / 结构 / 油盐」五条组织，每条 1~3 行，没数据的字段一句话写「该项未提供」，不要空谈；\n"
-              "- 结尾 2~3 行总结；不编造、不下达标结论（null≠0，依据码不能代替实测）。",
+              "按「能量 / 蛋白 / 微量 / 结构 / 油盐」五条组织，每条 1~3 行，没数据的字段一句话写「该项未提供」，不要空谈；\n"
+              "禁止逐字复述餐卡里已展示的数据；结尾 2~3 行总结；不编造、不下达标结论（null≠0，依据码不能代替实测）。\n"
+            + _FMT,
             f"用户问：{message}\n方案数据：{json.dumps(material, ensure_ascii=False)}",
             "这套方案是结合你的档案与目标排的：主食打底保证供能，配菜兼顾蛋白质与蔬菜，具体依据如下…",
         )
-        return {"text": text, "blocks": [blocks.meal_card_block(plan)]}
+        return {"text": text, "blocks": []}
 
     if kind == "rag_qa":
         try:
@@ -663,7 +655,7 @@ def run(user_id: str, message: str) -> dict:
             sources = []
 
         text = _llm_text(
-            SYSTEM_INSTRUCTION + "\n用检索到的资料回答，结论标注出处，注意双口径（生重/成品）与油盐话术。",
+            SYSTEM_INSTRUCTION + "\n用检索到的资料回答，结论标注出处，注意双口径（生重/成品）与油盐话术。" + _FMT,
             f"问题：{message}\n检索资料：{content or '无'}",
             "这个问题建议结合权威膳食指南理解；如需针对性建议，我可以按你的档案给出更具体的方案。",
         )
