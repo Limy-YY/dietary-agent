@@ -165,7 +165,8 @@ def reverse_nutrition(symptoms: str, top_k: int = 5):
 
 # ---------------------------------------------------------------- 调用后端接口生成方案并落库
 def generate_meal_plan(user_id: str, start_date: str, end_date: str, meal_types: list,
-                       exclude_ingredients: list[str] | None = None):
+                       exclude_ingredients: list[str] | None = None,
+                       soft_avoid: list[str] | None = None):
     """调用后端真实接口生成方案并落库。
 
     后端 /meal-plan/week/generate 已是「用户自定范围」：直接透传任意 start_date/end_date/meal_types，
@@ -179,6 +180,8 @@ def generate_meal_plan(user_id: str, start_date: str, end_date: str, meal_types:
     }
     if exclude_ingredients:
         payload["exclude_ingredients"] = exclude_ingredients
+    if soft_avoid:
+        payload["soft_avoid"] = soft_avoid
     return _post("/api/meal-plan/week/generate", payload)
 
 # -----------------------------------------------------------------------------

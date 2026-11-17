@@ -493,6 +493,310 @@ def _resolve_gen_params(kind: str, intent: dict) -> dict:
     return {"start_date": today_iso, "end_date": today_iso, "meal_types": all_meals, "scope_label": "今天"}
 
 
+# ================================================================ ③ tool-calling 编排
+
+_MT_ZH2EN = {"早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner"}
+_ALL_MEALS = ["breakfast", "lunch", "dinner"]
+
+_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_plan",
+            "description": "为用户生成配餐方案。按日期区间与餐次生成，可带硬排除食材与软偏好（清淡/少油等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD（单日与 start_date 相同）"},
+                    "meal_types": {"type": "array", "items": {"type": "string", "enum": ["早餐", "午餐", "晚餐"]}, "description": "要生成的餐次，默认全部"},
+                    "exclude_ingredients": {"type": "array", "items": {"type": "string"}, "description": "硬排除的食材名（如「牛肉」）"},
+                    "soft_avoid": {"type": "array", "items": {"type": "string"}, "description": "软偏好、尽量避开（如「油炸」「高油」）"},
+                },
+                "required": ["start_date", "end_date", "meal_types"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_clarification",
+            "description": "用户需求含糊、缺少必要信息（没说几天/哪几餐/有歧义）时追问用户澄清。",
+            "parameters": {
+                "type": "object",
+                "properties": {"question": {"type": "string", "description": "要问用户的问题"}},
+                "required": ["question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "swap_candidate",
+            "description": "调整已有方案某一餐的候选（如「晚餐清淡点」「午餐不要牛肉」）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "meal_type": {"type": "string", "enum": ["早餐", "午餐", "晚餐"]},
+                    "prefer": {"type": "string", "description": "调整意图，如「清淡」「不要牛肉」"},
+                },
+                "required": ["meal_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_shopping_list",
+            "description": "获取当前方案的食材清单（需方案已确认）。",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
+
+
+def _profile_brief(profile: dict) -> str:
+    if not profile:
+        return "用户档案：尚未建档。用户要求配餐时，应引导其先提供身体信息。"
+    extras = profile.get("extras") or {}
+    return (
+        f"用户档案：性别{profile.get('gender') or '未知'}、年龄{profile.get('age')}、"
+        f"身高{profile.get('height_cm')}cm、体重{profile.get('weight_kg')}kg、"
+        f"目标{profile.get('goal_code') or 'maintain'}、过敏{profile.get('allergies') or '无'}、"
+        f"忌口{profile.get('taboos') or '无'}、疾病{list((profile.get('conditions') or {}).keys()) or '无'}、"
+        f"厨具{list(extras.get('cookware') or []) or '未填'}。"
+    )
+
+
+def _agent_system(profile: dict) -> str:
+    return (
+        SYSTEM_INSTRUCTION
+        + "\n\n你是「膳宝」的决策编排器，可以调用工具来完成动作。\n"
+        + _profile_brief(profile) + "\n"
+        + f"今天是 {date.today().isoformat()}。\n"
+        + "可用工具：generate_plan（生成配餐方案）、ask_clarification（需求含糊时追问）、"
+          "swap_candidate（调整已有方案某餐）、get_shopping_list（查食材清单）。\n"
+        + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
+          "② 需要行动先调用工具，别凭空捏造方案内容；③ 数值只引用工具返回，绝不自行计算；"
+          "④ 需求含糊（没说几天/哪几餐/有歧义）先调 ask_clarification，别擅自假设；"
+          "⑤ 最终回复面向用户、结论先行、简洁自然，不要出现「工具」「调用」等内部字眼。"
+    )
+
+
+# 清淡/少油 → 软偏好关键词（匹配菜名里的高油做法，引擎按子串命中扣分降权）
+_PREF_SOFT_AVOID = ["快炒", "炒", "红烧", "油炸", "炸", "煎", "干锅", "油焖", "糖醋", "回锅"]
+
+
+def _extract_preferences(message: str) -> dict:
+    """从用户消息确定性抽取「不要X→硬排除 / 清淡少油→软偏好」，作为 LLM 抽取的兜底。"""
+    exclude: list[str] = []
+    soft_avoid: list[str] = []
+    if not message:
+        return {"exclude": exclude, "soft_avoid": soft_avoid}
+    for m in re.finditer(r"(?:不要|别吃|不吃|不想吃|避开|去掉|忌(?!口))([一-龥A-Za-z]{1,6})", message):
+        word = m.group(1)
+        if word and word not in exclude:
+            exclude.append(word)
+    if re.search(r"清淡|少油|低油|少放油|不油", message):
+        for k in _PREF_SOFT_AVOID:
+            if k not in soft_avoid:
+                soft_avoid.append(k)
+    return {"exclude": exclude, "soft_avoid": soft_avoid}
+
+
+def _pick_swap_candidate(slot: dict, prefer: str) -> str | None:
+    """从该餐候选里挑一个「要换成」的目标：默认下一个；带 prefer 时按语义挑。"""
+    cands = slot.get("candidates") or []
+    picked_id = slot.get("selected_candidate_id") or (slot.get("selected_candidate") or {}).get("candidate_id")
+    others = [c for c in cands if str(c.get("candidate_id")) != str(picked_id)]
+    if not others:
+        return None
+    if prefer:
+        # ① 换成X → 优先含 X 的候选
+        m = re.search(r"换成([一-龥A-Za-z]{1,6})", prefer)
+        if m:
+            word = m.group(1)
+            hit = [c for c in others if word in _candidate_name(c)]
+            if hit:
+                others = hit
+        # ② 不要X → 排除含 X 的候选
+        m = re.search(r"(?:不要|别吃|不吃|不想吃|避开|去掉)([一-龥A-Za-z]{1,6})", prefer)
+        if m:
+            word = m.group(1)
+            keep = [c for c in others if word not in _candidate_name(c)]
+            if keep:
+                others = keep
+        # ③ 清淡/少油 → 用油最低优先
+        if re.search(r"清淡|少油|太油|油腻|低油", prefer):
+            def _oil(c):
+                o = (c.get("oil_salt_estimate") or {}).get("oil_g")
+                return o if o is not None else 9999.0
+            others = sorted(others, key=_oil)
+    return (others[0] or {}).get("candidate_id")
+
+
+def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
+    """执行一个工具，返回 {summary, blocks, terminal, reply}。"""
+    user_id = ctx["user_id"]
+    st = ctx["state"]
+
+    if name == "generate_plan":
+        if ctx["profile"] is None:
+            return {"summary": "用户档案未建立，无法配餐。需先引导用户提供性别、年龄、身高体重、目标和过敏。"}
+        meals = [_MT_ZH2EN.get(str(x), x) for x in (args.get("meal_types") or [])]
+        meals = [x for x in meals if x in _ALL_MEALS] or _ALL_MEALS
+        start = (args.get("start_date") or "").strip() or date.today().isoformat()
+        end = (args.get("end_date") or "").strip() or start
+        # ② 软偏好：LLM 抽的 + 确定性抽取兜底（「不要牛肉→exclude」「清淡→soft_avoid」）
+        pref = _extract_preferences(ctx.get("message", ""))
+        exclude = list(args.get("exclude_ingredients") or [])
+        exclude += [x for x in pref["exclude"] if x not in exclude]
+        soft = list(args.get("soft_avoid") or [])
+        soft += [x for x in pref["soft_avoid"] if x not in soft]
+        if on_status:
+            on_status("正在生成配餐方案")
+        plan = bc.generate_meal_plan(
+            user_id=user_id, start_date=start, end_date=end, meal_types=meals,
+            exclude_ingredients=exclude or None,
+            soft_avoid=soft or None,
+        )
+        st["current_plan"] = plan
+        return {"summary": f"已生成方案（{start} ~ {end}）：\n{_plan_brief(plan)}",
+                "blocks": [blocks.meal_card_block(plan)]}
+
+    if name == "ask_clarification":
+        q = (args.get("question") or "").strip() or "能再具体一点吗？"
+        return {"terminal": True, "reply": q, "blocks": []}
+
+    if name == "swap_candidate":
+        plan = st.get("current_plan")
+        if not plan:
+            return {"summary": "还没有待调整的方案。"}
+        meal_type = args.get("meal_type") or "午餐"
+        slot = _find_slot(plan, meal_type)
+        if not slot:
+            return {"summary": "没找到对应的餐位。"}
+        if on_status:
+            on_status("正在调整候选")
+        target_id = _pick_swap_candidate(slot, (args.get("prefer") or "").strip())
+        meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
+        bc.swap_candidate(
+            meal_plan_id=meal_plan_id,
+            meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
+            candidate_id=target_id,
+        )
+        updated = bc.get_meal_plan(meal_plan_id)
+        st["current_plan"] = updated
+        new_slot = _find_slot(updated, meal_type)
+        dish_text = _slot_dish_text(new_slot) if new_slot else "新候选"
+        return {"summary": f"已把「{meal_type}」调整为：{dish_text}",
+                "blocks": [blocks.meal_card_block(updated)]}
+
+    if name == "get_shopping_list":
+        plan = st.get("current_plan")
+        if not plan or plan.get("status") != "fixed":
+            return {"summary": "方案还没确认，暂时没有食材清单，需先确认方案。"}
+        return {"summary": "食材清单已按类别整理好，可打开右侧工具栏「食材清单」面板查看、边买边勾。"}
+
+    return {"summary": f"未知工具：{name}"}
+
+
+def _no_llm_fallback(user_id: str, profile: dict, message: str) -> dict:
+    """无 LLM key 时的确定性兜底：只支持「一餐/一天/一周」排餐，其余给固定提示。"""
+    if profile is None:
+        return {"text": "还没有你的档案。可以先告诉我：性别、年龄、身高体重、目标和过敏，我建档后马上配餐。", "blocks": []}
+    m = message.strip()
+    if re.search(r"一周|七天|7天", m):
+        kind = "plan_week"
+    elif re.search(r"午餐|晚餐|早餐", m) and not re.search(r"三餐|一日", m):
+        kind = "plan_meal"
+    elif re.search(r"三餐|一日三餐|今天|明天|排|生成|推荐", m):
+        kind = "plan_day"
+    else:
+        return {"text": "没有可用的语言模型，我暂时只能按「一餐/一天/一周」确定性排餐。", "blocks": []}
+    gp = _resolve_gen_params(kind, {"meal_type": next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")})
+    try:
+        plan = bc.generate_meal_plan(
+            user_id=user_id, start_date=gp["start_date"], end_date=gp["end_date"], meal_types=gp["meal_types"])
+        _user_state(user_id)["current_plan"] = plan
+    except Exception as e:
+        return {"text": f"方案没排出来：{e}", "blocks": []}
+    return {"text": f"已为你生成{gp['scope_label']}的方案（离线兜底模式）：", "blocks": [blocks.meal_card_block(plan)]}
+
+
+def _agent_loop(user_id: str, profile: dict, message: str, history: list | None, on_status=None) -> dict:
+    """LLM 工具编排循环：LLM 决定调哪些工具、传什么参、要不要追问、要不要多步。"""
+    client = _llm()
+    if client is None:
+        return _no_llm_fallback(user_id, profile, message)
+
+    ctx = {"user_id": user_id, "profile": profile, "state": _user_state(user_id), "message": message}
+    messages: list[dict] = [{"role": "system", "content": _agent_system(profile)}]
+    for h in history or []:
+        role, content = h.get("role"), h.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)})
+    messages.append({"role": "user", "content": message})
+
+    collected_blocks: list[dict] = []
+    summaries: list[str] = []
+    terminal_reply: str | None = None
+    fallback_text = ""
+
+    for _ in range(6):
+        try:
+            resp = client.chat.completions.create(
+                model=config.DEEPSEEK_MODEL, messages=messages, tools=_TOOLS, temperature=0,
+            )
+        except Exception:
+            break
+        msg = resp.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None)
+        if not tool_calls:
+            fallback_text = (msg.content or "").strip()
+            break
+        messages.append({
+            "role": "assistant",
+            "content": getattr(msg, "content", None),
+            "tool_calls": [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in tool_calls
+            ],
+        })
+        stop = False
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            result = _tool_exec(tc.function.name, args, ctx, on_status)
+            if result.get("blocks"):
+                collected_blocks += result["blocks"]
+            if result.get("summary"):
+                summaries.append(f"[{tc.function.name}] {result['summary']}")
+            if result.get("terminal"):
+                terminal_reply = result.get("reply")
+                stop = True
+                break
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result.get("summary", "")})
+        if stop:
+            break
+
+    # 追问：直接把问题返回给用户
+    if terminal_reply is not None:
+        return {"text": terminal_reply, "blocks": collected_blocks}
+
+    # 有工具动作：把执行结果喂给叙事层，生成面向用户的正文（真流式）
+    if summaries:
+        fallback = fallback_text or "已按你的要求处理好，方案见卡片。"
+        return {"narration": _narrate(message, "\n".join(summaries), fallback, history),
+                "blocks": collected_blocks}
+
+    # 纯闲聊/未触发工具：直接回 LLM 文本
+    return {"text": fallback_text or "这个我暂时答不好。可以让我排今天的三餐、换候选、或生成膳食报告。", "blocks": []}
+
+
 def run(user_id: str, message: str, history: list | None = None, on_status=None) -> dict:
     """执行一条用户消息，返回 {text|narration, blocks, ...}。
     history 为最近若干轮 user/assistant 文本；on_status(stage) 回调用于过程可见（真流式）。
@@ -506,6 +810,11 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
     kind = intent.get("intent", "chat")
     _st("正在读取档案")
     profile = _load_profile(user_id)
+
+    # ③ tool-calling 编排：配餐/调整/清单/闲聊/复合请求交给 LLM 工具循环；
+    # 换/选/确认/取消等按钮短语 + 报告/问答/解释仍走下方既有分支。
+    if kind in ("plan_day", "plan_week", "plan_meal", "plan_custom", "shopping_list", "chat"):
+        return _agent_loop(user_id, profile, message, history, on_status)
 
     # 建档：用户描述自身指标
     if kind == "profile_build":
@@ -530,7 +839,8 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
             pass
         if profile is None:
             return {"text": "我还不太了解你的身体情况，可以告诉我性别、年龄、身高体重和目标吗？", "blocks": []}
-        kind = "plan_day"  # 建档后默认出当天方案
+        # 建档后交给 LLM 工具循环排当天方案
+        return _agent_loop(user_id, profile, message, history, on_status)
 
     # 生成方案
     if kind in ("plan_day", "plan_week", "plan_meal", "plan_custom"):
