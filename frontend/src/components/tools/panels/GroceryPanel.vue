@@ -11,7 +11,24 @@
 
       <div class="grocery-progress">已买 {{ doneCount }}/{{ total }} 项</div>
 
-      <div v-for="g in groups" :key="g.group_id">
+      <div v-if="hasDays" class="batch-hint">💡 整周方案已按天分列，建议按 2~3 天分批采购，食材更新鲜。</div>
+
+      <div v-if="hasDays" class="grocery-filter">
+        <button class="gf-chip" :class="{ on: dayFilter === '全部' }" @click="dayFilter = '全部'">全部</button>
+        <button
+          v-for="d in dayList"
+          :key="d"
+          class="gf-chip"
+          :class="{ on: dayFilter === d }"
+          @click="dayFilter = d"
+        >{{ d }}</button>
+      </div>
+
+      <template v-for="(g, gi) in visibleGroups" :key="g.group_id || gi">
+        <div v-if="g.showDayHead" class="grocery-day-head">
+          <span class="gd-day">{{ g.day }}</span>
+          <span class="gd-date">{{ g.day_short }}</span>
+        </div>
         <div class="grocery-group-title">
           <span>{{ g.category }}</span>
           <span style="font-weight: 400; color: var(--text-sub); font-size: 11.5px">{{ g.items.length }} 项</span>
@@ -26,7 +43,7 @@
           <span class="gi-name">{{ it.name }}</span>
           <span class="gi-amount">{{ it.amount }}</span>
         </label>
-      </div>
+      </template>
       <div class="grocery-note">数量为估算量，按实际采购调整；粮油等常备品类按家中存量自行增减。</div>
     </template>
 
@@ -81,6 +98,7 @@ const totalItems = ref(null)
 const generatedAt = ref('')
 const checkedMap = reactive({})
 const index = ref(0)
+const dayFilter = ref('全部')
 
 const total = computed(() => {
   if (totalItems.value != null) return totalItems.value
@@ -91,10 +109,32 @@ const doneCount = computed(() =>
 )
 const updatedText = computed(() => (generatedAt.value ? fmtDateTime(generatedAt.value) : '刚刚'))
 
+const hasDays = computed(() => groups.value.some((g) => g.day))
+const dayList = computed(() => {
+  const seen = []
+  groups.value.forEach((g) => {
+    if (g.day && !seen.includes(g.day)) seen.push(g.day)
+  })
+  return seen
+})
+const visibleGroups = computed(() => {
+  const list =
+    dayFilter.value === '全部'
+      ? groups.value
+      : groups.value.filter((g) => g.day === dayFilter.value)
+  let last = null
+  return list.map((g) => {
+    const showDayHead = Boolean(g.day && g.day !== last)
+    if (g.day) last = g.day
+    return { ...g, showDayHead }
+  })
+})
+
 async function load() {
   loading.value = true
   error.value = ''
   unfixed.value = false
+  dayFilter.value = '全部'
   try {
     const current = await fetchCurrentPlan()
     if (!current || current.meal_plan_id == null) {
@@ -139,5 +179,15 @@ watch(() => panel.active, (v) => v === 'grocery' && load())
   font-size: 11.5px;
   color: var(--text-sub);
   line-height: 1.6;
+}
+
+.batch-hint {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--brand-hover);
+  line-height: 1.6;
+  background: var(--brand-light, #f0f6f2);
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 </style>

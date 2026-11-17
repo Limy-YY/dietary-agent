@@ -10,6 +10,10 @@
 
     <div style="padding: 10px 20px 14px">
       <div v-for="(g, gi) in groups" :key="g.group_id || gi" style="margin-bottom: 12px">
+        <div v-if="g.showDayHead" class="grocery-day-head">
+          <span class="gd-day">{{ g.day }}</span>
+          <span class="gd-date">{{ g.day_short }}</span>
+        </div>
         <div class="grocery-group-title">
           <span>{{ g.category }}</span>
           <span style="font-weight: 400; color: var(--text-sub); font-size: 11.5px">{{ g.items.length }} 项</span>
@@ -40,7 +44,14 @@ import { usePanelStore } from '@/stores/panel.js'
 const props = defineProps({ block: { type: Object, required: true } })
 const panel = usePanelStore()
 
-const groups = computed(() => normalizeGroups(props.block.groups))
+const groups = computed(() => {
+  let last = null
+  return normalizeGroups(props.block.groups).map((g) => {
+    const showDayHead = Boolean(g.day && g.day !== last)
+    if (g.day) last = g.day
+    return { ...g, showDayHead }
+  })
+})
 const total = computed(() => {
   if (props.block.total_items != null) return props.block.total_items
   return groups.value.reduce((s, g) => s + g.items.length, 0)

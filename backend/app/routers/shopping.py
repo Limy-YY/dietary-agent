@@ -52,13 +52,18 @@ def get_shopping_list(
             BizCode.NOT_FOUND, f"方案 {meal_plan_id} 尚未生成食材清单", http_status=404
         )
 
-    items = row["items"] if isinstance(row["items"], list) else []
-    groups: dict[str, list[dict]] = {}
+    items = [it for it in (row["items"] or []) if isinstance(it, dict)]
+
+    # 周/多日方案按天分列：仅当清单里存在多个不同 day_date 时启用；
+    # 单餐/单日方案（全部同一天，或历史清单无 day_date）退化为纯类别分组，向后兼容 v1.2。
+    day_dates = sorted({it.get("day_date") for it in items if it.get("day_date")})
+    by_day = len(day_dates) > 1
+
+    groups: dict[tuple[str, str], list[dict]] = {}
     for it in items:
-        category = (it.get("category") or "未分类") if isinstance(it, dict) else "未分类"
-        if not isinstance(it, dict):
-            continue
-        groups.setdefault(category, []).append(
+        day = (it.get("day_date") or "") if by_day else ""
+        key = (day, it.get("category") or "未分类")
+        groups.setdefault(key, []).append(
             {
                 "ingredient_id": it.get("ingredient_id"),
                 "name": it.get("name"),
@@ -67,14 +72,19 @@ def get_shopping_list(
             }
         )
 
+    group_list: list[dict] = []
+    for (day, category), group_items in sorted(groups.items()):
+        group = {"category": category, "items": group_items}
+        if by_day:
+            group["day_date"] = day
+        group_list.append(group)
+
     return api_success(
         {
             "shopping_list_id": row["shopping_list_id"],
             "meal_plan_id": row["meal_plan_id"],
             "total_items": len(items),
-            "groups": [
-                {"category": k, "items": v} for k, v in sorted(groups.items())
-            ],
+            "groups": group_list,
             "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
         }
     )

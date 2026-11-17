@@ -311,7 +311,9 @@ export function getShoppingListPayload(planId) {
       groups: []
     }
     const byGroup = []
+    const multiDay = record.legacy.days.length > 1
     record.legacy.days.forEach((day, di) => {
+      const dayDate = day.iso || ''
       day.slots.forEach((slot) => {
         (slot.candidates || []).slice(0, 1).forEach((c) => {
           (c.dishes || []).forEach((d) => {
@@ -324,9 +326,12 @@ export function getShoppingListPayload(planId) {
                   : /豆浆|酸奶|牛奶|豆腐|豆/.test(d.name)
                     ? '奶豆饮品'
                     : '其他'
-            let g = byGroup.find((x) => x.category === cat)
+            let g = byGroup.find(
+              (x) => x.category === cat && (multiDay ? x.day_date === dayDate : !x.day_date)
+            )
             if (!g) {
               g = { category: cat, items: [] }
+              if (multiDay) g.day_date = dayDate
               byGroup.push(g)
             }
             if (!g.items.some((x) => x.name === d.name)) {
