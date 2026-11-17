@@ -8,7 +8,9 @@ const state = reactive({
   recipeOpen: false,
   recipePayload: null,
   historyOpen: false,
-  historyPayload: null
+  historyPayload: null,
+  reportOpen: false,
+  reportPayload: null
 })
 
 export function useUi() {

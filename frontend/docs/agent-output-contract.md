@@ -112,7 +112,7 @@
 | `meal_plan_id` | integer | 归属方案 |
 | `total_items` | integer | 总项数（卡头） |
 | `groups[].category` | `蔬菜\|肉类\|水产\|蛋奶\|豆制品\|主食谷物\|水果\|坚果\|调料\|粮油\|其他` | 分组标题；前端只做顺序展示，不自行归类 |
-| `groups[].items[].ingredient_id` | string（`CN-1032`） | 勾选键 |
+| `groups[].day_date` | string / null（`YYYY-MM-DD`，可选） | 周/多日方案按天分列时的分组日期；单餐/单日方案不返回此字段 |
 | `groups[].items[].name` | string | 名称 |
 | `groups[].items[].estimated_quantity` | number / null | 估算数量；null → 显示「估算量待补」 |
 | `groups[].items[].unit` | string / null | g / ml / 个 / 份 等 |
@@ -122,6 +122,7 @@
 
 - **无 `is_staple`**；常备粮油只用固定文案提示，不伪造字段。
 - 方案未固定时接口返回 `2005`，面板显示「方案还没固定」空态 + 确认入口，不渲染空清单。
+- 周/多日方案 `groups[]` 按 `day_date` 分列（同一 `day_date` 下再按 `category`），前端渲染「天头 + 按天筛选」；单餐/单日方案无 `day_date`，退化为纯类别分组。
 - 底部固定说明：数量为估算量，按实际采购调整；粮油等常备品类按家中存量自行增减。
 
 ---
@@ -152,7 +153,7 @@
 | 字段 | 类型 | 用途 |
 |---|---|---|
 | `nutrition_report_id` | integer / null | 报告 id |
-| `report_type` | `plan\|week\|month\|custom` | 前端只渲染 `plan`；其他类型回「仅支持方案级报告」 |
+| `report_type` | `plan\|week\|month\|custom` | `week/month/custom` 归「膳食报告」存档；`plan` 为「方案营养复盘」，不进膳食报告存档 |
 | `meal_plan_id` | integer / null | 归属方案 |
 | `period_start` / `period_end` | string / null | 「区间」文案 |
 | `window_days` | 3~30 | 统计窗口 |
@@ -163,6 +164,7 @@
 | `summary.achievement` | object / null | 达标率；含 `micro_overall_pct`、`macro`、`micro` 三段口径 |
 | `summary.daily_trend[]` | object[] | 每日摄入序列；每项含 `date / label / calories / protein_g / fat_g / carb_g / fiber_g / oil_g / salt_g / micro / meal_count / known_meal_count / status` |
 | `summary.reference_hints` | string[] | 参考口径说明（如「本期铁按普通口径，未区分经期」） |
+| `summary.insights` | string[] | 结论/洞察（缺口、超标、回溯补位、达标率、达标天数偏少），前端「关键结论」区渲染 |
 | `summary.data_quality_notes` | string[] | 数据质量说明 |
 | `completeness.meal_count / known_meal_count / missing_meal_count` | integer / null | 「共 N 餐 · 已知 N 餐 · 缺失 N 餐」 |
 | `sources` | object[] | 参考值来源 |
@@ -175,7 +177,7 @@
 - `daily_trend[].calories=null` 表示当日数据不足，趋势值显示「—」，不补 0；`status=参考提示` 走中性色。
 - 钠只在 `macro_summary.salt_g`，不进微量区。
 - `summary.data_quality_notes` 与 `completeness` 在面板底部常驻展示，不折叠。
-- 面板请求先取 `GET /meal-plan/current`：无方案 → 配餐引导；有方案未分析 → 「生成本方案膳食报告」（`POST /nutrition/analysis`）；已生成 → 展示报告。
+- 「膳食报告」面板为**报告存档列表**：`GET /nutrition/report/list` 拉取 week/month/custom 报告摘要，点开按 `GET /nutrition/report/{id}` 回看详情；空态引导生成周/月报告或先配餐。方案级营养复盘（plan）在历史方案详情里查看，不进膳食报告存档。
 
 ---
 
@@ -194,7 +196,10 @@
 | POST | `/api/meal-plan/week/fix` | MealCard（`status:"fixed"`） | 有未选餐位 `2005` |
 | GET | `/api/shopping-list?meal_plan_id=` | ShoppingList | 未固定 `2005` |
 | POST | `/api/nutrition/analysis` | NutritionReport | `window_days` 3~30 |
-| GET | `/api/nutrition/report?meal_plan_id=` | NutritionReport | 未生成 `1004` |
+| POST | `/api/nutrition/period-analysis` | NutritionReport | 入参 `report_type` week/month/custom（custom 需 `period_start/end`）；跨方案聚合并落库（`meal_plan_id` 为 null），由 Agent 流式下发为 `nutrition_report` artifact |
+| GET | `/api/nutrition/report?meal_plan_id=` | NutritionReport | 方案营养复盘回读（report_type=plan）；未生成 `1004` |
+| GET | `/api/nutrition/report/list?page=&page_size=` | `{total,page,page_size,items[]}` | 膳食报告存档列表（week/month/custom，按生成时间倒序），items 为摘要 |
+| GET | `/api/nutrition/report/{report_id}` | NutritionReport | 按 id 回看报告详情；不存在 `1004` |
 
 响应统一 `{ code, message, data }`；`code=0` 时 `data` 直接是对象（无 `profile` / `plan` / `shopping_list` / `report` 包裹）；列表接口才用 `{total,page,page_size,items}`。
 

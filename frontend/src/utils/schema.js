@@ -56,7 +56,7 @@ const MEAL_TIMES = { 早: '07:30', 午: '12:00', 晚: '18:30' }
 const MEAL_COLORS = { 早: '#e8942c', 午: '#4a7c59', 晚: '#3b7fd4' }
 const PLAN_TYPES = { 餐: 'meal', 日: 'day', 多日: 'multi', 周: 'week', 自定义: 'custom' }
 const PLAN_TITLES = { 餐: '一餐搭配', 日: '今日三餐', 多日: '多日方案', 周: '一周食谱', 自定义: '自定义方案' }
-export const STATUS_LABELS = { draft: '草稿', candidates: '待确认', fixed: '已生效' }
+export const STATUS_LABELS = { draft: '草稿', candidates: '待确认', fixed: '已生效', superseded: '已取代' }
 
 export const GOAL_LABELS = {
   maintain: '维持',
@@ -182,6 +182,19 @@ function mdOf(iso) {
   return iso ? iso.slice(5) : ''
 }
 
+function todayIso() {
+  const d = new Date()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+function dayLabelOf(iso) {
+  if (!iso) return ''
+  if (iso === todayIso()) return '今天'
+  return weekdayOf(iso)
+}
+
 function groupDays(slots) {
   const map = new Map()
   slots.forEach((s) => {
@@ -296,21 +309,29 @@ export function normalizeCurrentPlan(payload) {
 /* ---------- ShoppingList ---------- */
 
 export function normalizeGroups(groups) {
-  return arr(groups).map((g, gi) => ({
-    group_id: str(pick(g, 'group_id'), `g${gi}`),
-    category: str(pick(g, 'category'), '其他'),
-    items: arr(g.items).map((it, ii) => {
-      const qty = numOrNull(pick(it, 'estimated_quantity'))
-      const unit = str(pick(it, 'unit'), '')
-      const preset = str(pick(it, 'amount'), '')
-      return {
-        item_id: str(pick(it, 'ingredient_id') || pick(it, 'item_id'), `it${gi}${ii}`),
-        name: str(pick(it, 'name'), ''),
-        amount: preset || (qty === null ? '估算量待补' : `${fmtNum(qty)} ${unit}`.trim()),
-        checked: false
-      }
-    })
-  }))
+  return arr(groups).map((g, gi) => {
+    const dayDate = str(pick(g, 'day_date'), '')
+    return {
+      group_id: str(pick(g, 'group_id'), `g${gi}`),
+      category: str(pick(g, 'category'), '其他'),
+      day_date: dayDate,
+      day: dayLabelOf(dayDate),
+      day_short: mdOf(dayDate),
+      items: arr(g.items).map((it, ii) => {
+        const qty = numOrNull(pick(it, 'estimated_quantity'))
+        const unit = str(pick(it, 'unit'), '')
+        const preset = str(pick(it, 'amount'), '')
+        const baseId = str(pick(it, 'ingredient_id') || pick(it, 'item_id'), `it${gi}${ii}`)
+        return {
+          // 同食材跨天重复出现时用 day_date 后缀保证勾选键唯一（周/多日按天分列）
+          item_id: dayDate ? `${baseId}@${dayDate}` : baseId,
+          name: str(pick(it, 'name'), ''),
+          amount: preset || (qty === null ? '估算量待补' : `${fmtNum(qty)} ${unit}`.trim()),
+          checked: false
+        }
+      })
+    }
+  })
 }
 
 /* ---------- NutritionReport ---------- */
@@ -351,15 +372,21 @@ function microView(entry, key) {
   }
 }
 
-function macroSegment(name, pct, color) {
+const MACRO_LEVEL_TAG = { ok: '达标', warn: '注意', low: '偏低', high: '偏高' }
+
+function macroSegment(name, pct, color, level, range) {
   const p = numOrNull(pct)
+  const lv = typeof level === 'string' && level ? level : ''
+  const rangeText =
+    Array.isArray(range) && range.length === 2 ? `${range[0]}~${range[1]}%` : ''
   return {
     name,
     percent: p,
     color,
-    tag: p === null ? '暂无数据' : '',
-    tag_level: 'neutral',
-    desc: '供能比'
+    tag: p === null ? '暂无数据' : MACRO_LEVEL_TAG[lv] || '',
+    tag_level:
+      lv === 'ok' ? 'ok' : lv === 'warn' || lv === 'low' || lv === 'high' ? 'warn' : 'neutral',
+    desc: rangeText ? `合理区间 ${rangeText}` : '供能比'
   }
 }
 
@@ -410,6 +437,18 @@ function achievementView(achievement) {
   }
 }
 
+function composeSummary(daySpan, mealCount, energy, segments) {
+  const parts = []
+  if (daySpan != null) parts.push(`覆盖 ${daySpan} 天`)
+  if (energy != null) parts.push(`日均 ${energy} kcal`)
+  if (mealCount != null) parts.push(`共 ${mealCount} 餐`)
+  const pcts = segments
+    .filter((s) => s.percent !== null && s.percent !== undefined)
+    .map((s) => `${s.name} ${s.percent}%`)
+  if (pcts.length) parts.push(pcts.join(' / '))
+  return parts.join(' · ')
+}
+
 export function normalizeReport(report) {
   const r = report || {}
   const macro = r.macro_summary || {}
@@ -426,12 +465,54 @@ export function normalizeReport(report) {
     start && end
       ? Math.max(1, Math.round((new Date(end) - new Date(start)) / 86400000) + 1)
       : null
+  const achievement = achievementView(pick(summary, 'achievement'))
+  const macroAchieve = (achievement && achievement.macro) || {}
+  const microAchieve = (achievement && achievement.micro) || {}
+  const mealCount = numOrNull(pick(completeness, 'meal_count'))
+  const energy = numOrNull(pick(macro, 'energy_kcal'))
+  const planStats = pick(summary, 'plan_stats') || {}
+
+  const macroCell = (key) => macroAchieve[key] || {}
+  const segments = [
+    macroSegment(
+      '蛋白质', pick(macro, 'protein_pct'), 'protein',
+      macroCell('protein_pct').level, macroCell('protein_pct').range
+    ),
+    macroSegment(
+      '碳水', pick(macro, 'carb_pct'), 'carb',
+      macroCell('carb_pct').level, macroCell('carb_pct').range
+    ),
+    macroSegment(
+      '脂肪', pick(macro, 'fat_pct'), 'fat',
+      macroCell('fat_pct').level, macroCell('fat_pct').range
+    )
+  ]
+
+  const microItems = MICRO_KEYS.map((k) => {
+    const it = microView(microMap[k], k)
+    if (!it.name) return null
+    const a = microAchieve[k] || {}
+    it.achieved_days = numOrNull(a.achieved_days)
+    it.valid_days = numOrNull(a.valid_days)
+    it.achieved_pct = numOrNull(a.achieved_pct)
+    return it
+  }).filter(Boolean)
+
   return {
     report_id: str(pick(r, 'nutrition_report_id'), ''),
     meal_plan_id: str(pick(r, 'meal_plan_id'), ''),
     scope: reportType,
     report_type: reportType,
-    headline: reportType === 'plan' ? `方案膳食报告（${daySpan ?? '—'} 天）` : '膳食报告',
+    headline:
+      reportType === 'plan'
+        ? `方案营养复盘（${daySpan ?? '—'} 天）`
+        : reportType === 'week'
+          ? '周膳食报告'
+          : reportType === 'month'
+            ? '月膳食报告'
+            : reportType === 'custom'
+              ? '自定义膳食报告'
+              : '膳食报告',
     meta: {
       range_start: start,
       range_end: end,
@@ -439,18 +520,14 @@ export function normalizeReport(report) {
       generated_at: str(pick(r, 'generated_at'), ''),
       window_days: numOrNull(pick(r, 'window_days')),
       valid_days: daySpan,
-      total_meals: numOrNull(pick(completeness, 'meal_count')),
-      target_kcal: numOrNull(pick(macro, 'energy_kcal'))
+      total_meals: mealCount,
+      target_kcal: energy
     },
-    summary_text: '',
+    summary_text: composeSummary(daySpan, mealCount, energy, segments),
     macro: {
-      center_value: fmtNum(pick(macro, 'energy_kcal')),
+      center_value: fmtNum(energy),
       center_label: 'kcal',
-      segments: [
-        macroSegment('蛋白质', pick(macro, 'protein_pct'), 'protein'),
-        macroSegment('碳水', pick(macro, 'carb_pct'), 'carb'),
-        macroSegment('脂肪', pick(macro, 'fat_pct'), 'fat')
-      ]
+      segments
     },
     extra_metrics: [
       { key: 'oil', name: '烹调油', value: pick(macro, 'oil_g'), unit: 'g' },
@@ -459,18 +536,23 @@ export function normalizeReport(report) {
     ],
     micro: {
       title: '关键微量（覆盖度）',
-      items: MICRO_KEYS.map((k) => microView(microMap[k], k)).filter((it) => it.name)
+      items: microItems,
+      overall_pct: achievement ? numOrNull(achievement.micro_overall_pct) : null
     },
     completeness: {
-      meal_count: numOrNull(pick(completeness, 'meal_count')),
+      meal_count: mealCount,
       known_meal_count: numOrNull(pick(completeness, 'known_meal_count')),
       missing_meal_count: numOrNull(pick(completeness, 'missing_meal_count'))
     },
     reference_hints: arr(pick(summary, 'reference_hints')),
     data_quality_notes: arr(pick(summary, 'data_quality_notes')),
-    achievement: achievementView(pick(summary, 'achievement')),
+    plan_stats: {
+      total_plans: numOrNull(pick(planStats, 'total_plans')),
+      executed_plans: numOrNull(pick(planStats, 'executed_plans'))
+    },
+    achievement,
     sources: arr(pick(r, 'sources')),
-    insights: arr(pick(summary, 'reference_hints')),
+    insights: arr(pick(summary, 'insights')),
     daily_trend: normalizeDailyTrend(trendSource),
     expanded: false
   }

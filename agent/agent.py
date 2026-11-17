@@ -58,13 +58,17 @@ _INTENT_SYSTEM = (
     "你是膳食搭配智能体的意图分类器。把用户消息归入一个意图，只返回 JSON，不要多余文字。\n"
     '意图：plan_day（今日/某天一日三餐）、plan_week（一周食谱）、plan_meal（单餐推荐）、'
     'profile_build（用户描述身体指标/目标/过敏，需建档）、rag_qa（营养知识问答）、'
+    'report（生成/复盘膳食报告，如「生成周/月膳食报告」「看看这周/这个月吃得怎么样」「复盘这段时间」「复盘 11月1日到11月10日」）、'
     'explain（解释当前方案为什么这样搭/搭配理由）、'
     'reverse_nutrition（症状咨询，如口角炎/乏力/掉发）、chat（闲聊）。\n'
     '注意：只有用户明确要求「生成/推荐/安排 菜单、三餐、食谱」时才归 plan_*；'
-    '询问营养知识、食物功效、该怎么吃、忌口建议这类问题一律归 rag_qa。\n'
+    '询问营养知识、食物功效、该怎么吃、忌口建议这类问题一律归 rag_qa；'
+    '回顾/复盘一段时间或「吃得怎么样」这类话术归 report。\n'
     'JSON 字段：{"intent":"...", "meal_type":"早餐|午餐|晚餐|null", '
+    '"scope":"week|month|plan|null", '
     '"profile":{"gender":"男|女","age":0,"height_cm":0,"weight_kg":0,'
     '"goal_code":"maintain|fat_loss|muscle_gain|glucose_control|digestive_health","allergies":[],"conditions":{},"name":""}}。'
+    'report 需填 scope（月→month、周/最近/这段时间→week、自定义日期区间→custom、方案→plan），其余 intent 的 scope 为 null；'
     '仅 profile_build 需要填 profile，其余为 null。'
 )
 
@@ -86,6 +90,28 @@ SYSTEM_INSTRUCTION = (
 )
 
 
+_DATE_TOKEN_RE = re.compile(
+    r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?|(\d{1,2})月(\d{1,2})[日号]"
+)
+
+
+def _parse_date_range(message: str) -> tuple[str, str] | None:
+    """从消息里抽取两个日期（YYYY-MM-DD / YYYY年M月D日 / M月D日），返回 (start, end) ISO 串。"""
+    tokens: list[date] = []
+    year = date.today().year
+    for m in _DATE_TOKEN_RE.finditer(message):
+        if m.group(1):
+            tokens.append(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+        else:
+            tokens.append(date(year, int(m.group(4)), int(m.group(5))))
+    if len(tokens) < 2:
+        return None
+    start, end = tokens[0], tokens[1]
+    if end < start:
+        start, end = end, start
+    return start.isoformat(), end.isoformat()
+
+
 def _regex_intent(message: str) -> dict | None:
     m = message.strip()
     has = lambda pat: re.search(pat, m) is not None  # noqa: E731
@@ -96,10 +122,23 @@ def _regex_intent(message: str) -> dict | None:
     if has(r"选用|就用|选这个|选方案"):
         label = next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")
         return {"intent": "choose_candidate", "meal_type": label, "name": m}
-    if has(r"确认|固定|就这个|就它|就选|就这么|定了"):
-        return {"intent": "confirm"}
-    if has(r"报告|复盘"):
-        scope = "month" if has(r"月|30天|30 天") else "week"
+    if has(r"确认|固定|就这个|就它|就选|就这么|定了|替换|覆盖|取代"):
+        return {"intent": "confirm", "replace": has(r"替换|覆盖|取代")}
+    if has(r"报告|复盘|回顾|总结|吃得(怎么样|如何|怎样|好不好)|饮食(情况|状况|回顾|复盘|怎么样)"):
+        rng = _parse_date_range(m)
+        if rng:
+            return {
+                "intent": "report",
+                "scope": "custom",
+                "period_start": rng[0],
+                "period_end": rng[1],
+            }
+        if has(r"月|30天|30 天|这个月|本月"):
+            scope = "month"
+        elif has(r"周|七天|7天|一周|这周|本周|最近|一段时间|这段时间|这阵子|近几天"):
+            scope = "week"
+        else:
+            scope = "plan"
         return {"intent": "report", "scope": scope}
     if has(r"完整食谱|详细食谱|做法|步骤"):
         return {"intent": "recipe_detail"}
@@ -450,9 +489,12 @@ def run(user_id: str, message: str) -> dict:
         if not plan:
             return {"text": "现在还没有待确认的方案。我可以先按你的档案排今天的二餐，也可以排一周。", "blocks": []}
 
+        replace = bool(intent.get("replace"))
         try:
-            # 【核心修改】调后端接口，把状态改成 fixed 并落库
-            updated_plan = bc.fix_meal_plan(meal_plan_id=plan.get("meal_plan_id", ""))
+            # 【核心修改】调后端接口，把状态改成 fixed 并落库；replace=True 时取代同期旧方案
+            updated_plan = bc.fix_meal_plan(
+                meal_plan_id=plan.get("meal_plan_id", ""), replace=replace
+            )
 
             st["current_plan"] = updated_plan
             st["plans"].insert(0, dict(updated_plan))
@@ -461,42 +503,72 @@ def run(user_id: str, message: str) -> dict:
             shop = _shopping_list(updated_plan)
             total = shop.get("total_items") or sum(len(g.get("items", [])) for g in shop.get("groups", []))
 
+            tail = "已取代同期的旧方案。" if replace else ""
             return {
-                "text": f"已确认，方案已生效。食材清单共 {total} 项，按类别分好了。\n(点击左下角菜单可查看历史方案与食材清单)",
+                "text": f"已确认，方案已生效。食材清单共 {total} 项，按类别分好了。{tail}\n(点击左下角菜单可查看历史方案与食材清单)",
                 # 【核心修改】保留 meal_card 和 shopping_list，删掉废弃的 anchor_block
                 "blocks": [
                     blocks.meal_card_block(updated_plan),
                     blocks.shopping_list_block(shop)
                 ]
             }
+        except bc.BackendError as e:
+            if getattr(e, "code", None) == 2005:  # PLAN_STATE_CONFLICT：同期已有固定方案
+                return {
+                    "text": f"{e}\n回复「替换」我就在确认这份时覆盖同期的旧方案；若不想动旧方案，回复「取消」即可。",
+                    "blocks": [blocks.meal_card_block(plan)],
+                }
+            return {"text": f"确认方案失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
         except Exception as e:
             return {"text": f"确认方案失败：{e}", "blocks": [blocks.meal_card_block(plan)]}
 
     if kind == "report":
+        scope = intent.get("scope") or "plan"
+
+        # 膳食报告（时间段维度）：周/月/自定义，跨方案聚合，不依赖当前方案
+        if scope in ("week", "month", "custom"):
+            try:
+                if scope == "custom":
+                    report = bc.period_analysis(
+                        "custom",
+                        period_start=intent.get("period_start"),
+                        period_end=intent.get("period_end"),
+                    )
+                else:
+                    report = bc.period_analysis(scope)
+            except Exception as e:
+                return {"text": f"膳食报告生成失败：{e}", "blocks": []}
+            label = (
+                f"{intent.get('period_start')}~{intent.get('period_end')}"
+                if scope == "custom"
+                else "近 7 天" if scope == "week" else "近 30 天"
+            )
+            return {
+                "text": f"已为你生成{label}膳食报告，覆盖能量、宏量供能比与 7 项关键微量"
+                        f"（按窗口内已固定方案聚合）。",
+                "blocks": [blocks.report_block(report)],
+            }
+
+        # 方案营养复盘（独立于膳食报告）：复盘当前方案
         st = _user_state(user_id)
         plan = st.get("current_plan")
 
         if not plan:
-            # 【修改】去掉了 anchor_block，改用文字引导
-            return {"text": "还没有可复盘的方案。先确认一份规划，再在面板里生成报告吧。", "blocks": []}
+            return {"text": "还没有可复盘的方案。先确认一份规划，再复盘这份方案的营养吧。", "blocks": []}
 
-        # 后端方案主键是 meal_plan_id（没有 plan_id），v1.2 报告只做方案级（report_type=plan）。
+        # 后端方案主键是 meal_plan_id，方案级复盘 report_type=plan。
         plan_id = plan.get("meal_plan_id") or plan.get("plan_id", "")
 
         try:
             if str(plan_id).isdigit():
                 report = bc.nutrition_analysis(int(plan_id))
             else:
-                return {"text": "方案还没落库，暂时生成不了报告。先确认一份规划吧。", "blocks": []}
+                return {"text": "方案还没落库，暂时复盘不了。先确认一份规划吧。", "blocks": []}
         except Exception as e:
-            # 【修改】去掉了 anchor_block
-            return {"text": f"报告生成失败：{e}。可能是方案未落库或后端未响应。", "blocks": []}
+            return {"text": f"方案复盘失败：{e}。可能是方案未落库或后端未响应。", "blocks": []}
 
-        # 【修改】后端 /nutrition/analysis 返回的是完整方案级报告（macro_summary/key_micro_summary/
-        # summary.daily_trend/period_start...），原样交给 report_block，由前端 normalizeReport 渲染，
-        # 不再在 Agent 侧转成残缺的「视图」结构。
         return {
-            "text": "已为你生成方案膳食报告，覆盖能量、宏量供能比与 7 项关键微量。完整数据见右侧「膳食报告」面板。",
+            "text": "已为你复盘这份方案的营养，覆盖能量、宏量供能比与 7 项关键微量。",
             "blocks": [blocks.report_block(report)]
         }
 

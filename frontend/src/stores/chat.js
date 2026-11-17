@@ -221,7 +221,7 @@ export const useChatStore = defineStore('chat', () => {
             )
             if (sameIndex >= 0) aiMsg.blocks.splice(sameIndex, 1, block)
             else aiMsg.blocks.push(block)
-            if (block.type === 'nutrition_report') panel.markReportUnread()
+            if (block.type === 'nutrition_report' && block.report_type !== 'plan') panel.markReportUnread()
             session.updatedAt = new Date().toISOString()
           }
 

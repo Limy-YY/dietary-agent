@@ -59,7 +59,7 @@
       <div class="hd-section-title">📊 营养复盘</div>
       <div v-if="reportLoading" class="hd-note">正在加载营养复盘…</div>
       <div v-else-if="report"><ReportBlock :block="reportBlock" /></div>
-      <div v-else class="hd-note">这份方案还没有营养复盘报告，可在对话里对我说「帮我生成一份膳食报告」。</div>
+      <div v-else class="hd-note">这份方案还没有营养复盘，可在对话里让我「复盘这份方案的营养」。</div>
     </div>
 
     <template #footer>

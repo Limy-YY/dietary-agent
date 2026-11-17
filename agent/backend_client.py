@@ -38,7 +38,12 @@ def _auth_headers() -> dict:
 
 
 class BackendError(RuntimeError):
-    """后端业务错误（code != 0）或网络异常。"""
+    """后端业务错误（code != 0）或网络异常；code 保留后端业务码供按码分支。"""
+
+    def __init__(self, message: str, code: int | None = None, data=None):
+        super().__init__(message)
+        self.code = code
+        self.data = data
 
 
 def _parse(resp: requests.Response):
@@ -47,7 +52,11 @@ def _parse(resp: requests.Response):
     except ValueError:
         raise BackendError(f"后端返回非 JSON（HTTP {resp.status_code}）：{resp.text[:200]}")
     if isinstance(body, dict) and body.get("code") != 0:
-        raise BackendError(f"后端错误 code={body.get('code')}：{body.get('message')}")
+        raise BackendError(
+            str(body.get("message") or ""),
+            code=body.get("code"),
+            data=body.get("data"),
+        )
     return body.get("data") if isinstance(body, dict) else body
 
 
@@ -118,6 +127,19 @@ def get_nutrition_report(meal_plan_id: int):
     return _get("/api/nutrition/report", {"meal_plan_id": meal_plan_id})
 
 
+def period_analysis(report_type: str, window_days: int | None = None,
+                    period_start: str | None = None, period_end: str | None = None):
+    """周/月/自定义维度跨方案报告（API-25b）。report_type: week | month | custom。"""
+    payload: dict = {"report_type": report_type}
+    if window_days is not None:
+        payload["window_days"] = window_days
+    if period_start is not None:
+        payload["period_start"] = period_start
+    if period_end is not None:
+        payload["period_end"] = period_end
+    return _post("/api/nutrition/period-analysis", payload)
+
+
 # ---------------------------------------------------------------- 疾病规则
 def rule_catalog(page: int = 1, page_size: int = 50):
     return _get("/api/condition-rules/catalog", {"page": page, "page_size": page_size})
@@ -174,9 +196,9 @@ def swap_candidate(meal_plan_id: str, meal_slot_id: str, candidate_id: str = Non
         payload["candidate_id"] = candidate_id
     return _post("/api/meal-plan/candidate/swap", payload)
 
-def fix_meal_plan(meal_plan_id: str, selections: dict = None) -> dict:
-    """确认方案，落库持久化"""
-    payload = {"meal_plan_id": meal_plan_id}
+def fix_meal_plan(meal_plan_id: str, selections: dict = None, replace: bool = False) -> dict:
+    """确认方案，落库持久化；replace=True 表示若与已有固定方案餐位重叠则取代旧方案。"""
+    payload = {"meal_plan_id": meal_plan_id, "replace": replace}
     if selections:
         payload["selections"] = selections
     return _post("/api/meal-plan/week/fix", payload)

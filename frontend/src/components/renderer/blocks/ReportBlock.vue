@@ -28,7 +28,7 @@
               <div class="rp-legend-info">
                 <div class="rp-legend-top">
                   <span class="rp-legend-name">{{ seg.name }} {{ seg.percent === null ? '—' : seg.percent + '%' }}</span>
-                  <span v-if="seg.tag" class="rp-legend-tag neutral">{{ seg.tag }}</span>
+                  <span v-if="seg.tag" :class="['rp-legend-tag', seg.tag_level]">{{ seg.tag }}</span>
                 </div>
                 <div class="rp-legend-desc">{{ seg.desc }}</div>
               </div>
@@ -45,11 +45,15 @@
 
       <div class="rp-section">
         <div class="rp-section-title">🔬 {{ report.micro.title }}</div>
+        <div v-if="report.micro.overall_pct != null" class="rp-micro-overall">
+          7 项关键微量达标率 <b>{{ report.micro.overall_pct }}%</b>
+        </div>
         <div class="rp-micro-grid">
           <div v-for="(m, i) in report.micro.items" :key="i" class="rp-micro">
             <MicroRing :item="m" :size="42" />
             <div class="rp-micro-name">{{ m.name }}</div>
             <div class="rp-micro-note-item">{{ m.note }}</div>
+            <div v-if="m.valid_days > 0" class="rp-micro-note-item">{{ fmtNum(m.achieved_days) }}/{{ fmtNum(m.valid_days) }} 天达标</div>
             <div v-if="m.status === 'danger'" class="rp-micro-tag danger">超标</div>
           </div>
         </div>
@@ -79,6 +83,13 @@
 
     <!-- 数据质量与完整度：常驻，不折叠 -->
     <div class="rc-quality">
+      <div v-if="report.plan_stats && report.plan_stats.total_plans != null" class="rc-quality-line">
+        <span class="rc-quality-label">覆盖范围</span>
+        <span>
+          共 {{ fmtNum(report.plan_stats.total_plans) }} 份已固定方案 ·
+          {{ fmtNum(report.plan_stats.executed_plans) }} 份已执行
+        </span>
+      </div>
       <div class="rc-quality-line">
         <span class="rc-quality-label">数据完整度</span>
         <span>

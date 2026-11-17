@@ -181,7 +181,7 @@ const CATEGORY_MAP = {
 export function planToShoppingList(legacy, planId) {
   const groups = legacy.groups.map((g, gi) => {
     const key = String(g.category || '').replace(/[^\u4e00-\u9fa5]/g, '').replace('类', '')
-    return {
+    const group = {
       category: CATEGORY_MAP[key] || '其他',
       items: g.items.map((it, ii) => ({
         ingredient_id: `CN-${1000 + gi * 20 + ii}`,
@@ -190,6 +190,8 @@ export function planToShoppingList(legacy, planId) {
         unit: gramsOf(it.amount) == null ? '份' : /ml|毫升/i.test(it.amount) ? 'ml' : 'g'
       }))
     }
+    if (g.day_date) group.day_date = g.day_date
+    return group
   })
   return {
     shopping_list_id: planId * 10 + 1,
@@ -290,7 +292,8 @@ export function toNutritionReport(legacy, { planId, reportId, windowDays = 7 } =
       basis: 'daily_average',
       daily_trend: dailyTrend,
       achievement,
-      reference_hints: [...legacy.insights, '铁按普通口径计算，未区分经期（本期口径）'],
+      reference_hints: ['铁按普通口径计算，未区分经期（本期口径）'],
+      insights: [...legacy.insights],
       data_quality_notes: ['部分食材微量为近似值（approx/check），不作为官方实测结论']
     },
     completeness: {
