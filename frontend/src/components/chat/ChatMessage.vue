@@ -14,6 +14,9 @@
         <div v-if="message.thinking" class="thinking-line">
           <span class="thinking-dot"></span>{{ message.thinking }}
         </div>
+        <div v-else-if="thinkingRecord && message.status === 'done'" class="thinking-record">
+          💭 {{ thinkingRecord }}
+        </div>
         <div v-if="message.text" class="bubble md-bubble">
           <div class="md" v-html="renderMarkdown(message.text)"></div>
           <span v-if="message.status === 'streaming'" class="caret"></span>
@@ -41,12 +44,20 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import RendererHost from '@/components/renderer/RendererHost.vue'
 import ClarifyBlock from './ClarifyBlock.vue'
 import { renderMarkdown } from '@/utils/markdown.js'
 
-defineProps({ message: { type: Object, required: true } })
+const props = defineProps({ message: { type: Object, required: true } })
 defineEmits(['phrase', 'retry'])
+
+// 思考记录：过滤掉「理解需求 / 读取档案 / 整理回复」这类元步骤，只留核心动作，折叠成一行「已X」
+const META_STEPS = ['正在理解你的需求', '正在读取档案', '正在整理回复']
+const thinkingRecord = computed(() => {
+  const actions = (props.message.thinkingSteps || []).filter((s) => !META_STEPS.includes(s))
+  return actions.length ? actions.map((s) => '已' + s.replace(/^正在/, '')).join(' · ') : ''
+})
 </script>
 
 <style scoped>
@@ -70,6 +81,13 @@ defineEmits(['phrase', 'retry'])
 @keyframes thinking-pulse {
   0%, 100% { opacity: 0.3; transform: scale(0.8); }
   50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* 完成后折叠成一行记录 */
+.thinking-record {
+  padding: 2px 0 6px;
+  color: var(--text-sub, #9a9a9a);
+  font-size: 12px;
 }
 
 /* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */

@@ -203,6 +203,7 @@ export const useChatStore = defineStore('chat', () => {
       suggestions: [],
       clarify: null,
       thinking: '',
+      thinkingSteps: [],
       createdAt: new Date().toISOString()
     })
 
@@ -234,6 +235,10 @@ export const useChatStore = defineStore('chat', () => {
           // status：过程可见（正在读取档案 / 生成方案 / 换候选等思考步骤）
           if (evt.event === 'status') {
             aiMsg.thinking = payload.stage || ''
+            const steps = aiMsg.thinkingSteps
+            if (payload.stage && steps[steps.length - 1] !== payload.stage) {
+              steps.push(payload.stage)
+            }
             session.updatedAt = new Date().toISOString()
           }
 
@@ -269,6 +274,7 @@ export const useChatStore = defineStore('chat', () => {
 
           if (evt.event === 'done') {
             aiMsg.status = 'done'
+            aiMsg.thinking = '' // 兜底：确保思考步骤条不残留
             if (payload.conversation_id) session.conversationId = payload.conversation_id
             if (payload.meal_plan_id != null) aiMsg.meal_plan_id = payload.meal_plan_id
             session.updatedAt = new Date().toISOString()

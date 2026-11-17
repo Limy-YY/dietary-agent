@@ -40,15 +40,6 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _suggestions(blocks: list[dict]) -> list[str]:
-    types = [b.get("type") for b in blocks]
-    if "meal_card" in types:
-        return ["换一换", "看完整食谱", "确认当前方案"]
-    if "report" in types:
-        return ["生成月膳食报告", "看看食材清单"]
-    return ["生成一日三餐", "生成一周食谱", "推荐一餐搭配"]
-
-
 async def _stream(req: AgentChatRequest):
     conv_id = str(req.conversation_id or f"conv_{int(time.time() * 1000)}")
     loop = asyncio.get_running_loop()
@@ -90,6 +81,8 @@ async def _stream(req: AgentChatRequest):
     # 先说话、再落卡，避免「静默蹦卡」的突兀感（对齐主流客户端：文字先导，产物随后淡入）。
     narration = result.get("narration")
     if narration is not None:
+        # 工具已跑完，进入「组织回复」阶段：覆盖最后一条工具状态，填补 LLM 首 token 前的空档
+        yield _sse("status", {"stage": "正在整理回复"})
         token_q: asyncio.Queue[str | None] = asyncio.Queue()
 
         def _run_stream() -> None:
@@ -123,7 +116,6 @@ async def _stream(req: AgentChatRequest):
         "conversation_id": conv_id,
         "message_id": f"msg_{int(time.time() * 1000)}",
         "finish_reason": "stop",
-        "suggestions": _suggestions(blocks),
     })
 
 
