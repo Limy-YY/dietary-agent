@@ -202,6 +202,7 @@ export const useChatStore = defineStore('chat', () => {
       error: '',
       suggestions: [],
       clarify: null,
+      thinking: '',
       createdAt: new Date().toISOString()
     })
 
@@ -224,8 +225,15 @@ export const useChatStore = defineStore('chat', () => {
           // message：正文增量（v1.2 为 {type:'text', content}）
           if (evt.event === 'message') {
             if (payload.type === 'text' && typeof payload.content === 'string' && payload.content) {
+              aiMsg.thinking = '' // 正文开始，隐藏思考步骤
               aiMsg.text += payload.content
             }
+            session.updatedAt = new Date().toISOString()
+          }
+
+          // status：过程可见（正在读取档案 / 生成方案 / 换候选等思考步骤）
+          if (evt.event === 'status') {
+            aiMsg.thinking = payload.stage || ''
             session.updatedAt = new Date().toISOString()
           }
 

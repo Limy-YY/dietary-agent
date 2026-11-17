@@ -222,6 +222,9 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
                         "code": int(data.get("code") or BizCode.AGENT_CALL_FAILED),
                         "message": data.get("message") or "Agent 流内报错",
                     }
+                elif event == "status":
+                    # 过程可见：把 Agent 的「正在读取档案 / 生成方案」等思考步骤透传给前端
+                    yield "status", {"stage": data.get("stage", "")}
                 elif event == "done":
                     # Agent 的 done 只带自己的 conversation_id / message_id，这里不透传
                     continue

@@ -10,11 +10,16 @@
         :question="message.clarify.question || message.text"
         :missing-fields="message.clarify.missing_fields || []"
       />
-      <div v-else-if="message.text" class="bubble md-bubble">
-        <div class="md" v-html="renderMarkdown(message.text)"></div>
-        <span v-if="message.status === 'streaming'" class="caret"></span>
-      </div>
-      <div v-else-if="message.status === 'streaming'" class="typing"><i></i><i></i><i></i></div>
+      <template v-else>
+        <div v-if="message.thinking" class="thinking-line">
+          <span class="thinking-dot"></span>{{ message.thinking }}
+        </div>
+        <div v-if="message.text" class="bubble md-bubble">
+          <div class="md" v-html="renderMarkdown(message.text)"></div>
+          <span v-if="message.status === 'streaming'" class="caret"></span>
+        </div>
+        <div v-else-if="message.status === 'streaming' && !message.thinking" class="typing"><i></i><i></i><i></i></div>
+      </template>
 
       <RendererHost
         v-for="block in message.blocks"
@@ -45,6 +50,28 @@ defineEmits(['phrase', 'retry'])
 </script>
 
 <style scoped>
+/* 过程可见：思考步骤条 */
+.thinking-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 6px;
+  color: var(--text-sub, #7a7a7a);
+  font-size: 13px;
+}
+.thinking-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4a7c59;
+  flex: none;
+  animation: thinking-pulse 1s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
 /* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */
 /* white-space 必须 normal：父级 .bubble 的 pre-wrap 会把 markdown 块间换行渲染成可见空行 */
 .md { white-space: normal; }

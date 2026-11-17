@@ -17,12 +17,13 @@
 { "conversation_id": "conv_xxx | null", "message": "生成一周食谱", "context": { "meal_plan_id": 101 } }
 ```
 
-事件类型固定四类 + 结束事件：
+事件类型（正文 / 产物 / 过程状态 / 追问 / 错误）+ 结束事件：
 
 | event | data | 前端处理 |
 |---|---|---|
 | `message` | `{"type":"text","content":"…"}` | `type === 'text'` 时把 `content` 追加到当前 AI 气泡；空内容不建气泡 |
 | `artifact` | `{"type":"meal_card\|shopping_list\|current_plan\|nutrition_report","payload":{…}}` | 立即归一化并渲染/更新；同 `type + raw_id` 原位替换，不重复追加 |
+| `status` | `{"stage":"正在生成配餐方案"}` | 过程可见：在 AI 气泡顶部渲染「思考步骤条」，正文首帧到达后隐藏；非流式（无该事件）时前端不展示 |
 | `clarify` | `{"question":"…","missing_fields":["gender","age"]}` | 在气泡内渲染追问与缺失字段，不新增 assistant 轮次 |
 | `error` | `{"code":2001,"message":"…"}` | 气泡内提示错误码语义；`2001~2004` 可重试，其余不自动重试 |
 | `done` | `{"conversation_id":"…","meal_plan_id":101,"finish_reason":"stop"}` | 记录会话与方案 id，刷新右侧面板，结束当前流 |

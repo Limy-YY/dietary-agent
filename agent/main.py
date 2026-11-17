@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 
 from fastapi import FastAPI
@@ -50,23 +51,70 @@ def _suggestions(blocks: list[dict]) -> list[str]:
 
 async def _stream(req: AgentChatRequest):
     conv_id = str(req.conversation_id or f"conv_{int(time.time() * 1000)}")
+    loop = asyncio.get_running_loop()
+    status_q: asyncio.Queue[str] = asyncio.Queue()
+
+    def on_status(stage: str) -> None:
+        loop.call_soon_threadsafe(status_q.put_nowait, stage)
+
     yield _sse("message", {"conversation_id": conv_id, "delta": ""})
 
     # agent.run 是同步阻塞（内部走 requests 调后端 REST）。放到线程池执行，
     # 当前 ASGI task 的 ContextVar（token）会被复制到线程，agent 内的 REST 调用
     # 因此带上本请求的身份；并发请求各自独立 task，不串号。
+    agent_task = asyncio.create_task(
+        run_in_threadpool(agent.run, req.user_id, req.message, req.history, on_status)
+    )
+
+    # 实时转发「过程状态」（thinking 步骤），直到 agent.run 结束
+    while not agent_task.done():
+        try:
+            stage = status_q.get_nowait()
+        except asyncio.QueueEmpty:
+            await asyncio.sleep(0.05)
+            continue
+        yield _sse("status", {"stage": stage})
+    # 让事件循环先处理 run() 结束前最后一刻 call_soon_threadsafe 排队的 status，再排空
+    await asyncio.sleep(0)
+    while not status_q.empty():
+        stage = status_q.get_nowait()
+        yield _sse("status", {"stage": stage})
+
     try:
-        result = await run_in_threadpool(agent.run, req.user_id, req.message, req.history)
+        result = agent_task.result()
     except Exception as e:  # 生成中失败 → error 事件，前端可重试
         yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
         return
 
-    text = result.get("text") or ""
-    for i in range(0, len(text), 6):
-        yield _sse("message", {"delta": text[i:i + 6]})
-        # 模拟逐字流；让前端能感知到打字效果（async 里不能阻塞 event loop）
-        await asyncio.sleep(0.008)
+    # 正文先行：narration 走真 token 流（LLM stream=True），否则整段下发固定文本。
+    # 先说话、再落卡，避免「静默蹦卡」的突兀感（对齐主流客户端：文字先导，产物随后淡入）。
+    narration = result.get("narration")
+    if narration is not None:
+        token_q: asyncio.Queue[str | None] = asyncio.Queue()
 
+        def _run_stream() -> None:
+            try:
+                for tok in agent.stream_reply(narration):
+                    loop.call_soon_threadsafe(token_q.put_nowait, tok)
+            finally:
+                loop.call_soon_threadsafe(token_q.put_nowait, None)
+
+        threading.Thread(target=_run_stream, daemon=True).start()
+        while True:
+            tok = await token_q.get()
+            if tok is None:
+                break
+            yield _sse("message", {"delta": tok})
+
+        suffix = result.get("suffix")
+        if suffix:
+            yield _sse("message", {"delta": suffix})
+    else:
+        text = result.get("text") or ""
+        if text:
+            yield _sse("message", {"delta": text})
+
+    # 结构化 block 随后落（后端 chat.py 归一成 artifact；前端卡片淡入）
     blocks = result.get("blocks") or []
     if blocks:
         yield _sse("message", {"meta": {"blocks": blocks}, "conversation_id": conv_id})
