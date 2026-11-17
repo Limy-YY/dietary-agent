@@ -157,19 +157,64 @@ def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)) -> ApiRespons
     return api_success(RagResult(items=items, method=method))
 
 
+def _search_symptom_map(symptoms: str, db: Session) -> list[RagItem]:
+    """确定性反向营养映射（症状 → 营养素）：查 core.symptom_nutrient_map。
+
+    按 symptom 与 aliases 子串命中输入症状文本；仅取 is_active 记录（数据岗审核后置 active）。
+    命中条目映射成 RagItem：title=「症状→营养素」、content=advice（措辞已含「可能…建议就医」）、
+    source 取 core.data_source，供 Agent「可溯源」标注。
+    """
+    symptoms = (symptoms or "").strip()
+    if not symptoms:
+        return []
+    rows = db.execute(
+        text(
+            "SELECT m.symptom_nutrient_map_id, m.symptom, m.aliases, m.nutrient_id, "
+            "       m.advice, m.evidence_level, m.source_id, ds.source_name, ds.source_url "
+            "FROM core.symptom_nutrient_map m "
+            "LEFT JOIN core.data_source ds ON ds.source_id = m.source_id "
+            "WHERE m.is_active"
+        )
+    ).mappings().all()
+    items: list[RagItem] = []
+    for r in rows:
+        terms = [r["symptom"]] + list(r["aliases"] or [])
+        if not any(t and t in symptoms for t in terms):
+            continue
+        items.append(
+            RagItem(
+                doc_id=str(r["symptom_nutrient_map_id"]),
+                title=f"{r['symptom']} → {r['nutrient_id']}",
+                content=r["advice"],
+                source=r["source_name"],
+                source_id=str(r["source_id"]) if r["source_id"] is not None else None,
+                category="symptom_nutrient_map",
+                kind="symptom",
+            )
+        )
+    return items
+
+
 @router.post("/reverse-nutrition")
 def reverse_nutrition(
     req: ReverseNutritionRequest, db: Session = Depends(get_db)
 ) -> ApiResponse[ReverseNutritionResult]:
-    """反向营养推理（症状 → 营养素）：symptom_nutrient_map 待数据岗补表，
-    当前走知识库关键词兜底，结果仅作线索，不得直接作为诊断依据。"""
+    """反向营养推理（症状 → 营养素）：优先查 core.symptom_nutrient_map（确定性映射），
+    未命中时回落知识库关键词兜底；结果仅作线索，不得直接作为诊断依据。"""
+    items = _search_symptom_map(req.symptoms, db)
+    if items:
+        return api_success(
+            ReverseNutritionResult(
+                items=items,
+                method="symptom_map",
+                note="命中反向营养映射（symptom_nutrient_map）；结果仅作参考线索，不构成医学诊断。",
+            )
+        )
     items = _search_knowledge(req.symptoms, req.top_k, db)
     return api_success(
         ReverseNutritionResult(
             items=items,
-            note=(
-                "symptom_nutrient_map 表待数据岗补排期（D3），当前结果为知识库关键词兜底，"
-                "仅作参考线索，不构成医学诊断；正式推理待补表后切换"
-            ),
+            method="keyword_fallback",
+            note="未命中反向营养映射，回落知识库关键词兜底；结果仅作参考线索，不构成医学诊断。",
         )
     )

@@ -1165,10 +1165,13 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
             fallback,
             history,
         )
-        # 【修改】就医提醒和文献来源已由 LLM 融入正文；就医提醒作为确定性后缀在流式后追加。
-        return {"narration": narration,
-                "suffix": "\n\n(注：以上信息由文献库提供参考，不可替代专业医疗诊断，如有不适请及时就医。)",
-                "blocks": []}
+        # 【修复 BUG-026】只有真的检索到线索才可标注「来自知识库」；检索为空时不得声称有文献来源
+        # （可溯源/零编造铁律）。后缀作为确定性免责声明在流式后追加，正文由 LLM 组织。
+        if content:
+            suffix = "\n\n> 📚 以上营养线索来自知识库检索，仅供参考、不构成医学诊断，如有不适请及时就医。"
+        else:
+            suffix = "\n\n(以上为通用营养学常识，未检索到具体文献，仅供参考、不构成医学诊断，如有不适请及时就医。)"
+        return {"narration": narration, "suffix": suffix, "blocks": []}
 
     # 知识问答
     # 解释「为什么这样搭」
