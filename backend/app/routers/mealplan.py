@@ -75,6 +75,7 @@ class GenerateRequest(BaseModel):
     candidates_per_slot: int = Field(3, ge=2, le=3)
     goal_code: str | None = None
     exclude_ingredients: list[str] = Field(default_factory=list)
+    soft_avoid: list[str] = Field(default_factory=list)
 
 
 class SwapRequest(BaseModel):
@@ -466,6 +467,7 @@ def _generate_and_persist(
         goal_code=req.goal_code,
         user_id=user_id,
         exclude_ingredients=req.exclude_ingredients,
+        soft_avoid=req.soft_avoid,
         max_slots=span * len(req.meal_types),  # 引擎默认 21 餐位，按实际跨度放宽
     )
 
