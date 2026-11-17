@@ -500,7 +500,7 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
             f"动作：为「{scope_label}」生成了配餐方案。\n"
             f"档案目标：{goal}\n"
             f"方案内容：\n{_plan_brief(plan)}\n"
-            "引导：右侧「当前规划」面板可查看；餐卡可「换一换」换候选，确认后固定并生成食材清单。"
+            "引导：餐卡已在对话里展示，可直接点「换一换」换候选；点「确认方案」固定后，才会同步到右侧「当前规划」面板并生成食材清单。"
         )
         narration = _narrate(message, context, fallback, history)
 
@@ -545,7 +545,7 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
                 if k is not None:
                     kcal_text = f"{k} kcal"
 
-            fallback = f"换好啦！给你换成了 {new_dish_text}，这一顿 {kcal_text}。你觉得怎么样？\n(可在面板中查看当前规划)"
+            fallback = f"换好啦！给你换成了 {new_dish_text}，这一顿 {kcal_text}。餐卡已更新，可以继续换，或点「确认方案」固定。"
             context = (
                 f"动作：更换「{intent.get('meal_type') or '午餐'}」候选。\n"
                 f"新候选：{new_dish_text}\n"
@@ -843,7 +843,7 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
 
     # 兜底
     # 【修改】停用 anchor_block
-    fallback = "这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告。\n(功能面板可在左下角菜单中找到)"
+    fallback = "这个我暂时答不好。可以让我按档案排今天的三餐、换一餐的候选、或者生成一份膳食报告。\n(右侧工具栏可打开食材清单、当前规划、膳食报告等面板)"
     context = (
         "动作：用户的消息没有命中明确的配餐/调整/报告/营养问答意图。\n"
         "引导：友好回应，并把用户引向可用功能——生成一日三餐 / 一周食谱 / 推荐一餐 / 生成膳食报告 / 咨询营养知识。"
