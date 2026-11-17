@@ -54,7 +54,7 @@
                   <td class="mt-meal">{{ slot.label }}</td>
                   <td class="mt-dish">{{ slot.dish_text || '—' }}</td>
                   <td class="mt-kcal">
-                    <span class="num">{{ fmtKcal(slot.kcal) }}</span>
+                    <span class="num">{{ fmtKcal(slot.kcal) }}</span><span class="unit"> kcal</span>
                     <button v-if="!isFixed" class="cp-swap" :disabled="!slot.candidates.length || swapping === slot.slot_id" @click="swap(slot)">{{ swapping === slot.slot_id ? '换一换…' : '换一换' }}</button>
                   </td>
                 </tr>
@@ -207,7 +207,12 @@ function openRecipe() {
   ui.recipePayload = {
     title: `${plan.value.title} · 完整食谱`,
     meals: plan.value.days.flatMap((d) =>
-      d.slots.map((s) => ({ label: `${d.weekday} ${s.label}`, time: s.time, kcal: s.kcal, dishes: s.dishes }))
+      d.slots.map((s) => ({
+        label: plan.value.days.length > 1 ? `${d.weekday} ${s.label}` : s.label,
+        time: s.time,
+        kcal: s.kcal,
+        dishes: s.dishes
+      }))
     )
   }
   ui.recipeOpen = true
