@@ -247,9 +247,10 @@ export const useChatStore = defineStore('chat', () => {
             if (!payload.type) return
             const block = normalizeArtifact(payload.type, payload.payload || {})
 
-            // 方案卡就地更新：同一 meal_plan_id 的卡若已出现在更早的消息里，就原地替换，
-            // 不再往当前气泡追加（换候选/选用/确认都复用同一张卡，避免对话里堆出多张过期卡）。
-            const replacedInPlace = replaceMealCardInPlace(session, block, aiMsg)
+            // 方案卡：确认(fixed)就地替换旧卡；换候选/调整(candidates)作为新卡追加，
+            // 让对话里的调整能直接看到新方案（点「换一换」按钮走 silentAction，仍原地更新）。
+            const fixedCard = block.type === 'meal_card' && block.status === 'fixed'
+            const replacedInPlace = fixedCard && replaceMealCardInPlace(session, block, aiMsg)
             if (!replacedInPlace) {
               const sameIndex = aiMsg.blocks.findIndex(
                 (b) => b.type === block.type && (!b.raw_id || b.raw_id === block.raw_id)
