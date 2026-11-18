@@ -78,16 +78,16 @@ def meal_card_block(plan: dict) -> dict:
     # 【核心修复 2】兼容单日/单餐的 slots 路径：外层没有 days 时，直接去外层找 slots
     days_list = plan.get("days", [])
     root_slots = plan.get("slots", [])
-    first_day = days_list[0] if days_list else {"kcal": plan.get("kcal", 0), "slots": root_slots}
-
-    first_slots = [_slot_view(s) for s in first_day.get("slots", [])]
-    kcal_vals = [s.get("kcal") for s in first_slots if s.get("kcal") is not None]
-    day_kcal = round(sum(kcal_vals), 1) if kcal_vals else None
-    candidate_count = len(first_day.get("slots", [{}])[0].get("candidates", [])) if first_day.get("slots") else 0
+    all_slots = root_slots or [s for day in days_list for s in day.get("slots", [])]
+    first_slots = [_slot_view(s) for s in all_slots]
+    kcal_vals = [s.get("kcal") for s in first_slots]
+    day_kcal = round(sum(kcal_vals), 1) if kcal_vals and all(v is not None for v in kcal_vals) else None
+    target_vals = [(s.get("target_macro") or {}).get("kcal") for s in first_slots]
+    planned_target = round(sum(target_vals), 1) if target_vals and all(v is not None for v in target_vals) else None
 
     goal = plan.get("goal_text", "")
     kcal_text = f"约 {day_kcal} kcal" if day_kcal is not None else "热量待估"
-    subtitle = f"目标：{goal} · 全天{kcal_text}"
+    subtitle = f"目标：{goal} · 已安排餐次合计{kcal_text}"
     title = {"week": "📅 一周食谱", "meal": "🍱 午餐搭配", "day": "🗓️ 今日食谱"}.get(scope, "🗓️ 今日食谱")
 
     return {
@@ -112,7 +112,7 @@ def meal_card_block(plan: dict) -> dict:
         "subtitle": subtitle,
         "scope": scope,
         "goal_text": plan.get("goal_text", ""),
-        "target_kcal": plan.get("goal_energy_kcal"),
+        "target_kcal": planned_target,
         "total_kcal": day_kcal,
         "range_text": plan.get("range_text", ""),
         "days": [],

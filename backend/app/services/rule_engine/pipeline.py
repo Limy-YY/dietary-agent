@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 
 from .balance import apply_balance, build_micro_hints, compute_balance
-from .candidates import build_candidates, diversify
+from .candidates import build_candidates, diversify, hard_filter_reasons
 from .errors import HardConstraintUnsatisfiable, InsufficientData
 from .explain import build_why_summary, make_eating_order_advice, make_why_text
 from .models import (
@@ -88,7 +88,12 @@ def _template_pool(
     request: PlanRequest,
     diagnostics: dict,
 ) -> list[Candidate]:
-    """为一餐枚举候选池；正常区间失败时逐级放宽（硬约束不放开）。"""
+    """为一餐枚举候选池；正常区间失败仅额外尝试一次。"""
+    filter_counts = {}
+    for dish in [*staples, *sides]:
+        for reason in hard_filter_reasons(dish, targets):
+            filter_counts[reason] = filter_counts.get(reason, 0) + 1
+    diagnostics.setdefault("dish_filter_reasons", {})[meal_type] = filter_counts
     pool = build_candidates(
         target,
         staples,
@@ -118,12 +123,14 @@ def _template_pool(
                 "dish_total": len(staples) + len(sides),
                 "staples": len(staples),
                 "sides": len(sides),
-                "hint": "请检查过敏原/宗教忌口/排除食材/厨具过滤是否过严，或菜式库是否缺少该类菜品",
+                "dish_filter_reasons": filter_counts,
+                "relaxed_attempts": 1,
+                "hint": "检查硬过滤、菜式组合数量、能量数据及油盐限额；硬约束不自动放宽",
             },
         )
     diagnostics.setdefault("relax_attempts", {})[meal_type] = "macro_range_relaxed"
     diagnostics.setdefault("relax_notes", []).append(
-        f"{meal_type}餐无候选严格落在宏量区间，已放宽区间取最接近组合（硬约束仍生效）"
+        f"{meal_type}餐严格模式无候选，额外尝试一次普通宏量近似组合（不放宽油盐限额和食材硬过滤）"
     )
     return pool
 

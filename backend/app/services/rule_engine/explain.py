@@ -40,6 +40,12 @@ def _fmt(value: float | None, unit: str = "g", digits: int = 0) -> str:
 def make_why_text(candidate: Candidate, target: MealTarget, targets: Targets) -> str:
     """生成「为什么这样搭」的一句话说明（≤60 字，按句累加，不截断半句）。"""
     parts: list[str] = []
+    if "allergen_unverified" in candidate.reason_codes:
+        parts.append("过敏原未核查")
+    if "oil_salt_unknown" in candidate.reason_codes:
+        parts.append("油盐数据不完整")
+    if "macro_range_relaxed" in candidate.reason_codes:
+        parts.append("营养目标近似结果")
     staples = [p for p in candidate.portions if p.role == "主食"]
     sides = [p for p in candidate.portions if p.role != "主食"]
 
@@ -54,9 +60,9 @@ def make_why_text(candidate: Candidate, target: MealTarget, targets: Targets) ->
         if abs(gap_ratio) <= 0.05:
             parts.append(f"能量 {kcal:.0f}kcal 贴近本餐目标")
         elif gap_ratio < 0:
-            parts.append(f"能量 {kcal:.0f}kcal，低于目标 {abs(gap_ratio) * 100:.0f}%")
+            parts.append(f"能量 {kcal:.0f}kcal，低于本餐目标 {abs(gap_ratio) * 100:.1f}%")
         else:
-            parts.append(f"能量 {kcal:.0f}kcal，高于目标 {gap_ratio * 100:.0f}%")
+            parts.append(f"能量 {kcal:.0f}kcal，高于本餐目标 {gap_ratio * 100:.1f}%")
     elif kcal is None:
         parts.append("部分营养数据缺失，未做定量比较")
 

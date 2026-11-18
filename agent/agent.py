@@ -402,6 +402,8 @@ def _explain_material(plan: dict) -> dict:
         micro = picked.get("micro_estimate") or {}
         meals.append({
             "餐次": s.get("meal_type"),
+            "日期": s.get("slot_date"),
+            "本餐目标能量_kcal": (s.get("target_macro") or {}).get("kcal"),
             "菜": [f"{d.get('name', '')}（{d.get('portion_text', '')}）" for d in picked.get("dishes", [])],
             "能量_kcal": macro.get("kcal"),
             "蛋白_g": macro.get("protein_g"),
@@ -414,7 +416,7 @@ def _explain_material(plan: dict) -> dict:
             "进食顺序建议": picked.get("eating_order_advice"),
         })
     return {
-        "目标能量_kcal": plan.get("goal_energy_kcal"),
+        "全天目标能量_kcal": plan.get("goal_energy_kcal"),
         "plan_type": plan.get("plan_type"),
         "meals": meals,
     }
@@ -431,8 +433,17 @@ def _plan_brief(plan: dict, limit: int = 6) -> str:
         kcal = ((picked or {}).get("macro_estimate") or {}).get("kcal")
         kcal_txt = f"约 {kcal} kcal" if kcal is not None else "热量待估"
         meal = s.get("meal_type") or s.get("label") or ""
+        target = (s.get("target_macro") or {}).get("kcal")
+        target_txt = f"，本餐目标 {target} kcal" if target is not None else "，本餐目标未知"
+        flags = (picked or {}).get("reason_codes") or []
+        warnings = [label for code, label in (
+            ("macro_range_relaxed", "营养近似结果"),
+            ("oil_salt_unknown", "油盐数据不完整"),
+            ("allergen_unverified", "过敏原未核查"),
+        ) if code in flags]
+        warning_txt = "；" + "、".join(warnings) if warnings else ""
         if names:
-            lines.append(f"{meal}：{names}（{kcal_txt}）")
+            lines.append(f"{s.get('slot_date') or ''} {meal}：{names}（{kcal_txt}{target_txt}{warning_txt}）")
     if len(slots) > limit:
         lines.append(f"……（共 {len(slots)} 餐，完整内容见卡片）")
     if not lines:

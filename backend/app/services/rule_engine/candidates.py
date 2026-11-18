@@ -162,6 +162,24 @@ def _micro_totals(portions: Sequence[DishPortion]) -> dict[str, float | None]:
     return out
 
 
+def hard_budget_failures(target: MealTarget, portions: Sequence[DishPortion]) -> list[str]:
+    """Preserve the existing per-meal oil/salt limits even in fallback.
+
+    Missing values stay unknown. Reject even an incomplete total if its known
+    non-negative contributions already exceed the limit.
+    """
+    failures = []
+    for key, attr, limit in (
+        ("oil", "default_oil_g", target.oil_limit_g),
+        ("salt", "default_salt_g", target.salt_limit_g),
+    ):
+        known = sum(float(value) * p.servings for p in portions
+                    if (value := getattr(p.facts, attr)) is not None)
+        if known > limit + 0.01:
+            failures.append(f"{key}_over:{known:g}>{limit:g}")
+    return failures
+
+
 def _within(target: MealTarget, totals: dict[str, float | None]) -> tuple[bool, list[str]]:
     """判定是否落在该餐区间；返回 (是否通过, 失败原因)。"""
     failures: list[str] = []
@@ -322,7 +340,7 @@ def build_candidates(
 ) -> list[Candidate]:
     """枚举「主食 + 1~2 道菜」组合，返回通过硬约束的候选（已打分排序）。
 
-    relaxed=True 时跳过宏量/油盐区间判定（只保留硬排除），用于硬约束下取最接近的兜底候选。
+    relaxed=True 仅允许普通宏量偏差或宏量缺失；能量缺失、硬排除和已知油盐超限仍拒绝。
     """
     allowed_staples = [f for f in staples if not hard_filter_reasons(f, targets)]
     allowed_sides = [f for f in sides if not hard_filter_reasons(f, targets)]
@@ -345,11 +363,21 @@ def build_candidates(
         portions = [DishPortion(facts=f, servings=servings) for f in combo]
         totals = combo_totals(portions)
         passed, failures = _within(target, totals)
-        if not passed and not relaxed:
+        if hard_budget_failures(target, portions) or totals.get("kcal") is None:
+            continue
+        if not passed and (not relaxed or any(f.startswith(("oil_over:", "salt_over:")) for f in failures)):
             continue
         micro = _micro_totals(portions)
         soft_hits = sum(soft_hits_by_dish.get(f.dish_id, 0) for f in combo)
         score, reason_codes, notes = _score(target, totals, micro, targets, soft_hits, combo)
+        if not passed:
+            reason_codes.append("macro_range_relaxed")
+            notes.append("近似结果：" + "、".join(failures))
+        if any(totals.get(key) is None for key in ("oil_g", "salt_g")):
+            reason_codes.append("oil_salt_unknown")
+            notes.append("油盐数据不完整，不能确认符合限额")
+        if any(f.allergen_unverified for f in combo):
+            reason_codes.append("allergen_unverified")
 
         main_side = next((f for f in combo if not f.is_staple), combo[0])
         signature = (
