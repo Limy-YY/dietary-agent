@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from .quality import repetition_cost, selected
 from .models import (
     BalanceReport,
     Candidate,
@@ -167,8 +168,16 @@ def apply_balance(
         best_gain = 0.0
         target_nutrient: str | None = None
 
+        previous = [c for other in slots if other is not slot and (c := selected(other)) is not None]
+        current_cost = repetition_cost(current, previous)
         for cand in pool:
             if cand is current:
+                continue
+            # Micro adjustment may improve coverage but must not worsen meal repetition or
+            # silently replace a strict result with a relaxed result.
+            if repetition_cost(cand, previous) > current_cost + 1e-9:
+                continue
+            if "macro_range_relaxed" in cand.reason_codes and "macro_range_relaxed" not in current.reason_codes:
                 continue
             for nutrient_id, need in needed.items():
                 now = current.micro_estimate.get(nutrient_id)

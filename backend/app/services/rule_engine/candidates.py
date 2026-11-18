@@ -18,6 +18,7 @@ import itertools
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from .quality import dish_roles, structure_penalty
 from .models import (
     DEFAULT_MACRO_TOLERANCE,
     KEY_MICRONUTRIENTS,
@@ -272,7 +273,8 @@ def _score(
     sides = [f for f in facts_list if not f.is_staple]
     if sides and all((s.method_text or "").strip() in {"清蒸", "蒸", "凉拌"} for s in sides):
         reason_codes.append("low_oil_method")
-    if len(sides) == 2:
+    roles = set().union(*(dish_roles(f) for f in facts_list))
+    if {"蔬菜", "蛋白质菜"} <= roles:
         reason_codes.append("veg_plus_protein")
     for f in facts_list:
         if "低盐" in (f.tags or []):
@@ -319,8 +321,8 @@ def _prefilter(
             return True  # 缺失值不预筛，交给精算阶段判定
         return f.energy_kcal * share <= high
 
-    keep_staples = [f for f in staples if ok_kcal(f, 1.0)]
-    keep_sides = [f for f in sides if ok_kcal(f, 1.0)]
+    keep_staples = [f for f in staples if ok_kcal(f, .75 if f.servings == 1 else 1.0)]
+    keep_sides = [f for f in sides if ok_kcal(f, .75 if f.servings == 1 else 1.0)]
     if not keep_staples:
         keep_staples = list(staples)
     if not keep_sides:
@@ -358,47 +360,59 @@ def build_candidates(
             if side_a.is_soup and side_b.is_soup:
                 continue
             combos.append((staple, side_a, side_b))
+        # A composite dish may supply the protein itself. Do not force a second dish.
+        if {"主食", "蛋白质菜"} <= dish_roles(staple):
+            combos.append((staple,))
 
     for combo in combos:
-        portions = [DishPortion(facts=f, servings=servings) for f in combo]
-        totals = combo_totals(portions)
-        passed, failures = _within(target, totals)
-        if hard_budget_failures(target, portions) or totals.get("kcal") is None:
+        if len({f.dish_id for f in combo}) != len(combo):
             continue
-        if not passed and (not relaxed or any(f.startswith(("oil_over:", "salt_over:")) for f in failures)):
-            continue
-        micro = _micro_totals(portions)
+        # Scale only dishes whose stored serving count is one. Other recipes retain legacy units
+        # until the data team confirms precisely how ingredient amounts were recorded.
+        base = tuple(servings for _ in combo)
+        options = [base]
+        if servings == 1.0:
+            adjustable = [i for i,f in enumerate(combo) if f.servings == 1.0]
+            for i in adjustable:
+                for value in (.75, 1.25):
+                    options.append(tuple(value if j == i else v for j,v in enumerate(base)))
+            if len(adjustable) == len(combo) and len(combo) > 1:
+                options.extend([tuple(.75 for _ in combo), tuple(1.25 for _ in combo)])
+        best = None
         soft_hits = sum(soft_hits_by_dish.get(f.dish_id, 0) for f in combo)
-        score, reason_codes, notes = _score(target, totals, micro, targets, soft_hits, combo)
-        if not passed:
-            reason_codes.append("macro_range_relaxed")
-            notes.append("近似结果：" + "、".join(failures))
-        if any(totals.get(key) is None for key in ("oil_g", "salt_g")):
-            reason_codes.append("oil_salt_unknown")
-            notes.append("油盐数据不完整，不能确认符合限额")
-        if any(f.allergen_unverified for f in combo):
-            reason_codes.append("allergen_unverified")
-
-        main_side = next((f for f in combo if not f.is_staple), combo[0])
-        signature = (
-            main_side.dish_id,
-            (main_side.method_text or "").strip(),
-            tuple(sorted(f.dish_id for f in combo)),
-        )
-        pool.append(
-            Candidate(
-                candidate_id=0,
-                rank=0,
-                portions=portions,
-                totals=totals,
-                oil_salt={"oil_g": totals.get("oil_g"), "salt_g": totals.get("salt_g")},
-                micro_estimate=micro,
-                score=round(score, 4),
-                reason_codes=sorted(set(reason_codes)),
-                notes=notes,
-                signature=signature,
-            )
-        )
+        main_side = next((f for f in combo if "主食" not in dish_roles(f)), combo[0])
+        signature = (main_side.dish_id, (main_side.method_text or "").strip(),
+                     tuple(sorted(f.dish_id for f in combo)))
+        structure_cost = structure_penalty(combo, target.meal_type)
+        for option in dict.fromkeys(options):
+            portions = [DishPortion(facts=f, servings=v) for f,v in zip(combo,option)]
+            totals = combo_totals(portions)
+            passed, failures = _within(target, totals)
+            if hard_budget_failures(target, portions) or totals.get("kcal") is None:
+                continue
+            if not passed and (not relaxed or any(f.startswith(("oil_over:", "salt_over:")) for f in failures)):
+                continue
+            micro = _micro_totals(portions)
+            score, reason_codes, notes = _score(target, totals, micro, targets, soft_hits, combo)
+            score += structure_cost + .04 * sum(abs(v - 1.0) for v in option)
+            if not passed:
+                reason_codes.append("macro_range_relaxed")
+                notes.append("近似结果：" + "、".join(failures))
+            if any(totals.get(key) is None for key in ("oil_g", "salt_g")):
+                reason_codes.append("oil_salt_unknown")
+                notes.append("油盐数据不完整，不能确认符合限额")
+            if any(f.allergen_unverified for f in combo):
+                reason_codes.append("allergen_unverified")
+            if any(v != 1.0 for v in option):
+                reason_codes.append("portion_optimized")
+            candidate = Candidate(candidate_id=0, rank=0, portions=portions,
+                                  totals=totals, oil_salt={"oil_g": totals.get("oil_g"), "salt_g": totals.get("salt_g")},
+                                  micro_estimate=micro, score=round(score, 4),
+                                  reason_codes=sorted(set(reason_codes)), notes=notes, signature=signature)
+            if best is None or candidate.score < best.score:
+                best = candidate
+        if best is not None:
+            pool.append(best)
 
     pool.sort(key=lambda c: (c.score, c.totals.get("kcal") or 0.0))
     return pool[: max(max_candidates, 1)]

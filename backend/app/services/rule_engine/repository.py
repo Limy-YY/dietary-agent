@@ -115,7 +115,11 @@ WITH base AS (
              THEN NULL ELSE round(sum(amount_g * vitamin_b2_mg / 100.0), 3) END AS vitamin_b2,
         CASE WHEN count(*) FILTER (WHERE vitamin_c_mg IS NULL OR amount_g IS NULL) > 0
              THEN NULL ELSE round(sum(amount_g * vitamin_c_mg / 100.0), 2) END AS vitamin_c,
-        COALESCE(array_agg(DISTINCT ingredient_name ORDER BY ingredient_name), ARRAY[]::text[]) AS ingredient_names,
+        COALESCE(array_agg(DISTINCT ingredient_name ORDER BY ingredient_name), ARRAY[]::text[]) AS ingredient_names
+    FROM base
+    GROUP BY dish_id
+), allergy_agg AS (
+    SELECT dish_id,
         COALESCE(
             array_agg(DISTINCT allergen.alternative)
             FILTER (WHERE allergen_status = '已确认含' AND allergen.alternative IS NOT NULL),
@@ -135,9 +139,10 @@ SELECT
     d.servings, d.default_oil_g, d.default_salt_g, d.cook_time_min, d.source,
     a.energy_kcal, a.protein_g, a.fat_g, a.carb_g, a.fiber_g, a.sodium_mg, a.calcium_mg,
     a.iron, a.zinc, a.vitamin_a, a.vitamin_b1, a.vitamin_b2, a.vitamin_c,
-    a.ingredient_names, a.strict_allergens, a.unverified_food_ids
+    a.ingredient_names, al.strict_allergens, al.unverified_food_ids
 FROM core.dish d
 JOIN agg a ON a.dish_id = d.dish_id
+JOIN allergy_agg al ON al.dish_id = d.dish_id
 WHERE NOT d.is_deleted
 ORDER BY d.dish_id
 """

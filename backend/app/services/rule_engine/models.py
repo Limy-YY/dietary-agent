@@ -341,7 +341,8 @@ class DishPortion:
 
     @property
     def role(self) -> str:
-        return "主食" if self.facts.is_staple else "菜"
+        from .quality import dish_roles
+        return "主食" if "主食" in dish_roles(self.facts) else "菜"
 
     def scaled(self, value: float | None) -> float | None:
         if value is None:
@@ -535,7 +536,7 @@ def _portion_text(facts: DishFacts, servings: float) -> str | None:
         return "1 份"
     if servings == 0.5:
         return "半份"
-    if servings > 1:
+    if servings > 0:
         return f"{servings:g} 份"
     return None
 

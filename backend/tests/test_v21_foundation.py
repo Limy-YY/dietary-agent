@@ -35,7 +35,7 @@ class FoundationTests(unittest.TestCase):
         side = replace(dishes[3], default_salt_g=target.salt_limit_g + 2)
         self.assertEqual(build_candidates(target, [staple], [side], t, relaxed=True), [])
         unknown = replace(staple, default_oil_g=None)
-        side = replace(dishes[3], default_oil_g=target.oil_limit_g + 1)
+        side = replace(dishes[3], default_oil_g=target.oil_limit_g / .75 + 1)
         self.assertEqual(build_candidates(target, [unknown], [side], t, relaxed=True), [])
 
     def test_unknown_and_hard_filters(self):
