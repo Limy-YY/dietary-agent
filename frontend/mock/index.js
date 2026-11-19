@@ -17,6 +17,9 @@ import {
   getShoppingListPayload,
   reportForPlan,
   getReportPayload,
+  listArchivedReports,
+  getArchivedReport,
+  addArchivedReport,
   findRecord,
   GOAL_NAMES,
   CONDITION_IDS,
@@ -197,9 +200,16 @@ function routeIntent(rawMessage) {
     }
     const report = reportForPlan(record.id)
     if (report.error) return { text: report.error.message, artifacts: [] }
+    // 周/月口径的报告追加一条存档（week/month），供「膳食报告」面板列表回看；
+    // 对话里的 artifact 仍是方案级复盘（plan），与后端 report_type 口径一致。
+    const archivedType = /月/.test(message) ? 'month' : /自定义/.test(message) ? 'custom' : 'week'
+    const archived = addArchivedReport(report, {
+      type: archivedType,
+      windowDays: archivedType === 'month' ? 30 : archivedType === 'custom' ? Number(record.card.days) || 7 : 7
+    })
     const completeness = report.completeness || {}
     return {
-      text: `已按方案生成 ${record.card.start_date} ~ ${record.card.end_date} 的膳食报告，覆盖 ${completeness.meal_count || 0} 餐。点「展开查看」看完整分析，右侧「膳食报告」里也能回看；月/周口径暂只支持方案级报告。`,
+      text: `已按方案生成 ${record.card.start_date} ~ ${record.card.end_date} 的膳食报告，覆盖 ${completeness.meal_count || 0} 餐。点「展开查看」看完整分析，右侧「膳食报告」里也能回看${archived ? '（已同步一条存档）' : ''}。`,
       artifacts: [
         { type: 'nutrition_report', payload: report },
         { type: 'meal_card', payload: record.card }
@@ -516,6 +526,34 @@ async function handle(req, res, pathname, searchParams) {
     json(ok(report))
     return
   }
+  /* 报告存档列表（API-26b）：week/month/custom，按生成时间倒序 */
+  if (pathname === '/nutrition/report/list' && req.method === 'GET') {
+    const page = Number(searchParams.get('page') || 1)
+    const pageSize = Number(searchParams.get('page_size') || 20)
+    if (!Number.isInteger(page) || page < 1) {
+      json(fail(1001, 'page 需为 ≥1 的整数'))
+      return
+    }
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      json(fail(1001, 'page_size 需在 1～100 之间'))
+      return
+    }
+    json(ok(listArchivedReports({ page, page_size: pageSize })))
+    return
+  }
+
+  /* 报告详情回看（API-26c）：按 id 取全量报告，不存在 1004/404 */
+  const reportDetail = pathname.match(/^\/nutrition\/report\/([^/]+)$/)
+  if (reportDetail && req.method === 'GET') {
+    const report = getArchivedReport(decodeURIComponent(reportDetail[1]))
+    if (!report) {
+      json(fail(1004, `报告不存在: ${reportDetail[1]}`), 404)
+      return
+    }
+    json(ok(report))
+    return
+  }
+
   if (pathname === '/nutrition/report' && req.method === 'GET') {
     const planId = searchParams.get('meal_plan_id')
     if (!planId) {
