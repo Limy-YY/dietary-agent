@@ -9,6 +9,8 @@ L-02 餐次子集：只排午餐 → 槽位全为 lunch
 L-03 软偏好透传：soft_avoid=[油炸,炸] 且必含炸物候选请求 → 方案内炸物显著减少/为 0
 L-04 症状映射：/api/agent/reverse-nutrition 返回 method=symptom_map 或 keyword_fallback，
      且 note 如实标注（IMP-036 口径）
+L-05 检索溯源：/api/agent/rag-query 每条 item 的 source 非空（BUG-027；
+     hybrid 路径当前恒 null，修好后本项自动转 PASS）
 
 前置不可达时统一判 BLOCKED 并退出码 2，不刷假 FAIL。
 """
@@ -139,6 +141,21 @@ def main() -> int:
     ok = code == 200 and method in ("symptom_map", "keyword_fallback") and note
     record("L-04", "PASS" if ok else "FAIL",
            f"method={method} items={len(d.get('items') or [])} note={note[:60]}")
+
+    # L-05 检索溯源：每条 item 必须带 source（BUG-027）
+    code, rep = call("POST", "/api/agent/rag-query", {"query": "低GI 主食怎么选", "top_k": 5})
+    d5 = rep.get("data") or {}
+    items5 = d5.get("items") or []
+    method5 = d5.get("method")
+    if code != 200:
+        record("L-05", "FAIL", f"请求失败 code={code} {str(rep)[:160]}")
+    elif not items5:
+        record("L-05", "SKIP", f"检索无结果（method={method5}），source 判据不可达，不作 FAIL")
+    else:
+        missing = [i for i in items5 if not i.get("source")]
+        record("L-05", "PASS" if not missing else "FAIL",
+               f"method={method5} items={len(items5)} source 缺失 {len(missing)} 条"
+               + ("" if not missing else "（BUG-027：hybrid 路径 knowledge.search_documents 不返回 source/source_id，见 #12）"))
 
     OUT.write_text(json.dumps({"base": BASE, "at": datetime.now().isoformat(timespec="seconds"),
                                "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")
