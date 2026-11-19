@@ -39,7 +39,7 @@
           <div class="meal-type">
             {{ slot.label || MEAL_LABELS[slot.meal_type] || '一餐' }}
             <span v-if="slot.time">· {{ slot.time }}</span>
-            <span class="meal-kcal">{{ fmtKcal(slot.kcal) }} kcal</span>
+            <span class="meal-kcal">{{ fmtKcal(slot.kcal) }} / 本餐目标 {{ fmtKcal(slot.target_kcal) }} kcal</span>
           </div>
           <div class="meal-dish">{{ slot.dish_text }}</div>
           <div class="meal-meta">{{ slot.dish_count }} 道菜 · 点这里看用量和做法</div>
@@ -68,7 +68,7 @@
               {{ (s.label || s.meal_type || '').charAt(0) }} {{ s.dish_count }}
             </span>
           </div>
-          <div class="wd-kcal">{{ fmtKcal(day.kcal) }} kcal</div>
+          <div class="wd-kcal">{{ fmtKcal(day.kcal) }} / 已安排餐次目标 {{ fmtKcal(day.target_kcal) }} kcal</div>
           <span class="wd-chevron">▾</span>
         </div>
         <div class="week-day-body">
@@ -81,7 +81,7 @@
               <div class="wd-meal-dishes">{{ s.dish_text }}</div>
             </div>
             <div class="wd-meal-side">
-              <span class="wd-meal-kcal">{{ fmtKcal(s.kcal) }} kcal</span>
+              <span class="wd-meal-kcal">{{ fmtKcal(s.kcal) }} / 本餐目标 {{ fmtKcal(s.target_kcal) }} kcal</span>
               <button class="wd-swap" :disabled="isFixed || !s.candidates.length || isSwapping(s)" @click.stop="swap(s)">
                 {{ isSwapping(s) ? '换一换…' : '换一换' }}
               </button>
@@ -156,6 +156,7 @@ const days = computed(() =>
     weekday: d.weekday || '',
     is_today: Boolean(d.is_today),
     kcal: d.kcal == null ? null : d.kcal,
+    target_kcal: d.target_kcal == null ? null : d.target_kcal,
     slots: arr(d.slots)
   }))
 )

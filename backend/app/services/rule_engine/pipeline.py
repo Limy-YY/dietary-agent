@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 
 from .balance import apply_balance, build_micro_hints, compute_balance
-from .candidates import build_candidates, diversify
+from .candidates import build_candidates, diversify, hard_filter_reasons, hard_budget_failures
 from .errors import HardConstraintUnsatisfiable, InsufficientData
 from .explain import build_why_summary, make_eating_order_advice, make_why_text
 from .models import (
@@ -35,6 +35,8 @@ from .models import (
 )
 from .repository import RuleEngineDataSource
 from .targets import compute_targets
+from .quality import dish_roles, repetition_cost, selected
+from .meal_templates import profile as culinary_profile, template_for, selection_key
 
 __all__ = ["generate_plan", "plan_dates", "clone_candidate"]
 
@@ -67,6 +69,7 @@ def clone_candidate(source: Candidate) -> Candidate:
         oil_salt=dict(source.oil_salt),
         micro_estimate=dict(source.micro_estimate),
         score=source.score,
+        score_breakdown=dict(source.score_breakdown),
         reason_codes=list(source.reason_codes),
         notes=list(source.notes),
         signature=source.signature,
@@ -74,8 +77,8 @@ def clone_candidate(source: Candidate) -> Candidate:
 
 
 def _split_dishes(dishes: Sequence[DishFacts]) -> tuple[list[DishFacts], list[DishFacts]]:
-    staples = [d for d in dishes if d.is_staple]
-    sides = [d for d in dishes if not d.is_staple]
+    staples = [d for d in dishes if "主食" in dish_roles(d)]
+    sides = [d for d in dishes if "主食" not in dish_roles(d)]
     return staples, sides
 
 
@@ -88,44 +91,71 @@ def _template_pool(
     request: PlanRequest,
     diagnostics: dict,
 ) -> list[Candidate]:
-    """为一餐枚举候选池；正常区间失败时逐级放宽（硬约束不放开）。"""
+    """为一餐枚举候选池；正常区间失败仅额外尝试一次。"""
+    filter_counts = {}
+    for dish in [*staples, *sides]:
+        for reason in hard_filter_reasons(dish, targets):
+            filter_counts[reason] = filter_counts.get(reason, 0) + 1
+    diagnostics.setdefault("dish_filter_reasons", {})[meal_type] = filter_counts
+    from collections import Counter
+    from .practical_quality import candidate_priority
+    real=any(getattr(d,'ingredient_amounts',None) for d in [*staples,*sides])
+    strict_stats=Counter(); relaxed_stats=Counter()
+    diagnostics.setdefault('candidate_search',{})[meal_type]={'strict':strict_stats,'expanded':relaxed_stats}
     pool = build_candidates(
         target,
         staples,
         sides,
         targets,
-        max_candidates=60,
-        soft_avoid=request.soft_avoid,
+        max_candidates=120,
+        soft_avoid=request.soft_avoid, diagnostics=strict_stats,
     )
-    if pool:
-        diagnostics.setdefault("relax_attempts", {})[meal_type] = "strict"
-        return pool
+    need = max(1, min(3, request.candidates_per_slot))
+    strict_pool = pool
 
-    pool = build_candidates(
+    # A narrow strict pool can satisfy count yet lack genuinely different meals.
+    if (len({c.signature[0] for c in strict_pool}) >= need
+            and len(strict_pool) >= need * 3
+            and (not real or sum(candidate_priority(c)[:2]==(False,0) for c in strict_pool)>=need*8)):
+        diagnostics.setdefault("relax_attempts", {})[meal_type] = "strict"
+        return strict_pool
+
+    relaxed_pool = build_candidates(
         target,
         staples,
         sides,
         targets,
-        max_candidates=60,
+        max_candidates=120,
         soft_avoid=request.soft_avoid,
-        relaxed=True,
+        relaxed=True, diagnostics=relaxed_stats,extend=real,
     )
-    if not pool:
+
+    if not strict_pool and not relaxed_pool:
         raise HardConstraintUnsatisfiable(
-            f"{meal_type}餐在现有菜式与硬约束下无可行候选",
+            f"{meal_type}餐无合法候选",
             detail={
                 "meal_type": meal_type,
-                "dish_total": len(staples) + len(sides),
-                "staples": len(staples),
-                "sides": len(sides),
-                "hint": "请检查过敏原/宗教忌口/排除食材/厨具过滤是否过严，或菜式库是否缺少该类菜品",
+                "dish_filter_reasons": filter_counts,
+                "relaxed_attempts": 1,
             },
         )
-    diagnostics.setdefault("relax_attempts", {})[meal_type] = "macro_range_relaxed"
-    diagnostics.setdefault("relax_notes", []).append(
-        f"{meal_type}餐无候选严格落在宏量区间，已放宽区间取最接近组合（硬约束仍生效）"
+
+    seen = {tuple(sorted(c.dish_ids)) for c in strict_pool}
+    combined = list(strict_pool)
+
+    for candidate in relaxed_pool:
+        key = tuple(sorted(candidate.dish_ids))
+        if key not in seen:
+            combined.append(candidate)
+            seen.add(key)
+
+    diagnostics.setdefault("relax_attempts", {})[meal_type] = (
+        "strict_with_supplement" if strict_pool else "macro_range_relaxed"
     )
-    return pool
+    diagnostics.setdefault("relax_notes", []).append(
+        f"{meal_type}餐严格候选不足，额外尝试一次补充候选；硬约束不放宽"
+    )
+    return combined
 
 
 def _fill_copy(candidate: Candidate, target, targets: Targets) -> Candidate:
@@ -163,14 +193,11 @@ def generate_plan(
     if not dishes:
         raise InsufficientData("菜式事实表为空，无法生成候选")
     staples, sides = _split_dishes(dishes)
-    if not staples:
-        raise InsufficientData(
-            "未识别到主食类菜品（core.dish.category='主食' 或 tags 含「主食」），无法组餐",
-            detail={"dish_total": len(dishes)},
-        )
-    if not sides:
-        raise InsufficientData("除主食外没有可用菜品，无法组餐", detail={"dish_total": len(dishes)})
 
+    from time import perf_counter
+    _quality_started = perf_counter()
+    diagnostics["role_mapping"] = {d.dish_id: sorted(dish_roles(d)) for d in dishes}
+    diagnostics["catalog_review_pending"] = [d.dish_id for d in dishes if not culinary_profile(d).reviewed]
     diagnostics["catalog"] = {
         "dish_total": len(dishes),
         "staple_total": len(staples),
@@ -208,43 +235,26 @@ def generate_plan(
     # ② 同餐跨日：同一餐次在窗口内尽量不重复「首选」主菜，让多日方案一周不重样。
     slots: list[SlotResult] = []
     slot_notes: list[str] = []
-    window_picked_mains: dict[str, set[str]] = {mt: set() for mt in meal_order}
-    cross_day_noted: set[str] = set()
     for slot_date in dates:
-        day_used_mains: set[str] = set()
         for index, meal_type in enumerate(meal_order):
             target = targets.meal_targets[meal_type]
-            need = max(2, int(request.candidates_per_slot))
             pool = [clone_candidate(c) for c in templates[meal_type]]
-
-            # ① 当天跨餐去重：保留当天还没用过的主菜，不足时退回已用主菜（复用）
-            day_fresh = [c for c in pool if c.signature[0] not in day_used_mains]
-            day_fresh_mains = {c.signature[0] for c in day_fresh}
-            if len(day_fresh_mains) >= need:
-                pool = day_fresh
-            else:
-                if day_fresh_mains:
-                    slot_notes.append(
-                        f"{slot_date} {meal_type}餐当天未重复的主菜只有 {len(day_fresh_mains)} 种"
-                        f"（目标 {need} 种），跨餐存在主菜重复"
-                    )
-                pool = day_fresh + [c for c in pool if c.signature[0] in day_used_mains]
-
-            # ② 同餐跨日：把前几日该餐「首选」没选过的主菜排到最前，让首选主菜逐日错开
-            prev_picked = window_picked_mains[meal_type]
-            cross_fresh = [c for c in pool if c.signature[0] not in prev_picked]
-            if cross_fresh:
-                pool = cross_fresh + [c for c in pool if c.signature[0] in prev_picked]
-            elif meal_type not in cross_day_noted:
-                cross_day_noted.add(meal_type)
-                slot_notes.append(
-                    f"{meal_type}餐在窗口内可用的不重复主菜已用尽，后续与前几日存在主菜重复"
-                )
-
+            previous = [c for s in slots if (c := selected(s)) is not None]
+            today = [c for s in slots if s.slot_date == slot_date and (c := selected(s)) is not None]
+            today_slots = [s for s in slots if s.slot_date == slot_date and selected(s) is not None]
+            daily_energy_carry = sum(s.target.kcal-selected(s).totals['kcal'] for s in today_slots
+                                     if selected(s).totals.get('kcal') is not None)
+            protein_previous = [c for s in slots if s.meal_type in ("午", "晚") and (c := selected(s)) is not None]
+            pool.sort(key=lambda c: selection_key(c, target, previous,
+                repetition_cost(c, previous),
+                protein_previous=protein_previous,daily_energy_carry=daily_energy_carry))
             picked = diversify(pool, request.candidates_per_slot, start_id=1)
-            if picked:
-                window_picked_mains[meal_type].add(picked[0].signature[0])
-            day_used_mains |= {c.signature[0] for c in picked}
+            from .practical_quality import protein_rotation, purchase_credit, candidate_priority
+            for c in picked:
+                c.score_breakdown['context']={'repetition':round(repetition_cost(c,previous),4),
+                    'protein_rotation':round(protein_rotation(c,protein_previous),4) if meal_type in ('午','晚') else 0.,
+                    'purchase_credit':round(purchase_credit(c,previous),4),
+                    'daily_energy_carry_kcal':round(daily_energy_carry,2),'structure_tier':candidate_priority(c)[1]}
             for cand in picked:
                 _fill_copy(cand, target, targets)
             if len(picked) < 2:
@@ -285,7 +295,7 @@ def generate_plan(
         # 重排说明写进被调整候选的 notes，便于前端解释「为什么换了首选」
         for slot in slots:
             note = next(
-                (i for i in improvements if i.startswith(f"{slot.meal_type}：")), None
+                (i for i in improvements if i.startswith(f"{slot.slot_date} {slot.meal_type}：")), None
             )
             if not note:
                 continue
@@ -294,6 +304,36 @@ def generate_plan(
                     cand.reason_codes = sorted(set(cand.reason_codes) | {"micro_balance_adjusted"})
                     cand.notes.append(note)
 
+    # Final selected results cannot bypass the same safety checks used during generation.
+    chosen = []
+    for slot in slots:
+        for candidate in slot.candidates:
+            from .portion_policy import breakfast_shape
+            from .practical_quality import meal_options
+            if (not template_for([p.facts for p in candidate.portions], slot.meal_type)
+                    or not breakfast_shape(candidate.portions, slot.meal_type)
+                    or any(p.servings not in meal_options(p.facts,slot.target) for p in candidate.portions)):
+                raise HardConstraintUnsatisfiable("候选未通过餐次组合质量检查")
+            if any(hard_filter_reasons(p.facts, targets) for p in candidate.portions) or hard_budget_failures(slot.target, candidate.portions):
+                raise HardConstraintUnsatisfiable("候选未通过硬约束校验")
+        cand = selected(slot)
+        if cand is None:
+            raise HardConstraintUnsatisfiable("餐位无合法首选")
+        if any(hard_filter_reasons(p.facts, targets) for p in cand.portions) or hard_budget_failures(slot.target, cand.portions):
+            raise HardConstraintUnsatisfiable("最终候选未通过硬约束校验")
+        if cand.totals.get("kcal") is None:
+            raise InsufficientData("最终候选缺失能量数据")
+        chosen.append(cand)
+    from collections import Counter
+    counts = Counter(d for c in chosen for d in c.dish_ids)
+    meal_counts = Counter(tuple(sorted(c.dish_ids)) for c in chosen)
+    diagnostics["diversity"] = {"unique_dishes": len(counts),
+                                 "max_dish_occurrences": max(counts.values(), default=0),
+                                 "repeated_meals": sum(n - 1 for n in meal_counts.values()),
+                                 "dish_counts": dict(counts)}
+    from .practical_quality import plan_quality_diagnostics
+    diagnostics["practical_quality"] = plan_quality_diagnostics(slots)
+    diagnostics["practical_quality"]["engine_seconds_after_catalog"] = round(perf_counter()-_quality_started,3)
     # 5) 输出
     data_notes: list[str] = []
     missing_fat = sum(1 for d in dishes if d.fat_g is None)

@@ -205,6 +205,14 @@ def swap_candidate(meal_plan_id: str, meal_slot_id: str, candidate_id: str = Non
         payload["candidate_id"] = candidate_id
     return _post("/api/meal-plan/candidate/swap", payload)
 
+def regenerate_slot(**payload):
+    return _post("/api/meal-plan/slot/regenerate", payload)
+
+
+def replace_dish(**payload):
+    return _post("/api/meal-plan/dish/replace", payload)
+
+
 def fix_meal_plan(meal_plan_id: str, selections: dict = None, replace: bool = False) -> dict:
     """确认方案，落库持久化；replace=True 表示若与已有固定方案餐位重叠则取代旧方案。"""
     payload = {"meal_plan_id": meal_plan_id, "replace": replace}

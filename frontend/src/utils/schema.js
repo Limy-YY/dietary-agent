@@ -144,9 +144,9 @@ export function normalizeSlot(slot) {
     color: MEAL_COLORS[meal] || 'var(--brand)',
     slot_date: str(pick(s, 'slot_date'), ''),
     display_order: numOrNull(pick(s, 'display_order')) || 0,
-    kcal: selected ? selected.kcal : numOrNull(pick(target, 'kcal')),
+    kcal: selected ? selected.kcal : null,
     target_kcal: numOrNull(pick(target, 'kcal')),
-    protein_g: selected ? selected.protein_g : numOrNull(pick(target, 'protein_g')),
+    protein_g: selected ? selected.protein_g : null,
     oil_g: selected ? selected.oil_g : null,
     salt_g: selected ? selected.salt_g : null,
     dishes,
@@ -169,6 +169,12 @@ function sumKnown(list) {
   const nums = list.filter((v) => v !== null && v !== undefined && Number.isFinite(Number(v)))
   if (!nums.length) return null
   return nums.reduce((s, v) => s + Number(v), 0)
+}
+
+function sumComplete(list) {
+  return list.length && list.every((v) => v != null && Number.isFinite(Number(v)))
+    ? Math.round(list.reduce((s, v) => s + Number(v), 0) * 10) / 10
+    : null
 }
 
 function weekdayOf(iso) {
@@ -206,7 +212,8 @@ function groupDays(slots) {
     iso,
     weekday: weekdayOf(iso),
     is_today: iso === todayIso(),
-    kcal: sumKnown(list.map((s) => s.kcal)),
+    kcal: sumComplete(list.map((s) => s.kcal)),
+    target_kcal: sumComplete(list.map((s) => s.target_kcal)),
     slots: sortSlots(list)
   }))
 }
@@ -239,10 +246,8 @@ export function normalizeMealCard(payload) {
     goal_energy_kcal: numOrNull(pick(p, 'goal_energy_kcal')),
     macro_ratio: p.macro_ratio || null,
     subtitle: planType === '餐'
-      ? `目标 ${fmtNum(pick(p, 'goal_energy_kcal'))} kcal · 单餐候选`
-      : pick(p, 'goal_energy_kcal')
-        ? `目标 ${fmtNum(pick(p, 'goal_energy_kcal'))} kcal · 共 ${days.length} 天`
-        : `共 ${days.length} 天`,
+      ? `本餐目标 ${fmtKcal(slots[0]?.target_kcal)} kcal · 单餐候选`
+      : `全天目标 ${fmtKcal(pick(p, 'goal_energy_kcal'))} kcal · 已安排餐次目标合计 ${fmtKcal(sumComplete(slots.map(s => s.target_kcal)))} kcal · 共 ${days.length} 天`,
     slots,
     days,
     reason: str(pick(p, 'why_summary'), ''),

@@ -16,6 +16,8 @@ import backend_client as bc
 import blocks
 import config
 import rule_engine_bridge as reb
+import local_edits as le
+import regenerate_flow as rf
 
 # ---------------------------------------------------------------- 内存态（多轮：换候选/确认）
 
@@ -310,7 +312,7 @@ def _load_profile(user_id: str) -> dict | None:
 
 def _gen(user_id: str, params: dict, profile: dict) -> dict:
     plan = reb.generate_plan_dict(user_id, profile, params)
-    _user_state(user_id)["current_plan"] = plan
+    le.remember(_user_state(user_id), plan, reset=True)
     return plan
 
 
@@ -340,10 +342,8 @@ def _iter_slots(plan: dict):
 
 def _find_slot(plan: dict, label: str) -> dict | None:
     target = _meal_key(label)
-    for s in _iter_slots(plan):
-        if _meal_key(s.get("meal_type") or s.get("label") or "") == target:
-            return s
-    return None
+    matches = [s for s in _iter_slots(plan) if _meal_key(s.get("meal_type") or s.get("label") or "") == target]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _slot_dish_text(slot: dict) -> str:
@@ -402,6 +402,8 @@ def _explain_material(plan: dict) -> dict:
         micro = picked.get("micro_estimate") or {}
         meals.append({
             "餐次": s.get("meal_type"),
+            "日期": s.get("slot_date"),
+            "本餐目标能量_kcal": (s.get("target_macro") or {}).get("kcal"),
             "菜": [f"{d.get('name', '')}（{d.get('portion_text', '')}）" for d in picked.get("dishes", [])],
             "能量_kcal": macro.get("kcal"),
             "蛋白_g": macro.get("protein_g"),
@@ -414,7 +416,7 @@ def _explain_material(plan: dict) -> dict:
             "进食顺序建议": picked.get("eating_order_advice"),
         })
     return {
-        "目标能量_kcal": plan.get("goal_energy_kcal"),
+        "全天目标能量_kcal": plan.get("goal_energy_kcal"),
         "plan_type": plan.get("plan_type"),
         "meals": meals,
     }
@@ -431,8 +433,17 @@ def _plan_brief(plan: dict, limit: int = 6) -> str:
         kcal = ((picked or {}).get("macro_estimate") or {}).get("kcal")
         kcal_txt = f"约 {kcal} kcal" if kcal is not None else "热量待估"
         meal = s.get("meal_type") or s.get("label") or ""
+        target = (s.get("target_macro") or {}).get("kcal")
+        target_txt = f"，本餐目标 {target} kcal" if target is not None else "，本餐目标未知"
+        flags = (picked or {}).get("reason_codes") or []
+        warnings = [label for code, label in (
+            ("macro_range_relaxed", "营养近似结果"),
+            ("oil_salt_unknown", "油盐数据不完整"),
+            ("allergen_unverified", "过敏原未核查"),
+        ) if code in flags]
+        warning_txt = "；" + "、".join(warnings) if warnings else ""
         if names:
-            lines.append(f"{meal}：{names}（{kcal_txt}）")
+            lines.append(f"{s.get('slot_date') or ''} {meal}：{names}（{kcal_txt}{target_txt}{warning_txt}）")
     if len(slots) > limit:
         lines.append(f"……（共 {len(slots)} 餐，完整内容见卡片）")
     if not lines:
@@ -547,6 +558,8 @@ _TOOLS = [
 ]
 
 
+_TOOLS.extend(le.TOOLS)
+
 def _profile_brief(profile: dict) -> str:
     if not profile:
         return "用户档案：尚未建档。用户要求配餐时，应引导其先提供身体信息。"
@@ -567,7 +580,8 @@ def _agent_system(profile: dict) -> str:
         + _profile_brief(profile) + "\n"
         + f"今天是 {date.today().isoformat()}。\n"
         + "可用工具：generate_plan（生成配餐方案）、ask_clarification（需求含糊时追问）、"
-          "swap_candidate（调整已有方案某餐）、get_shopping_list（查食材清单）。\n"
+          "swap_candidate（仅切换已有候选）、regenerate_slot（重生成单餐）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
+        + "局部修改必须使用对应工具，按用户明确指定的方案序号、日期和餐次定位，禁止擅自生成整份方案或确认；工具失败后停止，不得重试写操作或宣称成功。\n"
         + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
           "② 需要行动先调用工具，别凭空捏造方案内容；③ 数值只引用工具返回，绝不自行计算；"
           "④ 需求含糊（没说几天/哪几餐/有歧义）先调 ask_clarification，别擅自假设；"
@@ -632,7 +646,21 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
     user_id = ctx["user_id"]
     st = ctx["state"]
 
+    if name in ("regenerate_slot", "replace_dish"):
+        if ctx.get("local_edit_attempted"):
+            return {"terminal":True,"reply":"本轮已尝试局部修改，请检查结果后再提出下一项修改。"}
+        ctx["local_edit_attempted"] = True
+        try:
+            updated, reply = le.execute(bc,st,name,args,ctx.get("message", ""))
+            return {"terminal":True,"reply":reply,"blocks":[blocks.meal_card_block(updated)]}
+        except ValueError as exc:
+            return {"terminal":True,"reply":str(exc),"blocks":[]}
+        except Exception as exc:
+            return {"terminal":True,"reply":f"局部修改未获成功确认：{exc}。请刷新方案核对状态。","blocks":[]}
+
     if name == "generate_plan":
+        if ctx.get("local_edit_only"):
+            return {"terminal":True,"reply":"你指定的是局部修改，请明确目标餐位或菜式，我不会重新生成整份方案。"}
         if ctx["profile"] is None:
             return {"summary": "用户档案未建立，无法配餐。需先引导用户提供性别、年龄、身高体重、目标和过敏。"}
         meals = [_MT_ZH2EN.get(str(x), x) for x in (args.get("meal_types") or [])]
@@ -652,8 +680,10 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
             exclude_ingredients=exclude or None,
             soft_avoid=soft or None,
         )
-        st["current_plan"] = plan
-        return {"summary": f"已生成方案（{start} ~ {end}）：\n{_plan_brief(plan)}",
+        st.pop(rf.KEY, None)
+        le.remember(st,plan,reset=not ctx.get("generated"))
+        ctx["generated"] = True
+        return {"summary": f"已生成第{len(le.registry(st))}份方案（{start} ~ {end}）：\n{_plan_brief(plan)}",
                 "blocks": [blocks.meal_card_block(plan)]}
 
     if name == "ask_clarification":
@@ -661,6 +691,10 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
         return {"terminal": True, "reply": q, "blocks": []}
 
     if name == "swap_candidate":
+        if ctx.get("local_edit_only"):
+            return {"terminal":True,"reply":"请明确是重新生成一餐还是替换一道菜。"}
+        if len(le.registry(st)) > 1:
+            return {"terminal":True,"reply":"有多份方案，请通过卡片选择，或说明第几份方案及要修改哪一餐。"}
         plan = st.get("current_plan")
         if not plan:
             return {"summary": "还没有待调整的方案。"}
@@ -678,7 +712,7 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
             candidate_id=target_id,
         )
         updated = bc.get_meal_plan(meal_plan_id)
-        st["current_plan"] = updated
+        le.remember(st,updated)
         new_slot = _find_slot(updated, meal_type)
         dish_text = _slot_dish_text(new_slot) if new_slot else "新候选"
         return {"summary": f"已把「{meal_type}」调整为：{dish_text}",
@@ -710,7 +744,7 @@ def _no_llm_fallback(user_id: str, profile: dict, message: str) -> dict:
     try:
         plan = bc.generate_meal_plan(
             user_id=user_id, start_date=gp["start_date"], end_date=gp["end_date"], meal_types=gp["meal_types"])
-        _user_state(user_id)["current_plan"] = plan
+        le.remember(_user_state(user_id),plan,reset=True)
     except Exception as e:
         return {"text": f"方案没排出来：{e}", "blocks": []}
     return {"text": f"已为你生成{gp['scope_label']}的方案（离线兜底模式）：", "blocks": [blocks.meal_card_block(plan)]}
@@ -722,8 +756,12 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
     if client is None:
         return _no_llm_fallback(user_id, profile, message)
 
-    ctx = {"user_id": user_id, "profile": profile, "state": _user_state(user_id), "message": message}
-    messages: list[dict] = [{"role": "system", "content": _agent_system(profile)}]
+    ctx = {"user_id": user_id, "profile": profile, "state": _user_state(user_id), "message": message,
+           "local_edit_only": bool(re.search(r"重新(?:安排|生成|排)|重排|换掉|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",message)) and bool(le.registry(_user_state(user_id)))}
+    plan_list = [{"plan_index":i,"meal_plan_id":le.plan_id(p),"start_date":p.get("start_date"),"end_date":p.get("end_date"),
+                  "slots":[{"date":s.get("slot_date"),"meal":s.get("meal_type"),"dishes":_slot_dish_text(s)} for s in _iter_slots(p)]}
+                 for i,p in enumerate(le.registry(ctx["state"]),1)]
+    messages: list[dict] = [{"role": "system", "content": _agent_system(profile) + "\n已有方案（只作定位）：" + json.dumps(plan_list,ensure_ascii=False)}]
     for h in history or []:
         role, content = h.get("role"), h.get("content")
         if role in ("user", "assistant") and content:
@@ -762,7 +800,10 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
                 args = json.loads(tc.function.arguments or "{}")
             except Exception:
                 args = {}
-            result = _tool_exec(tc.function.name, args, ctx, on_status)
+            try:
+                result = _tool_exec(tc.function.name, args, ctx, on_status)
+            except Exception as exc:
+                result = {"terminal":True,"reply":f"操作未获成功确认：{exc}。请刷新后核对状态。"}
             if result.get("blocks"):
                 collected_blocks += result["blocks"]
             if result.get("summary"):
@@ -775,13 +816,22 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
         if stop:
             break
 
+    # Do not let free-form narration renumber plans or conflate plan dates.
+    if ctx.get("generated"):
+        generated_text = "本轮已生成以下方案（按餐卡生成顺序编号）：\n" + "\n".join(
+            rf.plan_label(p, i) for i,p in enumerate(le.registry(ctx["state"]),1)
+        )
+        if terminal_reply:
+            generated_text += "\n" + terminal_reply
+        return {"text": generated_text, "blocks": collected_blocks}
+
     # 追问：直接把问题返回给用户
     if terminal_reply is not None:
         return {"text": terminal_reply, "blocks": collected_blocks}
 
     # 有工具动作：把执行结果喂给叙事层，生成面向用户的正文（真流式）
     if summaries:
-        fallback = fallback_text or "已按你的要求处理好，方案见卡片。"
+        fallback = "\n".join(summaries)
         return {"narration": _narrate(message, "\n".join(summaries), fallback, history),
                 "blocks": collected_blocks}
 
@@ -798,6 +848,16 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
             on_status(s)
 
     _st("正在理解你的需求")
+    # Resolve follow-up confirmations against a frozen list of real plan/slot IDs.
+    flow = rf.handle(bc, _user_state(user_id), message)
+    if flow is not None:
+        return {"text": flow["text"], "blocks": [blocks.meal_card_block(p) for p in flow["updated_plans"]]}
+    if re.search(r"重新(?:安排|生成|排)|重排|换掉|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",message) and re.search(r"方案|第.*天|早餐|午餐|晚餐|换掉|换成|只换|其他",message):
+        if not le.registry(_user_state(user_id)):
+            return {"text":"当前对话没有可定位的待确认方案，请先生成方案或通过对应卡片选择。未进行修改。","blocks":[]}
+        if _llm() is None:
+            return {"text":"局部修改需要可用的语言模型来定位目标，请先恢复模型连接。未修改方案。","blocks":[]}
+        return _agent_loop(user_id,_load_profile(user_id),message,history,on_status)
     intent = classify(message)
     kind = intent.get("intent", "chat")
     _st("正在读取档案")
@@ -834,6 +894,9 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
         # 建档后交给 LLM 工具循环排当天方案
         return _agent_loop(user_id, profile, message, history, on_status)
 
+    if kind in ("swap_candidate","choose_candidate","confirm") and len(le.registry(_user_state(user_id))) > 1:
+        return {"text":"当前有多份方案，请使用对应方案卡片操作；局部修改请说明第几份方案和餐次。","blocks":[]}
+
     # 换候选
     if kind == "swap_candidate":
         st = _user_state(user_id)
@@ -856,7 +919,7 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
                 meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
             )
             updated_plan = bc.get_meal_plan(meal_plan_id)
-            st["current_plan"] = updated_plan
+            le.remember(st,updated_plan)
 
             # 拿换好的新菜名 / 热量拼到文字里
             new_slot = _find_slot(updated_plan, intent.get("meal_type") or "午餐")
@@ -918,7 +981,7 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
                 candidate_id=target.get("candidate_id", ""),
             )
             updated_plan = bc.get_meal_plan(meal_plan_id)
-            st["current_plan"] = updated_plan
+            le.remember(st,updated_plan)
 
             kcal = (target.get("macro_estimate") or {}).get("kcal")
             kcal_text = f"{kcal} kcal" if kcal is not None else "热量待估"
@@ -957,7 +1020,7 @@ def run(user_id: str, message: str, history: list | None = None, on_status=None)
                 meal_plan_id=plan.get("meal_plan_id", ""), replace=replace
             )
 
-            st["current_plan"] = updated_plan
+            le.remember(st,updated_plan)
             st["plans"].insert(0, dict(updated_plan))
 
             fallback = (

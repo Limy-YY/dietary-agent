@@ -283,6 +283,8 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
     fiber: list[float] = []
     oil: list[float] = []
     salt: list[float] = []
+    sodium: list[float] = []
+    total_salt_equivalent: list[float] = []
     micro_values: dict[str, list[float]] = {k: [] for k in MICRO_IDS}
     micro_count: dict[str, int] = {k: 0 for k in MICRO_IDS}
     meals_with_micro = 0
@@ -326,6 +328,12 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
         if sv is not None:
             salt.append(sv)
             _bump(drow, "salt_g", sv)
+        nav = _num(os_est.get("sodium_mg"))
+        tev = _num(os_est.get("total_salt_equivalent_g"))
+        if nav is not None:
+            sodium.append(nav); _bump(drow,"sodium_mg",nav)
+        if tev is not None:
+            total_salt_equivalent.append(tev); _bump(drow,"total_salt_equivalent_g",tev)
 
         has_micro = False
         for k in MICRO_IDS:
@@ -358,6 +366,8 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
         "fiber_g": _daily(fiber, 1),
         "oil_g": _daily(oil, 1),
         "salt_g": _daily(salt, 1),
+        "sodium_mg": _daily(sodium, 1),
+        "total_salt_equivalent_g": _daily(total_salt_equivalent, 2),
         "micro_daily": {
             k: (round(sum(micro_values[k]) / days, 2) if micro_count[k] else None)
             for k in MICRO_IDS
@@ -386,6 +396,8 @@ def _macro_summary(agg: dict) -> dict:
         "carb_pct": _r(carb_pct, 1),
         "oil_g": _r(agg["oil_g"], 1),
         "salt_g": _r(agg["salt_g"], 1),
+        "sodium_mg": _r(agg["sodium_mg"], 1),
+        "total_salt_equivalent_g": _r(agg["total_salt_equivalent_g"], 2),
         "fiber_g": _r(agg["fiber_g"], 1),
     }
 
@@ -483,6 +495,8 @@ def _daily_trend(agg: dict, target_kcal) -> list[dict]:
                 "fiber_g": _daily_value(drow, "fiber_g", 1),
                 "oil_g": _daily_value(drow, "oil_g", 1),
                 "salt_g": _daily_value(drow, "salt_g", 1),
+                "sodium_mg": _daily_value(drow, "sodium_mg", 1),
+                "total_salt_equivalent_g": _daily_value(drow, "total_salt_equivalent_g", 2),
                 "micro": {k: _daily_value(drow, "m:" + k, 2) for k in MICRO_IDS},
                 "meal_count": drow["meals"],
                 "known_meal_count": drow["micro_meals"],

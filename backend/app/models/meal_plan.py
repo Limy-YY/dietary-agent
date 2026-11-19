@@ -128,6 +128,7 @@ class MealSlot(Base):
         back_populates="slot",
         cascade="all, delete-orphan",
         order_by="MealCandidate.rank",
+        primaryjoin="and_(MealSlot.meal_slot_id == MealCandidate.meal_slot_id, MealCandidate.rank.is_not(None))",
         foreign_keys="MealCandidate.meal_slot_id",
     )
 
@@ -157,7 +158,7 @@ class MealCandidate(Base):
     meal_slot_id: Mapped[int] = mapped_column(
         ForeignKey("app.meal_slot.meal_slot_id", ondelete="CASCADE"), nullable=False
     )
-    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     reason_codes: Mapped[list] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")

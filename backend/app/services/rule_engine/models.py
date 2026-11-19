@@ -18,8 +18,8 @@ KCAL_PER_G = {"protein_g": 4.0, "fat_g": 9.0, "carb_g": 4.0}
 #: 活动系数固定值（口径：BMR × 1.4，不再读 activity_level）
 DEFAULT_ACTIVITY_FACTOR = 1.4
 
-#: 默认每餐能量占比（早 30% / 午 40% / 晚 30%）
-DEFAULT_MEAL_RATIOS: dict[str, float] = {"早": 0.3, "午": 0.4, "晚": 0.3}
+#: 默认每餐能量占比（早 25% / 午 40% / 晚 35%）
+DEFAULT_MEAL_RATIOS: dict[str, float] = {"早": 0.25, "午": 0.4, "晚": 0.35}
 
 #: 宏量区间容忍度（目标值 ±15%）
 DEFAULT_MACRO_TOLERANCE = 0.15
@@ -182,6 +182,7 @@ class DishFacts:
     unverified_food_ids: list[str] = field(default_factory=list)
     ingredient_names: list[str] = field(default_factory=list)
     source: str | None = None
+    ingredient_amounts: list = field(default_factory=list)
 
     @property
     def is_staple(self) -> bool:
@@ -341,7 +342,8 @@ class DishPortion:
 
     @property
     def role(self) -> str:
-        return "主食" if self.facts.is_staple else "菜"
+        from .quality import dish_roles
+        return "主食" if "主食" in dish_roles(self.facts) else "菜"
 
     def scaled(self, value: float | None) -> float | None:
         if value is None:
@@ -363,7 +365,7 @@ class DishPortion:
 
 @dataclass(slots=True)
 class Candidate:
-    """一个餐位候选（主食 + 1~2 道菜）。"""
+    """一个餐位候选。"""
 
     candidate_id: int
     rank: int
@@ -372,6 +374,7 @@ class Candidate:
     oil_salt: dict[str, float | None]
     micro_estimate: dict[str, float | None]
     score: float = 0.0
+    score_breakdown: dict[str, Any] = field(default_factory=dict)
     reason_codes: list[str] = field(default_factory=list)
     why_text: str = ""
     eating_order_advice: str = ""
@@ -388,6 +391,8 @@ class Candidate:
             "rank": self.rank,
             "why_text": self.why_text,
             "reason_codes": self.reason_codes,
+            "score": round(self.score, 4),
+            "score_breakdown": self.score_breakdown,
             "macro_estimate": {
                 "kcal": _round(self.totals.get("kcal")),
                 "protein_g": _round(self.totals.get("protein_g")),
@@ -399,6 +404,8 @@ class Candidate:
             "oil_salt_estimate": {
                 "oil_g": _round(self.oil_salt.get("oil_g")),
                 "salt_g": _round(self.oil_salt.get("salt_g")),
+                "sodium_mg": _round(self.oil_salt.get("sodium_mg")),
+                "total_salt_equivalent_g": _round(self.oil_salt.get("total_salt_equivalent_g")),
             },
             "eating_order_advice": self.eating_order_advice,
             "sources": [{"type": "dish", "dish_id": d} for d in self.dish_ids],
@@ -529,13 +536,17 @@ def _round(value: float | None, digits: int = 1) -> float | None:
 
 def _portion_text(facts: DishFacts, servings: float) -> str | None:
     """按份量给出比喻式估量；份量非整数或没有菜名时返回 None。"""
+    from .portion_policy import practical_text
+    practical = practical_text(facts, servings)
+    if practical is not None:
+        return practical
     if not facts.name:
         return None
     if servings == 1:
         return "1 份"
     if servings == 0.5:
         return "半份"
-    if servings > 1:
+    if servings > 0:
         return f"{servings:g} 份"
     return None
 

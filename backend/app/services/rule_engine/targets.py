@@ -20,6 +20,7 @@ macro_policy 的真实形态（v1.2 种子，已连库核对）：
 """
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -327,11 +328,15 @@ def compute_targets(
 
     ratios = dict(DEFAULT_MEAL_RATIOS)
     if request.meal_ratios:
-        ratios.update({k: float(v) for k, v in request.meal_ratios.items() if float(v) > 0})
+        for k, v in request.meal_ratios.items():
+            if k in DEFAULT_MEAL_RATIOS and math.isfinite(float(v)) and float(v) > 0:
+                ratios[k] = float(v)
     selected = [mt for mt in request.meal_types if mt in ratios]
     if not selected:
         selected = list(ratios.keys())
-    ratio_sum = sum(ratios[mt] for mt in selected) or 1.0
+    # Normalize the complete daily allocation, never just requested meals.
+    # A partial plan must not absorb the energy of omitted meals.
+    ratio_sum = sum(ratios[mt] for mt in DEFAULT_MEAL_RATIOS) or 1.0
 
     refs = build_micro_references(micro_rows or [])
     micro_targets: dict[str, MicroReference] = {}
