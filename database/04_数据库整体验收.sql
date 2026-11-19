@@ -734,6 +734,62 @@ BEGIN
 END
 $$;
 
+-- v1.2r4 过敏原复核：未核查清零；存储快照与实时视图一致；含已确认含配料的菜式不得 strict_allergens 为空
+DO $$
+DECLARE
+    v_unchecked        integer;
+    v_snapshot_mismatch integer;
+    v_empty_strict     integer;
+    v_mig              integer;
+BEGIN
+    SELECT count(*) INTO v_unchecked
+      FROM core.ingredient
+     WHERE allergen_status = '未核查' AND NOT is_deleted;
+    IF v_unchecked <> 0 THEN
+        RAISE EXCEPTION '仍有 % 条未核查食材，应为 0', v_unchecked;
+    END IF;
+
+    SELECT count(*) INTO v_snapshot_mismatch
+    FROM core.dish d
+    JOIN app.v_dish_live_nutrition v ON v.dish_id = d.dish_id
+    WHERE NOT d.is_deleted
+      AND COALESCE(d.avoid_snapshot -> 'strict_allergens', '[]'::jsonb)
+          <> COALESCE(to_jsonb(v.strict_allergens), '[]'::jsonb)
+      OR COALESCE(d.avoid_snapshot -> 'unverified_food_ids', '[]'::jsonb)
+          <> COALESCE(to_jsonb(v.unverified_food_ids), '[]'::jsonb);
+    IF v_snapshot_mismatch <> 0 THEN
+        RAISE EXCEPTION '有 % 道菜式存储快照与实时视图过敏原口径不一致', v_snapshot_mismatch;
+    END IF;
+
+    SELECT count(*) INTO v_empty_strict
+    FROM (
+        SELECT d.dish_id,
+               bool_or(i.allergen_status = '已确认含') AS has_confirmed
+        FROM core.dish d
+        JOIN core.dish_ingredient di ON di.dish_id = d.dish_id
+        JOIN core.ingredient i ON i.ingredient_id = di.ingredient_id
+        WHERE d.dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+          AND NOT d.is_deleted
+        GROUP BY d.dish_id
+    ) x
+    JOIN app.v_dish_live_nutrition v ON v.dish_id = x.dish_id
+    WHERE x.has_confirmed
+      AND array_length(v.strict_allergens, 1) IS NULL;
+    IF v_empty_strict <> 0 THEN
+        RAISE EXCEPTION 'r2 批次有 % 道菜含已确认含配料但 strict_allergens 为空', v_empty_strict;
+    END IF;
+
+    SELECT count(*) INTO v_mig
+      FROM audit.schema_migration
+     WHERE migration_id = '2026-11-19-allergen-review-r4';
+    IF v_mig <> 1 THEN
+        RAISE EXCEPTION '过敏原复核迁移登记缺失：2026-11-19-allergen-review-r4';
+    END IF;
+
+    RAISE NOTICE '过敏原复核通过：未核查 0 条，快照与视图一致，迁移登记 1 条';
+END
+$$;
+
 SELECT
     count(*) FILTER (WHERE NOT is_deleted) AS 有效菜式总数,
     count(*) FILTER (WHERE dish_id BETWEEN 'DISH-031' AND 'DISH-060' AND NOT is_deleted) AS r1批次菜式,
