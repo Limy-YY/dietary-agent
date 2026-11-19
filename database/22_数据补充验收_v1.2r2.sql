@@ -2,6 +2,10 @@
 \pset pager off
 
 -- v1.2r4 合并版数据补充验收：铁参考值、纤维、钙、审核修订后的反向营养映射，叠加 v1.2r2 菜式扩充（60 → 120）。
+-- 反向营养按阶段验收（v1.2r4 起）：
+--   激活前（未跑 41）：13 条待审核、0 条启用、moderate 7 / low 6；
+--   激活后（已跑 41）：19 条全部 approved+启用、moderate 8 / low 11。
+-- 两个阶段由 audit.schema_migration 里的 41 号迁移记录区分，避免同一套断言在两种状态下互相打架。
 
 DO $$
 DECLARE
@@ -23,6 +27,8 @@ DECLARE
     v_bad_evidence_count integer;
     v_moderate_count integer;
     v_low_count integer;
+    v_symptom_review_applied integer;
+    v_bad_review_rows integer;
     v_doc_count integer;
 BEGIN
     SELECT count(*) INTO v_ingredient_count FROM core.ingredient WHERE NOT is_deleted;
@@ -85,8 +91,19 @@ BEGIN
     SELECT count(*) FILTER (WHERE evidence_level = 'moderate'),
            count(*) FILTER (WHERE evidence_level = 'low')
       INTO v_moderate_count, v_low_count
+      FROM core.symptom_nutrient_map;
+
+    -- v1.2r4 起反向营养有「激活前 / 激活后」两个合法状态，用 41 号的迁移记录区分阶段，
+    -- 否则同一套断言会在两种状态下互相打架（41 已跑时 pending 必然为 0）。
+    SELECT count(*) INTO v_symptom_review_applied
+      FROM audit.schema_migration
+     WHERE migration_id = '2026-11-19-reverse-nutrition-activation';
+
+    SELECT count(*) INTO v_bad_review_rows
       FROM core.symptom_nutrient_map
-     WHERE review_status = 'pending';
+     WHERE is_active
+       AND (review_status <> 'approved' OR NOT is_reviewed
+            OR reviewer IS NULL OR reviewed_at IS NULL OR source_id IS NULL);
 
     SELECT count(*) INTO v_doc_count FROM knowledge.knowledge_doc WHERE NOT is_deleted;
 
@@ -100,17 +117,31 @@ BEGIN
     IF v_iron_count <> 1 OR v_iron_value <> 12 OR COALESCE(v_iron_status, '') <> '' THEN
         RAISE EXCEPTION '铁·女性50-64岁口径不正确：行数%、数值%、状态%', v_iron_count, v_iron_value, v_iron_status;
     END IF;
-    IF v_symptom_count <> 13 OR v_pending_count <> 13 OR v_active_count <> 0 THEN
-        RAISE EXCEPTION '反向营养映射状态不正确：总数%、待审核%、启用%', v_symptom_count, v_pending_count, v_active_count;
+    IF v_symptom_review_applied = 0 THEN
+        -- 阶段一：41 号还没跑，映射应保持 13 条待审核、0 条启用
+        IF v_symptom_count <> 13 OR v_pending_count <> 13 OR v_active_count <> 0 THEN
+            RAISE EXCEPTION '反向营养映射状态不正确（激活前）：总数%、待审核%、启用%', v_symptom_count, v_pending_count, v_active_count;
+        END IF;
+        IF v_moderate_count <> 7 OR v_low_count <> 6 THEN
+            RAISE EXCEPTION '反向营养证据分级不正确（激活前）：moderate %条、low %条', v_moderate_count, v_low_count;
+        END IF;
+    ELSE
+        -- 阶段二：41 号已跑，13 条审核修订 + 6 条高频症状 = 19 条全部启用
+        IF v_symptom_count <> 19 OR v_pending_count <> 0 OR v_active_count <> 19 THEN
+            RAISE EXCEPTION '反向营养映射状态不正确（激活后）：总数%、待审核%、启用%', v_symptom_count, v_pending_count, v_active_count;
+        END IF;
+        IF v_moderate_count <> 8 OR v_low_count <> 11 THEN
+            RAISE EXCEPTION '反向营养证据分级不正确（激活后）：moderate %条、low %条', v_moderate_count, v_low_count;
+        END IF;
+        IF v_bad_review_rows <> 0 THEN
+            RAISE EXCEPTION '有%条已启用反向营养映射缺审核字段或来源', v_bad_review_rows;
+        END IF;
     END IF;
     IF v_key_nutrient_count <> 7 THEN
         RAISE EXCEPTION '7种关键微量覆盖不完整，实际覆盖%种', v_key_nutrient_count;
     END IF;
     IF v_bad_evidence_count <> 0 THEN
         RAISE EXCEPTION '待审核反向营养映射仍有%条使用非规范 evidence_level', v_bad_evidence_count;
-    END IF;
-    IF v_moderate_count <> 7 OR v_low_count <> 6 THEN
-        RAISE EXCEPTION '反向营养证据分级不正确：moderate %条、low %条', v_moderate_count, v_low_count;
     END IF;
     IF v_doc_count <> 43 THEN RAISE EXCEPTION '知识文档应为43篇，实际为%篇', v_doc_count; END IF;
 END $$;
@@ -126,6 +157,10 @@ SELECT check_item, result
         ('iron_female_50_64_rows', (SELECT count(*)::text FROM core.nutrient_reference WHERE nutrient_id='iron' AND sex='female' AND age_group='50-64' AND life_stage='普通')),
         ('iron_female_50_64_value', (SELECT min(value)::text FROM core.nutrient_reference WHERE nutrient_id='iron' AND sex='female' AND age_group='50-64' AND life_stage='普通')),
         ('symptom_nutrient_rows', (SELECT count(*)::text FROM core.symptom_nutrient_map)),
+        ('symptom_review_phase', CASE WHEN EXISTS (
+             SELECT 1 FROM audit.schema_migration
+              WHERE migration_id = '2026-11-19-reverse-nutrition-activation')
+           THEN 'activated' ELSE 'pending' END),
         ('symptom_pending_rows', (SELECT count(*)::text FROM core.symptom_nutrient_map WHERE review_status='pending')),
         ('symptom_active_rows', (SELECT count(*)::text FROM core.symptom_nutrient_map WHERE is_active)),
         ('symptom_moderate_rows', (SELECT count(*)::text FROM core.symptom_nutrient_map WHERE evidence_level='moderate')),

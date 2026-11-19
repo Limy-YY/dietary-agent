@@ -7,8 +7,8 @@
 L-01 自定义区间：11-20~11-22 三天 → 方案覆盖 3 天
 L-02 餐次子集：只排午餐 → 槽位全为 lunch
 L-03 软偏好透传：soft_avoid=[油炸,炸] 且必含炸物候选请求 → 方案内炸物显著减少/为 0
-L-04 症状映射：/api/agent/reverse-nutrition 当前一律 keyword_fallback
-     （#9 口径：symptom_nutrient_map 16 条全未激活；数据岗审核置活后需改判据）
+L-04 症状映射：/api/agent/reverse-nutrition 应命中 symptom_map
+     （v1.2r4 起 19 条映射已审核启用；「乏力、掉发」须同时命中 容易疲劳 与 掉发，见 41 号脚本）
 L-05 检索溯源：/api/agent/rag-query 的 kind=doc 条目 source 非空（BUG-027，
      修于 4f6c937 应用层回查；query 用「主食」，非 doc 条目不计入分母）
 L-06 跨度边界：span=32 天请求被拒（#9 口径 MAX_SPAN_DAYS=31，
@@ -135,17 +135,20 @@ def main() -> int:
                f"plan_id={pid3} 含炸/红烧菜名命中 {hits or '无'}（软偏好为降权非硬删，命中即记录不判 FAIL）；"
                f"菜名样本：{names[:80]}")
 
-    # L-04 反向营养映射标注（#9 口径：表 16 条全未激活，当前一律 keyword_fallback）
+    # L-04 反向营养映射命中（v1.2r4：19 条已审核启用，见 41 号脚本）
     # 契约：symptoms 为**字符串**（schemas/agent.py:27 `symptoms: str`），按子串命中 symptom/aliases；
     # 早前传 list 会被 400 参数校验拦下（code=1001），不是后端回退。
     code, rep = call("POST", "/api/agent/reverse-nutrition", {"symptoms": "乏力、掉发", "top_k": 5})
     d = rep.get("data") or {}
     method = d.get("method")
     note = d.get("note") or ""
-    ok = code == 200 and method == "keyword_fallback" and note
+    titles = [i.get("title") or "" for i in (d.get("items") or [])]
+    has_fatigue = any("容易疲劳" in t for t in titles)
+    has_hairloss = any("掉发" in t for t in titles)
+    ok = code == 200 and method == "symptom_map" and bool(note) and has_fatigue and has_hairloss
     record("L-04", "PASS" if ok else "FAIL",
-           f"method={method}（锁定 keyword_fallback：symptom_nutrient_map 16 条均未激活） "
-           f"items={len(d.get('items') or [])} note={note[:60]}")
+           f"method={method}（应为 symptom_map：19 条映射已激活） "
+           f"命中 乏力={has_fatigue} 掉发={has_hairloss} items={len(titles)} note={note[:60]}")
 
     # L-05 检索溯源：kind=doc 条目必须带 source（BUG-027，修于 4f6c937）
     # 口径（安娜 #12 建议）：只对 kind=="doc" 判溯源；nutrient_knowledge 表无 source 列，
