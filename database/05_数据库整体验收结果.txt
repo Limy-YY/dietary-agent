@@ -364,17 +364,35 @@ PostgreSQL 18.7（/usr/lib/postgresql/18）+ postgresql-18-pgvector 0.8.7，干�
 
   C-6  19 知识库主题扩充（新文件）
        · 运行前基线：26 篇，全部 nutrient:<营养素>:overview，category ∈ {维生素, 矿物质, 脂肪酸, 其他}
-       · 执行：19 的 3 条语句 0 报错，INSERT 0 17，NOTICE「新增/更新 17 条，知识库有效总数 43 条」
-       · 自检表：knowledge_total=43、nutrient_rows=26、topic_rows=17、
+       · 执行：19 的 5 条语句（前置 DO / BEGIN / INSERT / 自检 DO / COMMIT）0 报错，INSERT 0 17，
+         NOTICE「主题扩充完成：当前 topic 总数 17 条，知识库有效总数 43 条」
+       · 自检结果表 17 行：knowledge_total=43、nutrient_rows=26、topic_rows=17、
          cat 分布 维生素13 / 矿物质11 / 脂肪酸1 / 其他1 / 病种6 / 人群5 / 膳食结构3 / 食物过敏与安全3、
-         duplicate_keys=0、正文长度 136～234 字、backlog_after_19=43
-       · 幂等：连跑第二遍仍 43 条（17 条走 ON CONFLICT DO UPDATE），无重复 stable_key
-       · 15 联动：--dry-run 显示「待灌/待重灌 43 条，预计 2 次后端调用，约 12177 字符」
+         duplicate_keys=0、正文长度 159～319 字、最长 881 字节、backlog_after_19=43、database_name=diet_agent
+       · 幂等：连跑第二遍仍 43 条（17 条走 ON CONFLICT DO UPDATE），duplicate_keys=0
+       · 事务：INSERT 与自检收在同一个 BEGIN/COMMIT 里。负向验证——把一条正文灌到 700 字再跑，
+         自检抛「有 1 条主题条目正文长度不在 100～600 字之间，或超过 1000 字节」，整笔回滚：
+         topic 仍 17 条、总库 43、该条正文仍是 174 字，库里没留半成品
+       · 正文上限：100～600 字，另加 octet_length ≤ 1000 字节兜底。
+         2026-11-16 曾按「补边界后 6 条超 600」把上限放到 750，那是 SQL_ASCII 库的锅——
+         SQL_ASCII 下 length() 数的是字节，742 字节被当成 742 字。2026-11-17 用 --encoding=UTF8
+         重建库实测只有 159～319 字，750 没有依据，回退 600；前置校验同时拦住 server_encoding ≠ UTF8
+         （实跑验证：SQL_ASCII 库上直接报「当前库 server_encoding 是 SQL_ASCII…」）
+       · 15 联动：--dry-run 显示「待灌/待重灌 43 条，预计 2 次后端调用，约 12461 字符」
+         （更正两轮记录：35792 是字节数不是字符数，12177 是 26 篇时的字符数；
+          本轮按 sum(length(content)) = 12461 字符 / 35931 字节核过）
        · 写库：用本地 mock 嵌入服务（字符 bigram 哈希到 1024 维）实灌，成功 43、失败 0，剩余待灌 0；
          knowledge.search_documents 能返回结果（vector_rank 1～5）
        注意：mock 只为验链路，它的余弦相似度只有 0.15～0.20，真实语义质量要等 bge-m3 接上再评。
+       · 2026-11-16 按营养岗审核修订后逐条查过库：高尿酸痛风与慢性肾病的 2024 版引文（source_id
+         NHC-HUA-2024 / NHC-CKD-2024，meta.guidelines 同步）、减重措辞、高血压富钾前提、哺乳期
+         水量/酒精/咖啡因、孕期高汞鱼、剩饭蜡样芽孢杆菌、GB 7718-2011「宜」提示（2025 版起强制）、
+         eHF/AAF、肾病蛋白口径与大豆制品、糖尿病生重/熟饭换算，全部在 knowledge_doc 里命中。
+       · 2026-11-17 按《19_待修改问题清单_v1.2》再修 5 处（1 必改 + 4 建议/可选）：长度阈值 750→600、
+         GB 7718 改「宜」提示、牛奶过敏替代限定年龄、脂肪肝与学龄儿童的 source/source_id 改多来源、
+         自检 NOTICE 改「当前 topic 总数」；重跑结果表 17 行、159～319 字、最长 881 字节，幂等与回滚均复验通过。
 
-  C-7  docker/ 初始化链路（脚本逐条实跑；镜像 build 与首启已完成，见末段）
+  C-7  docker/ 初始化链路（脚本逐条实跑；镜像未 build）
        · initdb/ 八个脚本按 00→10→20→30→40→50→55→60 顺序执行：8/8 rc=0，整链日志 0 ERROR
        · 60 汇总表：condition_rows=4 / diet_app_role=present / dish_rows=60 / embedding_backlog=43 /
          ingredient_rows=128 / knowledge_topic=17 / knowledge_total=43 / legacy_fixed_plans=3 /
@@ -383,28 +401,64 @@ PostgreSQL 18.7（/usr/lib/postgresql/18）+ postgresql-18-pgvector 0.8.7，干�
        · 负向测试：缺 SQL 资产 → 00 rc=1；库名与 03 写死的 diet_agent 不符 → 30 rc=1
        · 脚本静态检查：八个 initdb 脚本 `bash -n` 全部通过（8/8，无语法错）
        · 交付包自校验：解压 zip 后在包根跑 `sha256sum -c 09_文件校验值.sha256`，30/30 OK、0 FAILED
-       · 数据岗本机未做 docker build（云主机是无特权容器：grep Cap /proc/self/status 全 0、
-         systemd-detect-virt=container-other、docker: command not found；其 Windows 机无 Docker/WSL）。
-         → 2026-11-16 后端补做，见下方实测段。
-       · 2026-11-16 后端实测（v1.2r2 合并版，本机 Windows + Docker Desktop）：
-         `docker build -f docker/Dockerfile -t diet-agent-pg:1.2r2 .` 成功（build context 取仓库根）；
-         空数据卷 `docker compose up -d` 首启约 10 秒跑完 00→10→20→30→40→50→55→56→57→60 十步，
-         10/10 rc=0、整链 0 ERROR / 0 FATAL；
-         04 摘要 11 项全绿（dishes 60 / goal_mappings 5 / ingredients 128 / key_micronutrients 7 /
-         legacy_plans_preserved 3 / r1 1 / r1b 1 / schema_migration 1 / staging_schema_removed true /
-         test_rows_after_rollback 3 / test_view_removed true）；
-         22 数据补充验收 12 项全绿（dish_used_ingredients 57 / dishes_with_fiber_calcium 60 /
-         iron_female_50_64 1 行、值 12 / symptom_nutrient_rows 16 其中 pending 16、active 0 /
-         symptom_key_nutrients 7 / knowledge_docs 43 / health_conditions 4）；
-         另测 knowledge_total=43、embedding_backlog=43、condition_rows=4、migrations=4、pgvector 0.8.7、PG 18.7。
-         账号模型：`POSTGRES_USER=postgres`，`diet_app` 由 03 建，实测 `rolsuper=false`；
-         旧 `deploy/docker-compose.yml` 写的是 `POSTGRES_USER: diet_app`，会让应用账号带超级用户权限。
-         链路口径：01 为 v1.2r2 合并版 dump，本身已含 12/18/19/20/21 的结果，后续复跑这些脚本属幂等验证
-         （与 08「恢复后再依次复跑 12、03、18、14、19、20、21、04、22」的实测口径一致）。
-         说明：docker/ 14 个文件此前未入仓（09 已登记其 sha256），本次按 07/08 重建等价实现并实测；
-         数据岗原版补传后以原版替换、并同步更新 09 的 docker 段校验值；首启日志摘录见 docker/README.md。
+       · 未做：docker build。云主机是无特权容器（grep Cap /proc/self/status 全 0、systemd-detect-virt=container-other、
+         docker: command not found），本机 Windows 无 Docker/WSL，所以镜像一层都没真正构建过。
+         第一次 build 可能要调 pgvector/pgvector:pg18 的 PGDATA/健康检查细节与 COPY 通配，见 docker/README.md。
 
   C-8  仍未验证
-       · 镜像 build 与容器内首次启动 —— 2026-11-16 已完成（v1.2r2，结论见 C-7 末段），不再是缺口
+       · 镜像 build 与容器内首次启动（原因见 C-7）
        · 真实嵌入模型 bge-m3（1024 维）与 p_min_similarity 默认 0.5 的实际召回质量
-       · 19 的 17 篇主题未经业务/营养岗审稿（口径问题找谁改，见 17 第十节）
+       · 19 的 17 篇已于 2026-11-16 过营养岗审核并按意见修订（修订清单与复测见本附录 C-6、17 第十一节）；
+         「每个病写多细、要不要给具体克数」仍待业务拍；21 号反向营养映射不在本包，本轮未动
+
+============================================================
+附录 D：v1.2r2 菜式库扩充验收（2026-11-19）
+============================================================
+
+验收对象：在 v1.2r1 基础上跑 `20_菜式库扩充_v1.2r2.sql`，菜式 60 → 120。
+验收环境：云主机 Ubuntu + PostgreSQL 18.7 临时实例（127.0.0.1:5545，trust），库名 diet_agent_test；
+空库 pg_restore 还原 01 后依次跑 12 → 03 → 18 → 14 → 19，再跑 20。
+
+D-1  基线（20 之前）
+  · core.dish 有效 60 道、core.ingredient 128 种、core.dish_ingredient 254 条；
+  · knowledge.knowledge_doc 43 条（14/19 之后）。
+
+D-2  20 脚本实跑（真实库，非空库 dry-run）
+  · 首轮：登记导入批次 1 条、菜式 60 道、配料关系 236 条，营养快照 UPDATE 60 行，收尾自检 DO 通过；
+  · 第二轮复跑：菜式 / 配料计数稳定 120 / 236，无新增重复行（幂等：菜式按业务键 ON CONFLICT 覆盖
+    描述性字段，配料关系按 (dish_id, ingredient_id, role, generated_from) 冲突更新；
+    油行 generated_from='oil_g'、盐行='salt_g'，与 04 油盐对账口径一致）；
+  · 配料全部复用现有 128 种食材，本轮未反推新建食材行。
+
+D-3  04 整体验收（r2 版）在含数据的库上跑完，exit=0、无断言失败
+  汇总表实测：
+      有效菜式总数 | r1批次菜式 | r2批次菜式
+      --------------+------------+------------
+                 120 |         30 |         60
+
+  r2 批次（DISH-061..120）分类：
+      类别   | 新增数量
+      --------+----------
+      主食     |        8
+      水产类   |        6
+      汤羹     |       13
+      畜禽肉类 |       11
+      蔬菜类   |       12
+      蛋豆类   |       10
+
+  r2 批次来源：home-dishes-zh-cn-v2 共 60 道。
+  全库主食类（category='主食'）合计 14 道。
+
+D-4  r2 批次逐项核对（04 断言口径）
+  · 营养完整性：energy / protein / sodium 完整 60/60/60，热量缺失 0；
+  · 热量区间 29.3 ~ 290.4 kcal，均值 153.3 kcal；缺失值保持 NULL，不按 0 计；
+  · 快照与实时营养视图不一致：0 条；
+  · 配料用量 ≤ 0：0 条；孤立配料关系：0 条；全库重名：0 组；
+  · 油盐字段与配料明细对账不符：0 道；
+  · source 为 NULL 或空串：0 道；standardization_note / data_quality='approx' / 配料清单齐备；
+  · 迁移登记：audit.schema_migration 中 `2026-11-19-dish-expansion-120` 恰 1 条。
+
+D-5  边界与未做（沿用附录 C 口径）
+  · 本批只补菜式与配料关系；微量 / 宏量营养素细项、做法步骤文本、data_quality 复核归另一数据岗；
+  · 食材中沿用既有"未核查"标注（如 CN-1274 燕麦片、FDC-170420、FDC-173757），不代表已确认含过敏原；
+  · docker build 与真实嵌入模型召回质量仍未实测，原因同附录 C-7 / C-8。

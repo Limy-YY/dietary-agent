@@ -509,6 +509,15 @@ DECLARE
     duplicate_name_rows integer;
     orphan_rows integer;
     migration_rows integer;
+    r20_dishes integer;
+    r20_di_rows integer;
+    r20_live_rows integer;
+    r20_bad_nutrition integer;
+    r20_bad_amount integer;
+    r20_bad_source integer;
+    r20_bad_oil_salt integer;
+    r20_orphan integer;
+    r20_migration_rows integer;
 BEGIN
     SELECT count(*) INTO total_dishes
     FROM core.dish
@@ -592,8 +601,78 @@ BEGIN
     FROM audit.schema_migration
     WHERE migration_id = '2026-11-13-dish-expansion-60';
 
-    IF total_dishes <> 60 THEN
-        RAISE EXCEPTION '有效菜式总数应为60，实际为%', total_dishes;
+    -- v1.2r2 批次：DISH-061..120（菜式库 60 → 120）
+    SELECT count(*) INTO r20_dishes
+    FROM core.dish
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+      AND NOT is_deleted;
+
+    SELECT count(*) INTO r20_di_rows
+    FROM core.dish_ingredient
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120';
+
+    SELECT count(*) INTO r20_live_rows
+    FROM app.v_dish_live_nutrition
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120';
+
+    SELECT count(*) INTO r20_bad_nutrition
+    FROM app.v_dish_live_nutrition
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+      AND (
+          NOT energy_complete
+          OR NOT protein_complete
+          OR NOT sodium_complete
+          OR energy_kcal IS NULL
+          OR protein_g IS NULL
+          OR sodium_mg IS NULL
+      );
+
+    SELECT count(*) INTO r20_bad_amount
+    FROM core.dish_ingredient
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+      AND amount_g <= 0;
+
+    SELECT count(*) INTO r20_bad_source
+    FROM core.dish
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+      AND (
+          source IS NULL
+          OR source = ''
+          OR source_id IS NULL
+          OR source_row ->> 'standardization_note' IS NULL
+          OR source_row ->> 'data_quality' <> 'approx'
+          OR jsonb_array_length(source_row -> 'ingredients') = 0
+      );
+
+    SELECT count(*) INTO r20_bad_oil_salt
+    FROM (
+        SELECT
+            d.dish_id,
+            d.default_oil_g,
+            d.default_salt_g,
+            COALESCE(sum(di.amount_g) FILTER (WHERE di.generated_from = 'oil_g'), 0) AS oil_g,
+            COALESCE(sum(di.amount_g) FILTER (WHERE di.generated_from = 'salt_g'), 0) AS salt_g
+        FROM core.dish d
+        JOIN core.dish_ingredient di USING (dish_id)
+        WHERE d.dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+        GROUP BY d.dish_id
+    ) x
+    WHERE x.default_oil_g <> x.oil_g
+       OR x.default_salt_g <> x.salt_g;
+
+    SELECT count(*) INTO r20_orphan
+    FROM core.dish_ingredient di
+    LEFT JOIN core.dish d USING (dish_id)
+    LEFT JOIN core.ingredient i USING (ingredient_id)
+    WHERE di.dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+      AND (d.dish_id IS NULL OR i.ingredient_id IS NULL);
+
+    SELECT count(*) INTO r20_migration_rows
+    FROM audit.schema_migration
+    WHERE migration_id = '2026-11-19-dish-expansion-120';
+
+    IF total_dishes <> 120 THEN
+        RAISE EXCEPTION '有效菜式总数应为120，实际为%', total_dishes;
     END IF;
     IF new_dishes <> 30 THEN
         RAISE EXCEPTION '本批新增菜式应为30，实际为%', new_dishes;
@@ -625,12 +704,40 @@ BEGIN
     IF migration_rows <> 1 THEN
         RAISE EXCEPTION '菜式扩充迁移记录应为1条，实际为%', migration_rows;
     END IF;
+    IF r20_dishes <> 60 THEN
+        RAISE EXCEPTION 'v1.2r2 本批新增菜式应为60，实际为%', r20_dishes;
+    END IF;
+    IF r20_di_rows <> 236 THEN
+        RAISE EXCEPTION 'v1.2r2 本批配料关系应为236条，实际为%', r20_di_rows;
+    END IF;
+    IF r20_live_rows <> 60 THEN
+        RAISE EXCEPTION 'v1.2r2 新增菜在实时营养视图中应有60行，实际为%', r20_live_rows;
+    END IF;
+    IF r20_bad_nutrition <> 0 THEN
+        RAISE EXCEPTION 'v1.2r2 有%道新增菜缺少能量、蛋白质或钠的完整计算结果', r20_bad_nutrition;
+    END IF;
+    IF r20_bad_amount <> 0 THEN
+        RAISE EXCEPTION 'v1.2r2 有%条新增配料用量不大于0', r20_bad_amount;
+    END IF;
+    IF r20_bad_source <> 0 THEN
+        RAISE EXCEPTION 'v1.2r2 有%道新增菜缺少来源或标准化说明', r20_bad_source;
+    END IF;
+    IF r20_bad_oil_salt <> 0 THEN
+        RAISE EXCEPTION 'v1.2r2 有%道新增菜的油盐字段与配料明细不一致', r20_bad_oil_salt;
+    END IF;
+    IF r20_orphan <> 0 THEN
+        RAISE EXCEPTION 'v1.2r2 存在%条孤立配料关系', r20_orphan;
+    END IF;
+    IF r20_migration_rows <> 1 THEN
+        RAISE EXCEPTION 'v1.2r2 菜式扩充迁移记录应为1条，实际为%', r20_migration_rows;
+    END IF;
 END
 $$;
 
 SELECT
     count(*) FILTER (WHERE NOT is_deleted) AS 有效菜式总数,
-    count(*) FILTER (WHERE dish_id BETWEEN 'DISH-031' AND 'DISH-060' AND NOT is_deleted) AS 本批新增菜式
+    count(*) FILTER (WHERE dish_id BETWEEN 'DISH-031' AND 'DISH-060' AND NOT is_deleted) AS r1批次菜式,
+    count(*) FILTER (WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND NOT is_deleted) AS r2批次菜式
 FROM core.dish;
 
 SELECT
@@ -660,4 +767,34 @@ SELECT
     unverified_food_ids
 FROM app.v_dish_live_nutrition
 WHERE dish_id BETWEEN 'DISH-031' AND 'DISH-060'
+ORDER BY dish_id;
+
+-- v1.2r2 批次（DISH-061..120）分类 / 来源 / 明细
+SELECT
+    category AS 类别,
+    count(*) AS 新增数量
+FROM core.dish
+WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+GROUP BY category
+ORDER BY category;
+
+SELECT
+    source_id AS 来源编号,
+    count(*) AS 菜式数量
+FROM core.dish
+WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+GROUP BY source_id
+ORDER BY source_id;
+
+SELECT
+    dish_id,
+    name,
+    ingredient_count,
+    energy_kcal,
+    protein_g,
+    sodium_mg,
+    strict_allergens,
+    unverified_food_ids
+FROM app.v_dish_live_nutrition
+WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
 ORDER BY dish_id;
