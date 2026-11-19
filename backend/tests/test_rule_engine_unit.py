@@ -390,10 +390,6 @@ def test_plan_dates_truncated_by_max_slots():
 # ---------------------------------------------------------------- 8. 过敏原词表映射缺口（BUG-028）
 
 
-@pytest.mark.xfail(
-    reason="BUG-028：前端「海鲜」与数据细类（鱼类/软体贝类/甲壳类水产）无映射，修复后本组转 XPASS 并摘掉 xfail",
-    strict=False,
-)
 @pytest.mark.parametrize("strict_allergen", ["鱼类", "软体贝类", "甲壳类水产"])
 def test_seafood_allergy_blocks_fine_grained_allergen(strict_allergen):
     """前端过敏原选项只有「海鲜」，数据侧是三类细标签，别名表缺映射 → 海鲜过敏全线放行。
@@ -407,10 +403,6 @@ def test_seafood_allergy_blocks_fine_grained_allergen(strict_allergen):
     assert "allergen:海鲜" in hard_filter_reasons(facts, tastes)
 
 
-@pytest.mark.xfail(
-    reason="BUG-028：麸质与小麦在别名表缺双向映射（库内两种写法并存），修复后转 XPASS",
-    strict=False,
-)
 def test_gluten_allergy_blocks_wheat_tagged_dish():
     """用户勾「麸质」时，标签为「小麦」的菜（白馒头/面包/清汤面/疙瘩汤）也应硬排除。"""
     tastes = _targets(allergies=["麸质"])
