@@ -169,26 +169,44 @@ def test_energy_equals_bmr_times_1_4():
     assert t.energy_kcal == pytest.approx(1314.0 * 1.4)
 
 
-def test_meal_ratios_split_30_40_30():
+def test_meal_ratios_split_25_40_35():
+    """V2.1（fa7a4fe）：默认三餐比例 30/40/30 → 25/40/35。"""
     t = compute_targets(make_profile(), None, None, make_request())
     energy = t.energy_kcal
-    assert t.meal_targets["早"].kcal == pytest.approx(energy * 0.3, rel=1e-6)
-    assert t.meal_targets["午"].kcal == pytest.approx(energy * 0.4, rel=1e-6)
-    assert t.meal_targets["晚"].kcal == pytest.approx(energy * 0.3, rel=1e-6)
+    assert t.meal_targets["早"].kcal == pytest.approx(energy * 0.25, rel=1e-6)
+    assert t.meal_targets["午"].kcal == pytest.approx(energy * 0.40, rel=1e-6)
+    assert t.meal_targets["晚"].kcal == pytest.approx(energy * 0.35, rel=1e-6)
 
 
-def test_single_meal_request_gets_full_day_energy():
-    """只排午餐时，该餐独占全天能量（不做 40% 折算）。"""
+def test_single_meal_request_gets_only_its_share():
+    """V2.1 语义：分母恒为全天三餐默认比例之和，部分方案不吸收省略餐次的能量。
+
+    只排午餐 → 午餐拿全天 40%（旧版曾独占 100%，会让一人一顿吃掉全天热量）。
+    """
     t = compute_targets(make_profile(), None, None, make_request(meal_types=["午"]))
     assert list(t.meal_targets) == ["午"]
-    assert t.meal_targets["午"].ratio == pytest.approx(1.0)
-    assert t.meal_targets["午"].kcal == pytest.approx(t.energy_kcal, rel=1e-6)
+    assert t.meal_targets["午"].ratio == pytest.approx(0.4, rel=1e-6)
+    assert t.meal_targets["午"].kcal == pytest.approx(t.energy_kcal * 0.4, rel=1e-6)
 
 
-def test_custom_meal_ratios_respected():
+def test_custom_meal_ratios_partial_normalized_with_defaults():
+    """V2.1 语义：自定义只覆盖给出的餐次，剩余餐次沿用默认值一并归一。
+
+    早 0.5 / 午 0.5（晚缺省 0.35）→ sum=1.35 → 早占 0.5/1.35。
+    """
     t = compute_targets(make_profile(), None, None,
                         make_request(meal_types=["早", "午"], meal_ratios={"早": 0.5, "午": 0.5}))
-    assert t.meal_targets["早"].kcal == pytest.approx(t.energy_kcal * 0.5, rel=1e-6)
+    assert t.meal_targets["早"].ratio == pytest.approx(0.5 / 1.35, rel=1e-6)
+    assert t.meal_targets["午"].ratio == pytest.approx(0.5 / 1.35, rel=1e-6)
+
+
+def test_custom_meal_ratios_full_day_exact():
+    """三个餐次都显式给出且和为 1 时按给定比例精确分配。"""
+    t = compute_targets(make_profile(), None, None,
+                        make_request(meal_ratios={"早": 0.3, "午": 0.4, "晚": 0.3}))
+    assert t.meal_targets["早"].ratio == pytest.approx(0.3, rel=1e-6)
+    assert t.meal_targets["午"].ratio == pytest.approx(0.4, rel=1e-6)
+    assert t.meal_targets["晚"].ratio == pytest.approx(0.3, rel=1e-6)
 
 
 def test_micro_targets_all_seven_present_and_missing_flagged():
@@ -231,12 +249,31 @@ def test_allergen_blocks_dish():
     assert "allergen:花生" in hard_filter_reasons(facts, tastes)
 
 
-def test_allergen_in_ingredient_but_not_confirmed_passes():
-    """未确认为含该过敏原（strict_allergens 为空）→ 不排除，只留提示。"""
+def test_allergen_hit_in_name_blocks_even_unverified():
+    """V2.1 收紧（fa7a4fe）：菜名/配料名直接命中过敏原即硬过滤，不再要求「已确认含」。
+
+    未确认（strict_allergens 为空）+ 名字含花生 → 仍排除（保守安全方向）。
+    """
     tastes = _targets(allergies=["花生"])
     facts = make_dish(name="花生拌菠菜", ingredient_names=["花生"], unverified_food_ids=["F09"])
+    reasons = hard_filter_reasons(facts, tastes)
+    assert "allergen:花生" in reasons
+    assert facts.allergen_unverified is True
+
+
+def test_allergen_not_in_name_and_unconfirmed_passes():
+    """名字与配料都不含过敏原、strict_allergens 为空 → 放行，仅留 unverified 标志。"""
+    tastes = _targets(allergies=["花生"])
+    facts = make_dish(name="菠菜豆腐煲", ingredient_names=["菠菜", "豆腐"], unverified_food_ids=["F09"])
     assert hard_filter_reasons(facts, tastes) == []
     assert facts.allergen_unverified is True
+
+
+def test_allergen_alias_normalized():
+    """V2.1 别名归一：用户写「蛋」，菜品标注「鸡蛋」也能匹配过滤；反之亦然。"""
+    tastes = _targets(allergies=["蛋"])
+    facts = make_dish(name="番茄炒蛋", ingredient_names=["鸡蛋"])
+    assert "allergen:蛋" in hard_filter_reasons(facts, tastes)
 
 
 def test_religious_taboo_blocks_pork():
