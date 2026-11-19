@@ -33,3 +33,7 @@ Desktop.ini
 
 # ---- 日志 ----
 *.log
+
+# ---- 本地测试产物 ----
+frontend/vite.config.js.timestamp-*.mjs
+frontend/docs/screenshots/99-failure.png
