@@ -9,8 +9,8 @@ L-02 餐次子集：只排午餐 → 槽位全为 lunch
 L-03 软偏好透传：soft_avoid=[油炸,炸] 且必含炸物候选请求 → 方案内炸物显著减少/为 0
 L-04 症状映射：/api/agent/reverse-nutrition 当前一律 keyword_fallback
      （#9 口径：symptom_nutrient_map 16 条全未激活；数据岗审核置活后需改判据）
-L-05 检索溯源：/api/agent/rag-query 每条 item 的 source 非空（BUG-027；
-     hybrid 路径当前恒 null，修好后本项自动转 PASS）
+L-05 检索溯源：/api/agent/rag-query 的 kind=doc 条目 source 非空（BUG-027，
+     修于 4f6c937 应用层回查；query 用「主食」，非 doc 条目不计入分母）
 L-06 跨度边界：span=32 天请求被拒（#9 口径 MAX_SPAN_DAYS=31，
      PARAM_ERROR + 「日期跨度上限 31 天」提示）
 
@@ -136,7 +136,9 @@ def main() -> int:
                f"菜名样本：{names[:80]}")
 
     # L-04 反向营养映射标注（#9 口径：表 16 条全未激活，当前一律 keyword_fallback）
-    code, rep = call("POST", "/api/agent/reverse-nutrition", {"symptoms": ["乏力", "掉发"], "top_k": 5})
+    # 契约：symptoms 为**字符串**（schemas/agent.py:27 `symptoms: str`），按子串命中 symptom/aliases；
+    # 早前传 list 会被 400 参数校验拦下（code=1001），不是后端回退。
+    code, rep = call("POST", "/api/agent/reverse-nutrition", {"symptoms": "乏力、掉发", "top_k": 5})
     d = rep.get("data") or {}
     method = d.get("method")
     note = d.get("note") or ""
@@ -145,19 +147,25 @@ def main() -> int:
            f"method={method}（锁定 keyword_fallback：symptom_nutrient_map 16 条均未激活） "
            f"items={len(d.get('items') or [])} note={note[:60]}")
 
-    # L-05 检索溯源：每条 item 必须带 source（BUG-027）
-    code, rep = call("POST", "/api/agent/rag-query", {"query": "低GI 主食怎么选", "top_k": 5})
+    # L-05 检索溯源：kind=doc 条目必须带 source（BUG-027，修于 4f6c937）
+    # 口径（安娜 #12 建议）：只对 kind=="doc" 判溯源；nutrient_knowledge 表无 source 列，
+    # 非 doc 条目不计入分母。query 用「主食」——「低GI 主食怎么选」按空白分词 AND 全命中，
+    # 库里无对应文档，会恒返回 0 条被判 SKIP，判据不可达。
+    code, rep = call("POST", "/api/agent/rag-query", {"query": "主食", "top_k": 5})
     d5 = rep.get("data") or {}
     items5 = d5.get("items") or []
     method5 = d5.get("method")
+    docs5 = [i for i in items5 if i.get("kind") == "doc"]
+    others5 = len(items5) - len(docs5)
     if code != 200:
         record("L-05", "FAIL", f"请求失败 code={code} {str(rep)[:160]}")
-    elif not items5:
-        record("L-05", "SKIP", f"检索无结果（method={method5}），source 判据不可达，不作 FAIL")
+    elif not docs5:
+        record("L-05", "SKIP",
+               f"检索无 doc 条目（method={method5} items={len(items5)}），source 判据不可达，不作 FAIL")
     else:
-        missing = [i for i in items5 if not i.get("source")]
+        missing = [i for i in docs5 if not i.get("source")]
         record("L-05", "PASS" if not missing else "FAIL",
-               f"method={method5} items={len(items5)} source 缺失 {len(missing)} 条"
+               f"method={method5} doc={len(docs5)}（非 doc {others5} 条按口径不计） source 缺失 {len(missing)} 条"
                + ("" if not missing else "（BUG-027：hybrid 路径 knowledge.search_documents 不返回 source/source_id，见 #12）"))
 
     # L-06 跨度上限边界（#9 口径：MAX_SPAN_DAYS = 31，32 天应被拒）

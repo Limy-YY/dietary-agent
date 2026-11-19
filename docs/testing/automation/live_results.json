@@ -1,6 +1,6 @@
 {
-  "base": "https://touring-exception-divisions-map.trycloudflare.com",
-  "time": "2026-11-17T20:12:28.695403",
+  "base": "https://retail-sixth-beauty-illustration.trycloudflare.com",
+  "time": "2026-11-19T18:36:12.121554",
   "results": [
     {
       "id": "R-01",
@@ -120,7 +120,7 @@
       "path": "/api/agent/chat",
       "status": 200,
       "pass": true,
-      "note": "sse_frames=13"
+      "note": "sse_frames=2"
     }
   ]
 }
