@@ -135,7 +135,9 @@ try {
   await page.waitForTimeout(700)
   ok('单餐点击 → 详细食谱弹窗', dialogTitle)
   await shot('04-recipe-modal.png')
-  await page.locator('.el-dialog__footer button', { hasText: '关闭' }).first().click()
+  // RecipeModal 无 footer 按钮（只有 ProfileModal / HistoryDetailModal 有），
+  // 原写法 .el-dialog__footer button「关闭」会一直等不到元素；改为 ESC 关闭，等价且不依赖组件细节。
+  await page.keyboard.press('Escape')
   await page.waitForTimeout(400)
 
   /* 4. 确认 → 面板同步 */
@@ -163,7 +165,8 @@ try {
 
   await page.locator('.tool-icon', { hasText: '膳食报告' }).click()
   await page.waitForSelector('.tool-panel .empty-state', { timeout: 12000 })
-  await page.locator('.tool-panel .es-action', { hasText: '生成本方案膳食报告' }).click()
+  // 空态 CTA 已从「生成本方案膳食报告」改为「生成周膳食报告」（ReportPanel 改版），按现文案例匹配
+  await page.locator('.tool-panel .es-action', { hasText: '生成周膳食报告' }).click()
   await page.waitForSelector('.tool-panel .rp-section-title', { timeout: 25000 })
   await page.waitForSelector('.tool-panel .rp-trend', { timeout: 10000 })
   const trendBars = await page.locator('.tool-panel .rp-trend .rp-bar').count()
