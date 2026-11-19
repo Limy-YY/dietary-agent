@@ -158,7 +158,7 @@ def _load_engine_profile(db: Session, user_id: str) -> EngineProfile:
     )
 
 
-def _get_plan(db: Session, meal_plan_id: int) -> MealPlan:
+def _get_plan(db: Session, meal_plan_id: int, *, lock: bool = False) -> MealPlan:
     """按 id 取方案（含四级关系），不存在抛 404。"""
     stmt = (
         select(MealPlan)
@@ -169,6 +169,8 @@ def _get_plan(db: Session, meal_plan_id: int) -> MealPlan:
             .selectinload(MealCandidate.dishes)
         )
     )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
     plan = db.execute(stmt).scalar_one_or_none()
     if plan is None:
         raise BizError(BizCode.NOT_FOUND, f"方案不存在: {meal_plan_id}", http_status=404)
@@ -327,6 +329,10 @@ def _serialize_plan(plan: MealPlan, db: Session) -> dict:
         "goal_code": (plan.generation_context or {}).get("goal_code"),
         "macro_ratio": plan.macro_ratio or {},
         "generation_context": plan.generation_context or {},
+        "daily_summary": _daily_summary(plan),
+        "why_summary": _summary_text(plan),
+        "data_quality_notes": (plan.generation_context or {}).get("data_quality_notes", []),
+        "reference_hints": (plan.generation_context or {}).get("reference_hints", []),
         "micro_balance_window_start": _iso(plan.micro_balance_window_start),
         "micro_balance_window_end": _iso(plan.micro_balance_window_end),
         "agent_version": plan.agent_version,
@@ -364,6 +370,8 @@ def _persist_plan(
         generation_context={
             "goal_code": result.targets.goal_code,
             "diagnostics": result.diagnostics,
+            "data_quality_notes": result.data_quality_notes,
+            "reference_hints": result.reference_hints,
         },
         micro_balance_window_start=(
             date.fromisoformat(balance.window_start) if balance and balance.window_start else request.start_date
@@ -426,9 +434,263 @@ def _persist_plan(
             slot.selected_candidate_id = chosen.candidate_id
     db.flush()
 
+    if any(len(s.candidates) < 2 for s in result.slots):
+        raise BizError(BizCode.PLAN_GENERATION_FAILED, "合法候选不足两个，未保存方案")
     plan.status = "candidates"
     db.flush()
     return plan
+
+
+
+# ---------------------------------------------------------------- V2.1 local modification
+from dataclasses import replace as dc_replace
+from app.services.rule_engine.models import DishPortion, MacroRange, DEFAULT_MEAL_RATIOS
+from app.services.rule_engine.targets import compute_targets
+from app.services.rule_engine.candidates import build_candidates, diversify
+from app.services.rule_engine.pipeline import _split_dishes
+from app.services.rule_engine.local_edit import evaluate_portions, replace_dish_candidates
+from app.services.rule_engine.quality import repetition_cost
+from app.services.rule_engine.meal_templates import selection_key, staple_key
+
+
+class LocalEditRequest(BaseModel):
+    meal_plan_id: int = Field(gt=0)
+    meal_slot_id: int = Field(gt=0)
+    expected_candidate_id: int = Field(gt=0)
+    exclude_ingredients: list[str] = Field(default_factory=list, max_length=30)
+    soft_avoid: list[str] = Field(default_factory=list, max_length=30)
+
+
+class SlotRegenerateRequest(LocalEditRequest):
+    keep_dish_ids: list[str] = Field(default_factory=list, max_length=3)
+
+
+class DishReplaceRequest(LocalEditRequest):
+    dish_id: str = Field(min_length=1, max_length=100)
+    replacement_dish_id: str | None = None
+    replacement_query: str = Field(default='', max_length=80)
+    # An explicitly authorized approximate result may be chosen; by default it is not persisted.
+    allow_approximate: bool = False
+
+
+def _daily_summary(plan):
+    groups = {}
+    for s in plan.slots:
+        groups.setdefault(str(s.slot_date), []).append(s)
+    def total(values):
+        return round(sum(float(v) for v in values), 2) if values and all(v is not None for v in values) else None
+    result = []
+    for day, slots in sorted(groups.items()):
+        chosen = [_selected_candidate(s) for s in slots]
+        target = {k: total([(s.target_macro or {}).get(k) for s in slots]) for k in ('kcal','protein_g','fat_g','carb_g')}
+        actual = {k: total([(c.macro_estimate or {}).get(k) if c else None for c in chosen]) for k in ('kcal','protein_g','fat_g','carb_g','fiber_g')}
+        micro = {k: total([(c.micro_estimate or {}).get(k) if c else None for c in chosen]) for k in ('calcium','iron','zinc','vitamin_a','vitamin_b1','vitamin_b2','vitamin_c')}
+        oil_salt = {k: total([(c.oil_salt_estimate or {}).get(k) if c else None for c in chosen])
+                    for k in ('oil_g','salt_g','sodium_mg','total_salt_equivalent_g')}
+        result.append({'date':day,'slot_count':len(slots),'daily_goal_kcal':_f(plan.goal_energy_kcal),
+                       'planned_target':target,'actual':actual,'micro_estimate':micro,'oil_salt_estimate':oil_salt,
+                       'macro_delta':_macro_delta(actual,target)})
+    return result
+
+
+def _summary_text(plan):
+    return '已安排 %s 餐。各餐目标、实际营养及每日已安排合计见方案；未安排餐次不计入。' % len(plan.slots)
+
+
+def _original_request(plan):
+    try:
+        raw = json.loads(plan.generation_request or '{}')
+    except (ValueError, TypeError):
+        raise BizError(BizCode.PARAM_ERROR, '原始生成约束无法读取，需重新生成方案')
+    if not isinstance(raw, dict):
+        raise BizError(BizCode.PARAM_ERROR, '原始生成约束无法读取')
+    return raw
+
+
+def _edit_context(db, plan, slot, exclude=(), soft=()):
+    orig = _original_request(plan)
+    extra = ((plan.generation_context or {}).get('slot_constraints') or {}).get(str(slot.meal_slot_id), {})
+    ds = SqlDataSource(db)
+    profile = _load_engine_profile(db, plan.user_id)
+    goal = orig.get('goal_code') or (plan.generation_context or {}).get('goal_code') or profile.goal_code
+    excluded = list(dict.fromkeys([*(orig.get('exclude_ingredients') or []), *(extra.get('exclude_ingredients') or []), *exclude]))
+    soft_avoid = list(dict.fromkeys([*(orig.get('soft_avoid') or []), *(extra.get('soft_avoid') or []), *soft]))
+    req = PlanRequest(start_date=str(slot.slot_date), end_date=str(slot.slot_date), meal_types=[slot.meal_type],
+                      goal_code=goal, exclude_ingredients=excluded, soft_avoid=soft_avoid)
+    targets = compute_targets(profile, ds.get_goal_row(goal), ds.get_micro_reference_rows(profile), req,
+                              ds.get_goal_row('maintain') if goal != 'maintain' else None)
+    target = targets.meal_targets.get(slot.meal_type)
+    saved = slot.target_macro or {}
+    if target is None or not all(saved.get(k) is not None for k in ('kcal','protein_g','fat_g','carb_g')):
+        raise BizError(BizCode.PARAM_ERROR, '餐位原始目标不完整，需重新生成方案')
+    # Preserve original slot's target; reject legacy partial-slot plans with incorrect full-day allocation.
+    if plan.goal_energy_kcal and abs(float(saved['kcal']) - float(plan.goal_energy_kcal) * DEFAULT_MEAL_RATIOS.get(slot.meal_type,0)) > 1.0:
+        raise BizError(BizCode.PARAM_ERROR, '旧方案餐位目标口径异常，请先重新生成整份方案')
+    def rng(key):
+        v = float(saved[key]); return MacroRange(key,v,round(v*(1-req.tolerance),1),round(v*(1+req.tolerance),1))
+    target = dc_replace(target,kcal=float(saved['kcal']),protein=rng('protein_g'),fat=rng('fat_g'),carb=rng('carb_g'))
+    return req, targets, target, ds.get_dish_facts()
+
+
+def _row_portions(row, catalog):
+    if row is None:
+        raise BizError(BizCode.PARAM_ERROR, '餐位未选择候选')
+    facts = {d.dish_id:d for d in catalog}
+    if any(d.dish_id not in facts or d.method_override for d in row.dishes):
+        raise BizError(BizCode.PARAM_ERROR, '旧候选含不可用菜式或未支持的做法覆盖')
+    return [DishPortion(facts=facts[d.dish_id], servings=float(d.servings)) for d in sorted(row.dishes,key=lambda d:d.display_order)]
+
+
+def _validate_saved(db, plan, slot, row):
+    req, targets, target, catalog = _edit_context(db, plan, slot)
+    try:
+        return evaluate_portions(_row_portions(row,catalog),target,targets,req.soft_avoid)
+    except RuleEngineError as exc:
+        raise BizError(BizCode.PLAN_GENERATION_FAILED, f'候选不符合现有约束：{exc}') from exc
+
+
+def _lock_edit(db, user_id, req):
+    plan = _get_plan(db, req.meal_plan_id, lock=True)
+    if plan.user_id != user_id:
+        raise BizError(BizCode.FORBIDDEN, '无权操作他人方案', http_status=403)
+    if plan.status != 'candidates':
+        raise BizError(BizCode.PLAN_STATE_CONFLICT, '仅待确认方案可以修改', http_status=409)
+    slot = next((s for s in plan.slots if s.meal_slot_id == req.meal_slot_id),None)
+    if slot is None:
+        raise BizError(BizCode.NOT_FOUND, '餐位不存在于该方案', http_status=404)
+    old = _selected_candidate(slot)
+    if old is None or old.candidate_id != req.expected_candidate_id:
+        raise BizError(BizCode.PLAN_STATE_CONFLICT, '餐位已改变，请刷新方案再操作', http_status=409)
+    return plan,slot,old
+
+
+def _previous_candidates(plan, slot, catalog):
+    from types import SimpleNamespace
+    other = []
+    for s in plan.slots:
+        if s is slot: continue
+        try:
+            p = _row_portions(_selected_candidate(s),catalog)
+        except BizError:
+            continue
+        other.append(SimpleNamespace(portions=p,dish_ids=[x.dish_id for x in p]))
+    return other
+
+
+def _insert_candidate(db, slot, candidate, rank):
+    payload = candidate.as_dict()
+    row = MealCandidate(meal_slot_id=slot.meal_slot_id,rank=rank,
+        reason_codes=payload['reason_codes'],why_text=payload['why_text'],macro_estimate=payload['macro_estimate'],
+        micro_estimate=payload['micro_estimate'],oil_salt_estimate=payload['oil_salt_estimate'],
+        eating_order_advice=payload['eating_order_advice'],sources=payload['sources'],agent_output_version='rule-engine-v2.1')
+    for dish in payload['dishes']:
+        row.dishes.append(MealCandidateDish(dish_id=dish['dish_id'],role=dish['role'],
+            servings=Decimal(str(dish['servings'])),portion_text=dish.get('portion_text'),display_order=dish['display_order']))
+    db.add(row); db.flush()
+    return row
+
+
+def _record_edit(db, plan, slot, old, new, tool, instruction):
+    delta = _macro_delta(new.macro_estimate,old.macro_estimate)
+    db.execute(text('INSERT INTO app.plan_adjustment (meal_plan_id,meal_slot_id,previous_candidate_id,new_candidate_id,instruction,nutrition_change,tool_name,tool_version) VALUES (:p,:s,:o,:n,:i,cast(:d AS jsonb),:t,:v)'),
+               {'p':plan.meal_plan_id,'s':slot.meal_slot_id,'o':old.candidate_id,'n':new.candidate_id,
+                'i':instruction,'d':json.dumps(delta),'t':tool,'v':'v2.1'})
+    slot.selected_candidate_id = new.candidate_id
+
+
+def _finish_edit(db, plan, slot, req, context, tool, old, new, diagnostic):
+    generation_context = dict(plan.generation_context or {})
+    constraints = dict(generation_context.get('slot_constraints') or {})
+    constraints[str(slot.meal_slot_id)] = {'exclude_ingredients':context.exclude_ingredients,'soft_avoid':context.soft_avoid}
+    generation_context['slot_constraints'] = constraints
+    generation_context['last_local_edit'] = {'meal_slot_id':slot.meal_slot_id,'operation':tool,**diagnostic}
+    plan.generation_context = generation_context
+    _record_edit(db,plan,slot,old,new,tool,tool)
+    db.flush()
+    pid = plan.meal_plan_id
+    db.expire_all()
+    # Serialize before commit so errors roll back rather than report a failed committed mutation.
+    result = _serialize_plan(_get_plan(db,pid),db)
+    db.commit()
+    return api_success(result)
+
+
+@router.post('/slot/regenerate')
+def regenerate_slot(req: SlotRegenerateRequest, user_id: str = CurrentUser, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    try:
+        plan,slot,old = _lock_edit(db,user_id,req)
+        context,targets,target,catalog = _edit_context(db,plan,slot,req.exclude_ingredients,req.soft_avoid)
+        old_portions = _row_portions(old,catalog)
+        if not set(req.keep_dish_ids).issubset({p.dish_id for p in old_portions}):
+            raise BizError(BizCode.PARAM_ERROR,'保留菜式不属于当前餐位')
+        staples,sides = _split_dishes(catalog)
+        excluded = frozenset({tuple(sorted(p.dish_id for p in old_portions))})
+        kwargs = dict(max_candidates=200,soft_avoid=context.soft_avoid,required_ids=frozenset(req.keep_dish_ids),excluded_combinations=excluded)
+        strict = build_candidates(target,staples,sides,targets,**kwargs)
+        previous = _previous_candidates(plan,slot,catalog)
+        # Keep portions of explicitly retained dishes too, then recompute and revalidate.
+        def adjust(pool):
+            valid = []
+            kept = {p.dish_id:p for p in old_portions if p.dish_id in req.keep_dish_ids}
+            for c in pool:
+                try:
+                    valid.append(evaluate_portions([kept.get(p.dish_id,p) for p in c.portions],target,targets,context.soft_avoid))
+                except RuleEngineError: continue
+            return valid
+        strict = [c for c in adjust(strict) if 'macro_range_relaxed' not in c.reason_codes]
+        pool = strict
+        from app.services.rule_engine.practical_quality import candidate_priority
+        attempted = len({c.signature[0] for c in strict}) < 3 or sum(candidate_priority(c)[:2]==(False,0) for c in strict)<9
+        if attempted:
+            seen = {tuple(sorted(c.dish_ids)) for c in strict}
+            pool = strict + [c for c in adjust(build_candidates(target,staples,sides,targets,relaxed=True,extend=True,**kwargs)) if tuple(sorted(c.dish_ids)) not in seen]
+        pool.sort(key=lambda c: selection_key(c,target,previous,repetition_cost(c,previous)))
+        picked = diversify(pool,3)
+        if len(picked) < 2:
+            raise BizError(BizCode.PLAN_GENERATION_FAILED,'合法新候选不足两个，原餐位保留')
+        # Archive instead of deleting history-referenced rows; free ranks before INSERT.
+        for row in slot.candidates: row.rank = None
+        db.flush()
+        new = [_insert_candidate(db,slot,c,i) for i,c in enumerate(picked,1)]
+        return _finish_edit(db,plan,slot,req,context,'slot/regenerate',old,new[0],{'relaxed_attempts':int(attempted),'candidate_count':len(new)})
+    except BizError:
+        db.rollback(); raise
+    except RuleEngineError as exc:
+        db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,str(exc)) from exc
+    except Exception as exc:
+        db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,'餐位修改失败，原方案保留') from exc
+
+
+@router.post('/dish/replace')
+def replace_dish(req: DishReplaceRequest, user_id: str = CurrentUser, db: Session = Depends(get_db)) -> ApiResponse[dict]:
+    try:
+        plan,slot,old = _lock_edit(db,user_id,req)
+        context,targets,target,catalog = _edit_context(db,plan,slot,req.exclude_ingredients,req.soft_avoid)
+        portions = _row_portions(old,catalog)
+        pool = replace_dish_candidates(portions,req.dish_id,catalog,target,targets,req.replacement_query,
+                                       req.replacement_dish_id,context.soft_avoid,_previous_candidates(plan,slot,catalog))
+        if not pool:
+            raise BizError(BizCode.PLAN_GENERATION_FAILED,'没有符合安全约束及本餐推荐结构的替代菜，原方案保留；可尝试重生成本餐')
+        best = pool[0]
+        if 'macro_range_relaxed' in best.reason_codes and not req.allow_approximate:
+            raise BizError(BizCode.PLAN_GENERATION_FAILED,'仅换一道菜无法满足营养目标；可明确同意近似结果后再试，或选择重新生成本餐')
+        # Other active alternatives must also obey newly-added hard exclusions; otherwise reject
+        # rather than leave unselectable alternatives or silently alter unrelated dishes.
+        for row in slot.candidates:
+            if row is not old:
+                try: evaluate_portions(_row_portions(row,catalog),target,targets)
+                except RuleEngineError as exc:
+                    raise BizError(BizCode.PLAN_GENERATION_FAILED,'新增硬约束影响其他候选，请重新生成该餐') from exc
+        rank = old.rank
+        old.rank = None; db.flush()
+        new = _insert_candidate(db,slot,best,rank)
+        return _finish_edit(db,plan,slot,req,context,'dish/replace',old,new,{'replaced_dish_id':req.dish_id,'approximate':'macro_range_relaxed' in best.reason_codes})
+    except BizError:
+        db.rollback(); raise
+    except RuleEngineError as exc:
+        db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,str(exc)) from exc
+    except Exception as exc:
+        db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,'单菜替换失败，原方案保留') from exc
 
 
 # ---------------------------------------------------------------- API-22 生成
@@ -518,7 +780,7 @@ def swap_candidate(
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict]:
     """替换某个餐位的选中候选（API-23），并写一条 plan_adjustment 留痕。"""
-    plan = _get_plan(db, req.meal_plan_id)
+    plan = _get_plan(db, req.meal_plan_id, lock=True)
     if plan.user_id != user_id:
         raise BizError(BizCode.FORBIDDEN, "无权操作他人方案", http_status=403)
     if plan.status != "candidates":
@@ -547,6 +809,7 @@ def swap_candidate(
     if target.candidate_id == previous_id:
         raise BizError(BizCode.PARAM_ERROR, "该候选已是当前选中，无需替换")
 
+    _validate_saved(db, plan, slot, target)
     previous = next((c for c in slot.candidates if c.candidate_id == previous_id), None)
     delta = _macro_delta(target.macro_estimate or {}, (previous.macro_estimate if previous else {}) or {})
 
@@ -659,7 +922,7 @@ def fix_plan(
     若本方案与用户已有的固定方案在「同一天同一餐次」上重叠，默认拒绝并提示用
     replace=true 取代旧方案，避免同一时间段多份 fixed 方案叠加进膳食报告。
     """
-    plan = _get_plan(db, req.meal_plan_id)
+    plan = _get_plan(db, req.meal_plan_id, lock=True)
     if plan.user_id != user_id:
         raise BizError(BizCode.FORBIDDEN, "无权操作他人方案", http_status=403)
     if plan.status == "fixed":
@@ -704,6 +967,8 @@ def fix_plan(
             BizCode.PARAM_ERROR, f"存在未选候选的餐位，不能固定: {missing}"
         )
 
+    for slot in plan.slots:
+        _validate_saved(db, plan, slot, _selected_candidate(slot))
     plan.status = "fixed"
     try:
         db.flush()  # 触发器校验 + 自动补 fixed_at

@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from .quality import repetition_cost, selected
+from .meal_templates import template_for, selection_key
 from .models import (
     BalanceReport,
     Candidate,
@@ -173,6 +174,11 @@ def apply_balance(
         for cand in pool:
             if cand is current:
                 continue
+            if not template_for([p.facts for p in cand.portions], slot.meal_type):
+                continue
+            # No regression in energy band or exact combinations after micro adjustment.
+            if selection_key(cand, slot.target, previous, 0)[:2] > selection_key(current, slot.target, previous, 0)[:2]:
+                continue
             # Micro adjustment may improve coverage but must not worsen meal repetition or
             # silently replace a strict result with a relaxed result.
             if repetition_cost(cand, previous) > current_cost + 1e-9:
@@ -190,6 +196,8 @@ def apply_balance(
                     continue
                 # 收益按「补齐需求的比例」归一，避免某一微量数值量级压过其他
                 ratio = min(gain / need, 1.0) if need > 0 else 0.0
+                from .practical_quality import balance_rotation_loss
+                ratio -= balance_rotation_loss(cand,current,slot,slots)
                 if ratio > best_gain:
                     best_gain = ratio
                     best = cand
@@ -200,7 +208,7 @@ def apply_balance(
             name_zh = report.items.get(target_nutrient).name_zh if target_nutrient in report.items else target_nutrient
             main_dish = next((d.name for d in best.portions), "候选")
             improvements.append(
-                f"{slot.meal_type}：把「{main_dish}」（候选 {best.candidate_id}）提为首选，用于补{name_zh}"
+                f"{slot.slot_date} {slot.meal_type}：把「{main_dish}」（候选 {best.candidate_id}）提为首选，用于补{name_zh}"
             )
 
     return improvements
