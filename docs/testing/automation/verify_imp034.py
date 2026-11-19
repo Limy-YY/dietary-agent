@@ -106,6 +106,13 @@ def main() -> int:
     bad = [(s, e, _norm_date(s)) for s, e in norm if _norm_date(s) != e]
     record("IMP034-A8", not bad, f"_norm_date 6 例{'全部正确' if not bad else f'异常 {bad}'}")
 
+    # ---------- A4. 生成跨度上限（#9 口径确认：MAX_SPAN_DAYS = 31） ----------
+    mp_span = (ROOT / "backend" / "app" / "routers" / "mealplan.py").read_text(encoding="utf-8")
+    record("IMP034-A9", "MAX_SPAN_DAYS = 31" in mp_span
+           and "span > MAX_SPAN_DAYS" in mp_span and "PARAM_ERROR" in mp_span
+           and "日期跨度上限" in mp_span,
+           "跨度上限 31 天：span>31 抛 PARAM_ERROR 且提示「日期跨度上限 31 天」（#9 口径，L-06 真后端验边界）")
+
     # ---------- B. 软偏好确定性抽取 ----------
     pref = _extract_preferences("不要牛肉，清淡一点")
     ok = pref["exclude"] == ["牛肉"] and "油炸" in pref["soft_avoid"] and "红烧" in pref["soft_avoid"]

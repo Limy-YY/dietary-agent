@@ -7,10 +7,12 @@
 L-01 自定义区间：11-20~11-22 三天 → 方案覆盖 3 天
 L-02 餐次子集：只排午餐 → 槽位全为 lunch
 L-03 软偏好透传：soft_avoid=[油炸,炸] 且必含炸物候选请求 → 方案内炸物显著减少/为 0
-L-04 症状映射：/api/agent/reverse-nutrition 返回 method=symptom_map 或 keyword_fallback，
-     且 note 如实标注（IMP-036 口径）
+L-04 症状映射：/api/agent/reverse-nutrition 当前一律 keyword_fallback
+     （#9 口径：symptom_nutrient_map 16 条全未激活；数据岗审核置活后需改判据）
 L-05 检索溯源：/api/agent/rag-query 每条 item 的 source 非空（BUG-027；
      hybrid 路径当前恒 null，修好后本项自动转 PASS）
+L-06 跨度边界：span=32 天请求被拒（#9 口径 MAX_SPAN_DAYS=31，
+     PARAM_ERROR + 「日期跨度上限 31 天」提示）
 
 前置不可达时统一判 BLOCKED 并退出码 2，不刷假 FAIL。
 """
@@ -133,14 +135,15 @@ def main() -> int:
                f"plan_id={pid3} 含炸/红烧菜名命中 {hits or '无'}（软偏好为降权非硬删，命中即记录不判 FAIL）；"
                f"菜名样本：{names[:80]}")
 
-    # L-04 反向营养映射标注
+    # L-04 反向营养映射标注（#9 口径：表 16 条全未激活，当前一律 keyword_fallback）
     code, rep = call("POST", "/api/agent/reverse-nutrition", {"symptoms": ["乏力", "掉发"], "top_k": 5})
     d = rep.get("data") or {}
     method = d.get("method")
     note = d.get("note") or ""
-    ok = code == 200 and method in ("symptom_map", "keyword_fallback") and note
+    ok = code == 200 and method == "keyword_fallback" and note
     record("L-04", "PASS" if ok else "FAIL",
-           f"method={method} items={len(d.get('items') or [])} note={note[:60]}")
+           f"method={method}（锁定 keyword_fallback：symptom_nutrient_map 16 条均未激活） "
+           f"items={len(d.get('items') or [])} note={note[:60]}")
 
     # L-05 检索溯源：每条 item 必须带 source（BUG-027）
     code, rep = call("POST", "/api/agent/rag-query", {"query": "低GI 主食怎么选", "top_k": 5})
@@ -156,6 +159,19 @@ def main() -> int:
         record("L-05", "PASS" if not missing else "FAIL",
                f"method={method5} items={len(items5)} source 缺失 {len(missing)} 条"
                + ("" if not missing else "（BUG-027：hybrid 路径 knowledge.search_documents 不返回 source/source_id，见 #12）"))
+
+    # L-06 跨度上限边界（#9 口径：MAX_SPAN_DAYS = 31，32 天应被拒）
+    start = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    end = start + timedelta(days=31)          # 起止相差 31 天 → span=32
+    code, rep = call("POST", "/api/meal-plan/week/generate", {
+        "start_date": start.isoformat(), "end_date": end.isoformat(),
+        "meal_types": ["早", "午", "晚"],
+    })
+    msg = str(rep.get("message") or "")
+    over_rejected = code != 200 and ("跨度上限" in msg or "31" in msg)
+    record("L-06", "PASS" if over_rejected else "FAIL",
+           f"span=32（{start}~{end}）→ http={code} message={msg[:80]}"
+           + ("" if over_rejected else "；期望 PARAM_ERROR + 「日期跨度上限 31 天」"))
 
     OUT.write_text(json.dumps({"base": BASE, "at": datetime.now().isoformat(timespec="seconds"),
                                "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")
