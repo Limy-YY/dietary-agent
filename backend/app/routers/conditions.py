@@ -2,8 +2,10 @@
 
 语义约定：
 - 目录（catalog）含待审核规则，仅 production_ready=true 可用于正式判断；
-  当前正式规则为 0 条 = 未审核启用，不是"无规则"。
+  v1.2r4 起 9 条规则已审核、7 条生效（高血压钠 2000mg 唯一 + 高血压 DASH 模式 +
+  糖尿病/痛风/高血脂的模式偏好与复核闸门），见 database/42_疾病规则口径审核_v1.2r4.sql。
 - 评估（evaluate）只按生产函数执行；missing_value_count>0 时不得断言达标/超标。
+  模式偏好（pattern_preference）与复核闸门（review_gate）不参与数值判定，评估返回 0 行。
 """
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
@@ -62,7 +64,7 @@ def rule_catalog(
 
 @router.get("/production")
 def production_rules(db: Session = Depends(get_db)) -> ApiResponse[list[RuleItem]]:
-    """查询正式疾病规则（仅 production_ready=true，当前 0 条，T7）。"""
+    """查询正式疾病规则（仅 production_ready=true；v1.2r4 起 7 条，T7）。"""
     rows = db.execute(
         text(f"SELECT {_PROD_COLS} FROM app.v_production_condition_rules ORDER BY condition_id, rule_id")
     ).mappings().all()

@@ -40,7 +40,7 @@
 | [frontend/](frontend/) | 前端界面（Vue 3 + Vite）：对话流 + schema 渲染器 + 右侧四面板 + 轻量档案 |
 | [backend/](backend/)   | 后端服务（FastAPI，:8000）：REST + SSE、规则引擎、RAG、数据访问层        |
 | [agent/](agent/)       | 对话 Agent 服务（:8001）：意图路由 + 工具编排 + 输出契约                 |
-| [database/](database/) | 数据库交付包 v1.2r2（128 食材 / 60 菜 / 43 知识库 / 16 反向营养映射）    |
+| [database/](database/) | 数据库交付包 v1.2r4（128 食材 / 120 菜 / 43 知识库 / 19 条已启用反向营养映射 / 9 条已审核疾病规则） |
 | [docker/](docker/)     | PostgreSQL 18 + pgvector 镜像，一键起库，空卷自动建库                    |
 | [tests/](tests/)       | 契约断言自动化测试                                                       |
 | [deploy/](deploy/)     | 部署运维配置（历史；一键起库已迁至 docker/）                             |
@@ -108,8 +108,9 @@ localStorage.setItem('sz_token', '<token>')
 
 ## 数据库交付包（database/）
 
-数据库交付包 v1.2r2：128 食材 / 60 菜 / 43 篇知识库 / 16 条反向营养映射（待审核）/ 4 病种字典。
+数据库交付包 v1.2r4：128 食材 / 120 菜 / 43 篇知识库 / 19 条已启用反向营养映射 / 9 条已审核疾病规则（7 条生效）/ 4 病种字典。
 
 - 交付说明：[database/07_数据库交付说明.md](database/07_数据库交付说明.md)
 - 空库恢复与复跑：[database/08_空库恢复与复跑说明.md](database/08_空库恢复与复跑说明.md)
-- 一键起库（[docker/](docker/)）：空数据卷首次启动自动建成 v1.2r2 合并版库并跑完两套验收（04 + 22），约 10 秒。
+- 本轮审核记录与口径：[database/44_本轮审核记录与口径说明_v1.2r4.md](database/44_本轮审核记录与口径说明_v1.2r4.md)
+- 一键起库（[docker/](docker/)）：空数据卷首次启动自动建成 v1.2r4 合并版库并跑完三套验收（04 + 22 + 43），约 10 秒。
