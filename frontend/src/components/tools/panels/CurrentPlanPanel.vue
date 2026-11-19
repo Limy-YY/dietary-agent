@@ -66,7 +66,7 @@
 
       <div class="plan-actions">
         <button class="plan-btn-secondary" @click="openRecipe">看完整食谱</button>
-        <button v-if="!isFixed" class="fix-btn" @click="send(PHRASE.confirm)">确认方案</button>
+        <button v-if="!isFixed" class="fix-btn" @click="confirmPlan">确认方案</button>
       </div>
       <button class="cp-report-link" :disabled="reportLoading" @click="openReport">
         📊 {{ reportLoading ? '正在查看…' : '查看这份方案的膳食报告' }} →
@@ -173,7 +173,11 @@ async function swap(slot) {
   if (isFixed.value || chat.sending || swapping.value) return
   swapping.value = slot.slot_id
   try {
-    await chat.silentAction(PHRASE.swap(slot.label || '这一餐'))
+    await chat.silentAction(PHRASE.swap(slot.label || '这一餐'), {
+      meal_plan_id: plan.value?.plan_id,
+      meal_slot_id: slot.slot_id,
+      action: 'swap_candidate'
+    })
   } catch (e) {
     ElMessage(e.message || '换候选失败，请重试')
   } finally {
@@ -228,8 +232,17 @@ async function load() {
   }
 }
 
-function send(phrase) {
-  chat.send(phrase)
+async function confirmPlan() {
+  if (!plan.value?.plan_id) return
+  try {
+    await chat.silentAction(PHRASE.confirm, {
+      meal_plan_id: plan.value.plan_id,
+      action: 'confirm'
+    })
+    await load()
+  } catch (e) {
+    ElMessage(e.message || '确认失败，请重试')
+  }
 }
 
 function openRecipe() {

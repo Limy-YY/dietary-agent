@@ -8,7 +8,7 @@ import { getToken, apiBase, ApiError } from './http.js'
  *   clarify  → { question, missing_fields[] }              信息不足，必须追问
  *   error    → { code, message }                           业务错误码同 REST
  *   done     → { conversation_id, meal_plan_id, finish_reason }
- * 请求体：{ conversation_id?, message, context?{ meal_plan_id } }
+ * 请求体：{ conversation_id?, message, context?{ meal_plan_id, meal_slot_id, candidate_id, action } }
  */
 export async function streamChat({ conversationId, message, context, signal, onEvent, silent = false }) {
   // user_id 由后端从 Authorization 的 token 解析（chat.py 用 token.sub 覆盖请求体），
@@ -22,7 +22,12 @@ export async function streamChat({ conversationId, message, context, signal, onE
   if (conversationId != null && conversationId !== '' && Number.isInteger(cid)) {
     bodyPayload.conversation_id = cid
   }
-  if (context && context.meal_plan_id != null) bodyPayload.context = { meal_plan_id: context.meal_plan_id }
+  if (context && context.meal_plan_id != null) {
+    const allowed = ['meal_plan_id', 'meal_slot_id', 'candidate_id', 'action']
+    bodyPayload.context = Object.fromEntries(
+      allowed.filter((key) => context[key] != null && context[key] !== '').map((key) => [key, context[key]])
+    )
+  }
 
   const res = await fetch(`${apiBase()}/agent/chat`, {
     method: 'POST',

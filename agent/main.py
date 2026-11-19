@@ -13,6 +13,7 @@ import asyncio
 import json
 import threading
 import time
+from functools import partial
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -34,6 +35,8 @@ class AgentChatRequest(BaseModel):
     token: str | None = None
     # 最近若干轮 user/assistant 历史（后端已落库，代调时透传），供 LLM 多轮上下文
     history: list[dict] | None = None
+    # Backend 已校验归属的卡片目标；仅作为真实 ID 定位提示。
+    context: dict | None = None
     # 静默按钮动作（换一换/选用/确认）：跳过 LLM 叙事，直接下发结构化 block + done。
     # 前端 silentAction 只消费 meal_card、正文被丢弃，叙事纯属浪费 DeepSeek 数秒延迟。
     silent: bool = False
@@ -57,7 +60,8 @@ async def _stream(req: AgentChatRequest):
     # 当前 ASGI task 的 ContextVar（token）会被复制到线程，agent 内的 REST 调用
     # 因此带上本请求的身份；并发请求各自独立 task，不串号。
     agent_task = asyncio.create_task(
-        run_in_threadpool(agent.run, req.user_id, req.message, req.history, on_status)
+        run_in_threadpool(partial(agent.run, req.user_id, req.message, req.history,
+                                  on_status, conversation_id=conv_id, context=req.context or {}))
     )
 
     # 实时转发「过程状态」（thinking 步骤），直到 agent.run 结束
@@ -79,6 +83,30 @@ async def _stream(req: AgentChatRequest):
     except Exception as e:  # 生成中失败 → error 事件，前端可重试
         yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
         return
+
+    # Silent card actions must return an updated card for the requested plan.
+    # Text-only errors (including fixed-plan conflicts) must not become successful done events.
+    action = (req.context or {}).get("action")
+    if req.silent and action in ("swap_candidate", "choose_candidate", "confirm"):
+        ctx = req.context or {}
+        cards = [b for b in result.get("blocks", []) if b.get("type") == "meal_card"
+                 and str(b.get("meal_plan_id")) == str(ctx.get("meal_plan_id"))]
+        matched = False
+        for card in cards:
+            if action == "confirm":
+                matched = matched or card.get("status") == "fixed"
+            else:
+                for slot in card.get("slots", []):
+                    if str(slot.get("meal_slot_id")) != str(ctx.get("meal_slot_id")):
+                        continue
+                    if action == "choose_candidate":
+                        matched = matched or str(slot.get("selected_candidate_id")) == str(ctx.get("candidate_id"))
+                    else:
+                        matched = matched or bool(slot.get("selected_candidate_id"))
+        if not matched:
+            yield _sse("error", {"code": 2003, "message": result.get("text") or "未获操作成功确认，请刷新方案核对。"})
+            yield _sse("done", {"conversation_id": conv_id, "finish_reason": "error"})
+            return
 
     # 正文先行：narration 走真 token 流（LLM stream=True），否则整段下发固定文本。
     # 先说话、再落卡，避免「静默蹦卡」的突兀感（对齐主流客户端：文字先导，产物随后淡入）。

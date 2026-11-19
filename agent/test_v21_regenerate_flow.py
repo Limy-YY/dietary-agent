@@ -44,6 +44,14 @@ class Tests(unittest.TestCase):
         self.send('帮我重新生成早餐'); r=self.send('第一份方案，就是11.18-11.20的早餐三天重排'); self.assertIn('3 餐',r['text']); self.send('确认'); self.assertEqual(len(self.bc.calls),3)
     def test_single(self):
         self.send('重新生成第一个方案第二天的午餐，其他餐次保持不变'); self.assertEqual(self.targets(),[(11,1105)])
+    def test_full_chinese_date_and_later_plan(self):
+        self.assertIn('请选',self.send('帮我重新生成2026年11月18日的午餐')['text'])
+        self.state.pop(rf.KEY,None);self.bc.calls.clear()
+        self.send('帮我重新生成方案3中2026年11月18日的午餐')
+        self.assertEqual(self.targets(),[(13,1301)])
+    def test_new_plan_detection(self):
+        self.assertTrue(rf.is_new_plan_request('再帮我安排11月23日的午餐'))
+        self.assertFalse(rf.is_new_plan_request('重新安排方案1的午餐'))
     def test_cancel(self):
         self.send('重新生成全部早餐'); self.send('取消'); self.assertFalse(self.bc.calls); self.assertNotIn(rf.KEY,self.state)
     def test_stale(self):

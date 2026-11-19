@@ -2,6 +2,7 @@
 import re
 from datetime import date, timedelta
 import local_edits as le
+import target_resolver as tr
 
 KEY = 'v21_pending_regen'
 NUMBERS = {'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10, **{c:i for i,c in enumerate('①②③④⑤⑥⑦⑧⑨⑩',1)}}
@@ -20,7 +21,16 @@ def number(value):
 
 
 def plan_indices(message):
-    return list(dict.fromkeys(number(m.group(1) or m.group(2)) for m in PLAN_RE.finditer(message)))
+    return tr.plan_indices(message)
+
+def is_new_plan_request(message):
+    """A fresh plan request takes ownership from any unfinished edit task."""
+    msg=(message or '').strip()
+    asks=bool(re.search(r'安排|生成|推荐|规划|制定|配(?:一|个|份|套)',msg))
+    scope=bool(re.search(r'方案|三餐|食谱|菜单|早餐|午餐|晚餐|早晚餐|一周|七天|\d+天|\d{1,2}[月./]\d{1,2}',msg))
+    existing=bool(PLAN_RE.search(msg) or DAY_RE.search(msg) or re.search(r'其他.+不变|只(?:改|换|重排)|替换|换掉',msg))
+    explicit_new=bool(re.search(r'新(?:的)?(?:方案|食谱|菜单)|再(?:帮我)?安排|另(?:外|一份)',msg))
+    return asks and scope and (explicit_new or not existing)
 
 
 def plan_label(plan, index):
@@ -36,30 +46,7 @@ def reply(text, plans=()):
 
 
 def scope_dates(msg, slots):
-    """Resolve date strings against actual plan dates, not inferred calendar years."""
-    days = sorted({s['slot_date'] for s in slots})
-    if not days: return []
-    day = DAY_RE.search(msg)
-    if day:
-        i = number(day.group(1))
-        if not 1 <= i <= len(days): raise ValueError('该方案没有所指定的第几天')
-        return [days[i-1]]
-    if '明天' in msg: return [(date.today()+timedelta(days=1)).isoformat()]
-    if '今天' in msg: return [date.today().isoformat()]
-    spans = re.findall(r'(?<!\d)(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[月./]\d{1,2}日?)(?!\d)',msg)
-    if not spans: return None
-    parsed=[]
-    for t in spans:
-        if re.fullmatch(r'\d{4}-\d{1,2}-\d{1,2}',t):
-            y,m,d = map(int,t.split('-')); parsed.append(date(y,m,d).isoformat()); continue
-        m,d = map(int,re.findall(r'\d+',t))
-        matches = [day for day in days if date.fromisoformat(day).month==m and date.fromisoformat(day).day==d]
-        if len(matches)!=1: raise ValueError('日期不在该方案内或年份不明确，请给出完整日期')
-        parsed.append(matches[0])
-    if len(parsed)==2 and re.search(r'到|至|~|～|—|\d\s*-\s*\d',msg):
-        if parsed[0]>parsed[1]: raise ValueError('日期范围顺序有误')
-        return [d for d in days if parsed[0]<=d<=parsed[1]]
-    return list(dict.fromkeys(parsed))
+    return tr.scope_dates(msg,slots)
 
 
 def _load(bc, state):
@@ -165,12 +152,14 @@ def handle(bc,state,message):
     if all_scope: pending['all_days']=True
     state[KEY]=pending
     try: targets=_targets(plans,pending)
-    except ValueError as exc: return reply(str(exc)+'。请明确日期。')
+    except ValueError as exc: return reply(str(exc))
     # Ambiguous plan choice must be explicit, except when only one plan contains the requested meal.
     options=sorted({t['index'] for t in targets})
     if len(options)>1 and not pending.get('indices'):
         return reply('请选要重排的方案，回复“方案1”“方案2”等，或“全部”。\n'+'\n'.join(plan_label(p,i) for i,p in enumerate(plans,1) if i in options))
-    if not targets: return reply('选定范围内没有该餐次。请重新指定方案或日期。\n'+'\n'.join(plan_label(p,i) for i,p in enumerate(plans,1)))
+    if not targets:
+        if dated or indices:state.pop(KEY,None)
+        return reply('选定范围内没有该餐次或日期。请重新指定方案或日期。\n'+'\n'.join(plan_label(p,i) for i,p in enumerate(plans,1)))
     if any(t['status']!='candidates' for t in targets):
         return reply('目标包含已固定或不可修改的方案，尚未修改任何餐位。请指定待确认方案。')
     if len(targets)>1 and not (pending.get('all_days') or pending.get('date_text')):

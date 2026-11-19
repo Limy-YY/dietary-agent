@@ -228,6 +228,7 @@ export function normalizeMealCard(payload) {
   return {
     type: 'meal_card',
     raw_id: str(pick(p, 'meal_plan_id'), ''),
+    display_index: numOrNull(pick(p, 'display_index')),
     plan_type: planType,
     plan_key: planTypeKey(planType),
     scope: planTypeKey(planType),

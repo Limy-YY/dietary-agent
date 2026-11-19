@@ -94,6 +94,7 @@ def meal_card_block(plan: dict) -> dict:
         "type": "meal_card",
         # v1.2 契约字段（前端 normalizeMealCard 读这些；后端 _serialize_plan 已是同构格式）
         "meal_plan_id": real_plan_id,
+        "display_index": plan.get("display_index"),
         "plan_type": plan.get("plan_type", "日"),
         "status": plan.get("status", "draft"),
         "start_date": plan.get("start_date", ""),
