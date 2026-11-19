@@ -124,7 +124,6 @@ import { useUi } from '@/composables/useUi.js'
 import { useChatStore } from '@/stores/chat.js'
 
 const props = defineProps({ block: { type: Object, required: true } })
-const emit = defineEmits(['phrase'])
 const ui = useUi()
 const chat = useChatStore()
 
@@ -143,8 +142,8 @@ const scope = computed(() => props.block.plan_key || props.block.scope || 'day')
 const isMultiDay = computed(() => days.value.length > 1)
 
 const title = computed(() => {
-  if (props.block.title) return props.block.title
-  return isMultiDay.value ? '📅 多日食谱' : scope.value === 'meal' ? '🍱 单餐搭配' : '🗓️ 今日食谱'
+  const base = props.block.title || (isMultiDay.value ? '📅 多日食谱' : scope.value === 'meal' ? '🍱 单餐搭配' : '🗓️ 今日食谱')
+  return props.block.display_index ? `方案${props.block.display_index} · ${base}` : base
 })
 const subtitle = computed(() => props.block.subtitle || '按你的档案估算份量')
 
@@ -205,7 +204,7 @@ async function pickCandidate(c) {
   const prev = pickedId.value
   pickedCandidateId.value = c.candidate_id // 乐观选中，失败回退
   try {
-    const ok = await chat.silentAction(PHRASE.choose(label, c.name))
+    const ok = await chat.silentAction(PHRASE.choose(label, c.name), actionContext('choose_candidate', slots.value[0], c))
     if (!ok) pickedCandidateId.value = prev
   } catch (e) {
     ElMessage(e.message || '选用失败，请重试')
@@ -218,7 +217,7 @@ async function swap(slot) {
   const label = slot.label || MEAL_LABELS[slot.meal_type] || '这一餐'
   swapping.value = slot.slot_id
   try {
-    await chat.silentAction(PHRASE.swap(label))
+    await chat.silentAction(PHRASE.swap(label), actionContext('swap_candidate', slot))
   } catch (e) {
     ElMessage(e.message || '换候选失败，请重试')
   } finally {
@@ -226,14 +225,27 @@ async function swap(slot) {
   }
 }
 
-function onConfirm() {
+function actionContext(action, slot = null, candidate = null) {
+  return {
+    meal_plan_id: props.block.raw_id,
+    meal_slot_id: slot?.slot_id,
+    candidate_id: candidate?.candidate_id,
+    action
+  }
+}
+
+async function onConfirm() {
   if (isFixed.value) return
-  emit('phrase', PHRASE.confirm)
+  try {
+    await chat.silentAction(PHRASE.confirm, actionContext('confirm'))
+  } catch (e) {
+    ElMessage(e.message || '确认失败，请重试')
+  }
 }
 
 function onReason() {
   if (reasonPoints.value.length) reasonOpen.value = true
-  else emit('phrase', PHRASE.reason)
+  else chat.send(PHRASE.reason, actionContext('explain'))
 }
 
 function openSlotRecipe(slot) {

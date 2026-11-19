@@ -199,6 +199,7 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
         "conversation_id": str(conversation_id),
         "token": token,
         "history": history or [],
+        "context": req.context or {},
         "silent": bool(req.silent),
     }
     timeout = httpx.Timeout(settings.AGENT_TIMEOUT_S, connect=10.0)
@@ -292,7 +293,7 @@ def agent_chat(
                         )
                         finish_reason = "error"
                     else:
-                        meal_plan_id = payload["plan_id"]
+                        meal_plan_id = payload["meal_plan_id"]
                         yield _sse("artifact", {"type": "current_plan", "payload": payload})
 
                 if finish_reason != "error":
@@ -303,7 +304,8 @@ def agent_chat(
                             elif event == "artifact":
                                 # Agent 生成方案后下发的卡片：把 payload.plan_id 回填到 done，
                                 # 前端靠 done.meal_plan_id 跳转 / 换候选 / 固定；不回填就一直是 null
-                                pid = (data.get("payload") or {}).get("plan_id")
+                                artifact_payload = data.get("payload") or {}
+                                pid = artifact_payload.get("meal_plan_id") or artifact_payload.get("plan_id")
                                 if meal_plan_id is None and pid not in (None, "", 0):
                                     try:
                                         meal_plan_id = int(pid)
@@ -318,11 +320,16 @@ def agent_chat(
                     except httpx.HTTPError as e:
                         # Agent 未启动 / 网络不可达：降级为兜底文本，前端可继续演示
                         logger.warning("Agent 服务不可达（%s），降级为兜底回复", type(e).__name__)
-                        assistant_text.append(_PLACEHOLDER_REPLY)
-                        yield _sse(
-                            "message",
-                            {"type": "text", "content": _PLACEHOLDER_REPLY},
-                        )
+                        if req.silent:
+                            finish_reason = "error"
+                            yield _sse("error", {"code": int(BizCode.AGENT_CALL_FAILED),
+                                                 "message": "Agent 服务不可达，未获操作成功确认，请刷新方案核对。"})
+                        else:
+                            assistant_text.append(_PLACEHOLDER_REPLY)
+                            yield _sse(
+                                "message",
+                                {"type": "text", "content": _PLACEHOLDER_REPLY},
+                            )
         except BizError as e:
             yield _sse("error", {"code": int(e.code), "message": e.message})
             finish_reason = "error"

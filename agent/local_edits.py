@@ -1,6 +1,7 @@
 """Resolve real identities, never default to the first matching slot in a multi-plan/day context."""
 from datetime import date, timedelta
 import re
+import target_resolver as tr
 
 
 def plan_id(plan):
@@ -8,14 +9,18 @@ def plan_id(plan):
 
 
 def remember(state, plan, reset=False):
-    plans = [] if reset else list(state.get('v21_plans') or [])
+    # reset is retained for old callers but intentionally ignored: numbering is
+    # stable for the lifetime of this conversation.
+    plans = list(state.get('v21_plans') or [])
     if plan_id(plan) is None: raise ValueError('后端未返回真实方案 ID')
     for i, item in enumerate(plans):
-        if plan_id(item) == plan_id(plan):
-            plans[i] = plan; break
-    else: plans.append(plan)
+        if str(plan_id(item)) == str(plan_id(plan)):
+            plan['display_index']=item.get('display_index',i+1);plans[i] = plan; break
+    else:
+        plan['display_index']=len(plans)+1;plans.append(plan)
     state['v21_plans'] = plans
     state['current_plan'] = plan
+    state['active_plan_id'] = plan_id(plan)
 
 
 def registry(state):
@@ -62,16 +67,16 @@ def explicit_target(message, args):
     args = dict(args)
     numbers = {"一":1,"二":2,"两":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10}
     def number(value): return int(value) if value.isdigit() else numbers[value]
-    from regenerate_flow import plan_indices
-    indices = plan_indices(message)
+    indices = tr.plan_indices(message)
     if len(indices)>1:
         raise ValueError('请唯一指定一份方案')
     args['plan_index'] = indices[0] if indices else None
     m = re.search(r"第\s*([0-9]+|[一二两三四五六七八九十])\s*天",message)
     args['day_index'] = number(m.group(1)) if m else None
-    m = re.search(r"\d{4}-\d{2}-\d{2}",message)
+    m = re.search(r"\d{4}-\d{1,2}-\d{1,2}|\d{4}年\d{1,2}月\d{1,2}日",message)
     args['slot_date'] = m.group(0) if m else None
-    if '明天' in message: args['slot_date'] = (date.today()+timedelta(days=1)).isoformat()
+    if '后天' in message: args['slot_date'] = (date.today()+timedelta(days=2)).isoformat()
+    elif '明天' in message: args['slot_date'] = (date.today()+timedelta(days=1)).isoformat()
     elif '今天' in message: args['slot_date'] = date.today().isoformat()
     # Month/day without year is not safe to infer across years; ask for exact date if needed.
     m = re.search(r"(早餐|午餐|晚餐|早饭|午饭|晚饭)",message)
@@ -81,10 +86,15 @@ def explicit_target(message, args):
 
 def execute(bc,state,name,args,message):
     args = explicit_target(message,args)
-    cached = resolve_plan(state,args)
-    plan = bc.get_meal_plan(plan_id(cached))
+    cached_plans=registry(state)
+    plans=[]
+    for cached in cached_plans:
+        actual=bc.get_meal_plan(plan_id(cached))
+        if str(plan_id(actual))!=str(plan_id(cached)):raise ValueError('后端返回的方案 ID 不一致，已停止操作')
+        plans.append(actual)
+    target=tr.resolve(plans,message,args)
+    plan,slot=target.plan,target.slot
     if plan.get('status') != 'candidates': raise ValueError('已固定或非待确认方案不能直接修改')
-    slot = resolve_slot(plan,args)
     payload = dict(meal_plan_id=plan_id(plan),meal_slot_id=slot['meal_slot_id'],expected_candidate_id=slot['selected_candidate_id'],
                    exclude_ingredients=args.get('exclude_ingredients') or [],soft_avoid=args.get('soft_avoid') or [])
     if name == 'regenerate_slot':

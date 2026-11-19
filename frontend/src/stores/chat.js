@@ -164,7 +164,7 @@ export const useChatStore = defineStore('chat', () => {
    * 发送一条消息（用户输入或卡片固定话术），走 SSE 三事件流。
    * 不在此处做任何业务判断：正文与结构化边车都只按后端下发渲染。
    */
-  async function send(text) {
+  async function send(text, context = null) {
     const content = String(text || '').trim()
     if (!content) {
       ElMessage('先写一句你想吃什么')
@@ -219,6 +219,7 @@ export const useChatStore = defineStore('chat', () => {
       await streamChat({
         conversationId: session.conversationId,
         message: content,
+        context,
         signal: controller.signal,
         onEvent: (evt) => {
           const payload = evt.data && typeof evt.data === 'object' ? evt.data : {}
@@ -313,7 +314,7 @@ export const useChatStore = defineStore('chat', () => {
    * 用于「换一换 / 选用候选」这类轻量按钮操作——聊天流不产生任何消息，
    * 仅卡片 spinner + 原地刷新；失败时抛错，由调用方 toast 提示。
    */
-  async function silentAction(text) {
+  async function silentAction(text, context = null) {
     const content = String(text || '').trim()
     if (!content || sending.value) return false
 
@@ -324,10 +325,13 @@ export const useChatStore = defineStore('chat', () => {
     abortController.value = controller
 
     let errorMsg = ''
+    let completed = false
+    let matchingCard = false
     try {
       await streamChat({
         conversationId: session.conversationId,
         message: content,
+        context,
         signal: controller.signal,
         silent: true,
         onEvent: (evt) => {
@@ -335,12 +339,17 @@ export const useChatStore = defineStore('chat', () => {
           // 只消费方案卡，丢弃正文文本（静默，不产生对话气泡）
           if (evt.event === 'artifact' && payload.type === 'meal_card') {
             const block = normalizeArtifact(payload.type, payload.payload || {})
-            replaceMealCardInPlace(session, block)
-            session.updatedAt = new Date().toISOString()
+            if (!context?.meal_plan_id || String(block.raw_id) === String(context.meal_plan_id)) {
+              matchingCard = true
+              replaceMealCardInPlace(session, block)
+              session.updatedAt = new Date().toISOString()
+            }
           }
-          if (evt.event === 'done' && payload.conversation_id) {
-            session.conversationId = payload.conversation_id
+          if (evt.event === 'done') {
+            if (payload.conversation_id) session.conversationId = payload.conversation_id
+            completed = payload.finish_reason === 'stop'
           }
+          if (evt.event === 'clarify') errorMsg = payload.question || '需要补充信息'
           if (evt.event === 'error') {
             errorMsg = payload.message || '操作失败'
           }
@@ -348,8 +357,9 @@ export const useChatStore = defineStore('chat', () => {
       })
 
       if (errorMsg) throw new Error(errorMsg)
-      // 换候选/选用只改「草稿候选」的选中项，不影响固定方案/食材清单/历史/报告，
-      // 故不触发全局面板刷新（否则点「换一换」右侧工具栏会整体重载）。
+      if (!completed || !matchingCard) throw new Error('未获操作成功确认，请刷新方案核对。')
+      // 确认会影响当前方案、清单和历史；换候选/选用只更新原卡片。
+      if (context?.action === 'confirm') usePanelStore().bump()
       return true
     } catch (e) {
       if (e.name === 'AbortError' || e.code === 'CANCELED') return false
