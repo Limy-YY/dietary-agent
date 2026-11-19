@@ -385,3 +385,34 @@ def test_plan_dates_truncated_by_max_slots():
     days = plan_dates("2026-11-19", "2026-12-19", limit=7)
     assert days == ["2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22",
                     "2026-11-23", "2026-11-24", "2026-11-25"]
+
+
+# ---------------------------------------------------------------- 8. 过敏原词表映射缺口（BUG-028）
+
+
+@pytest.mark.xfail(
+    reason="BUG-028：前端「海鲜」与数据细类（鱼类/软体贝类/甲壳类水产）无映射，修复后本组转 XPASS 并摘掉 xfail",
+    strict=False,
+)
+@pytest.mark.parametrize("strict_allergen", ["鱼类", "软体贝类", "甲壳类水产"])
+def test_seafood_allergy_blocks_fine_grained_allergen(strict_allergen):
+    """前端过敏原选项只有「海鲜」，数据侧是三类细标签，别名表缺映射 → 海鲜过敏全线放行。
+
+    `candidates.py` 的 aliases 是函数内硬编码字典，只覆盖 鱼/牛奶/乳制品/奶/蛋/虾/蟹/贝类/大豆/黄豆/花生，
+    没有「海鲜」，而 ProfileModal 的 ALLERGY_OPTIONS 只有 ['花生','牛奶','海鲜','鸡蛋','麸质','无']。
+    """
+    tastes = _targets(allergies=["海鲜"])
+    facts = make_dish(name=f"清蒸{strict_allergen}菜", ingredient_names=["主料"],
+                      strict_allergens=[strict_allergen])
+    assert "allergen:海鲜" in hard_filter_reasons(facts, tastes)
+
+
+@pytest.mark.xfail(
+    reason="BUG-028：麸质与小麦在别名表缺双向映射（库内两种写法并存），修复后转 XPASS",
+    strict=False,
+)
+def test_gluten_allergy_blocks_wheat_tagged_dish():
+    """用户勾「麸质」时，标签为「小麦」的菜（白馒头/面包/清汤面/疙瘩汤）也应硬排除。"""
+    tastes = _targets(allergies=["麸质"])
+    facts = make_dish(name="白馒头", ingredient_names=["小麦粉"], strict_allergens=["小麦"])
+    assert "allergen:麸质" in hard_filter_reasons(facts, tastes)
