@@ -3,20 +3,18 @@
 口径来源：
 - REST 统一包裹 {code, message, data}（backend/app/core/response.py）
 - 错误码分段 0 / 10xx / 20xx / 3001（backend/app/core/errors.py）
-- SSE 事件（docs：Agent 输出契约 v1.2；backend/app/routers/chat.py 现为占位实现，
-  仅 session/message/done，artifact 与 clarify 尚未接线——本模块按 v1.2 全集解析，
-  供前端 mock 与后端补齐后回归共用）。
+- SSE 事件（frontend/docs/agent-output-contract.md 与 backend/app/routers/chat.py）。
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 
-# v1.2 SSE 事件全集
-EVENT_NAMES = {"session", "message", "artifact", "clarify", "done", "error"}
+# v1.2 SSE 事件全集；conversation_id 由 done 下发，不再发 session。
+EVENT_NAMES = {"message", "artifact", "status", "clarify", "done", "error"}
 
 # 允许出现在 data 里的错误码（与 errors.py 一致）
-ERROR_CODES = {1001, 1002, 1003, 1004, 2001, 2002, 2003, 2004, 3001}
+ERROR_CODES = {1001, 1002, 1003, 1004, 2001, 2002, 2003, 2004, 2005, 2006, 3001}
 
 
 @dataclass
@@ -75,7 +73,7 @@ def unwrap_response(payload: dict) -> tuple[int, str, object]:
 
 
 def check_stream(events: list[SseEvent]) -> CheckResult:
-    """校验一次对话流：事件名合法、首帧 session、收尾 done、clarify 必须追问、error 必须带合法错误码。"""
+    """校验一次对话流：事件名合法、收尾 done、clarify 必须追问、error 必须带合法错误码。"""
     r = CheckResult()
     if not events:
         r.violations.append(ContractViolation("stream", "事件流为空"))
@@ -99,8 +97,6 @@ def check_stream(events: list[SseEvent]) -> CheckResult:
             if "content" not in ev.data:
                 r.violations.append(ContractViolation(tag, "message 事件缺 content 字段"))
 
-    if events[0].name != "session":
-        r.violations.append(ContractViolation("stream", f"首帧必须是 session，实际是 {events[0].name!r}"))
     if events[-1].name != "done":
         r.violations.append(ContractViolation("stream", f"收尾必须是 done，实际是 {events[-1].name!r}"))
     return r

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date, timedelta
+import hashlib
+import random
 
 from .balance import apply_balance, build_micro_hints, compute_balance
 from .candidates import build_candidates, diversify, hard_filter_reasons, hard_budget_failures
@@ -36,7 +38,12 @@ from .models import (
 from .repository import RuleEngineDataSource
 from .targets import compute_targets
 from .quality import dish_roles, repetition_cost, selected
-from .meal_templates import profile as culinary_profile, template_for, selection_key
+from .meal_templates import (
+    non_staple_base_ids,
+    profile as culinary_profile,
+    template_for,
+    selection_key,
+)
 
 __all__ = ["generate_plan", "plan_dates", "clone_candidate"]
 
@@ -167,6 +174,34 @@ def _fill_copy(candidate: Candidate, target, targets: Targets) -> Candidate:
     return candidate
 
 
+def _vary_equivalent_pool(pool, target, same_day, seed, slot_date, meal_type):
+    """Shuffle only a near-best equivalent band, never the whole candidate pool."""
+    if seed is None or len(pool) < 2:
+        return pool
+    from .practical_quality import candidate_priority
+    best = pool[0]
+    best_priority = candidate_priority(best)[:3]
+    best_deviation = abs(best.totals['kcal']-target.kcal)/max(target.kcal,1)
+    best_band = 0 if best_deviation<=.15 else 1 if best_deviation<=.25 else 2 if best_deviation<=.40 else 3
+    used = set().union(*(non_staple_base_ids(c) for c in same_day)) if same_day else set()
+    best_overlap = bool(non_staple_base_ids(best)&used)
+    equivalent=[]
+    for candidate in pool[:24]:
+        deviation=abs(candidate.totals['kcal']-target.kcal)/max(target.kcal,1)
+        band=0 if deviation<=.15 else 1 if deviation<=.25 else 2 if deviation<=.40 else 3
+        if (candidate_priority(candidate)[:3]==best_priority and band==best_band
+                and bool(non_staple_base_ids(candidate)&used)==best_overlap
+                and candidate.score<=best.score+.30):
+            equivalent.append(candidate)
+    if len(equivalent)<2:
+        return pool
+    material=f'{seed}:{slot_date}:{meal_type}'.encode()
+    slot_seed=int.from_bytes(hashlib.sha256(material).digest()[:8],'big')
+    random.Random(slot_seed).shuffle(equivalent)
+    chosen={id(c) for c in equivalent}
+    return [*equivalent,*(c for c in pool if id(c) not in chosen)]
+
+
 # ---------------------------------------------------------------- 主流程
 
 
@@ -244,17 +279,29 @@ def generate_plan(
             today_slots = [s for s in slots if s.slot_date == slot_date and selected(s) is not None]
             daily_energy_carry = sum(s.target.kcal-selected(s).totals['kcal'] for s in today_slots
                                      if selected(s).totals.get('kcal') is not None)
-            protein_previous = [c for s in slots if s.meal_type in ("午", "晚") and (c := selected(s)) is not None]
+            # Breakfast protein must influence lunch/dinner rotation as well;
+            # otherwise egg can become the main protein in all three meals.
+            # Keep earlier lunch/dinner history for multi-day rotation too.
+            protein_previous = [c for s in slots
+                                if (s.slot_date == slot_date or s.meal_type in ("午", "晚"))
+                                and (c := selected(s)) is not None]
             pool.sort(key=lambda c: selection_key(c, target, previous,
                 repetition_cost(c, previous),
-                protein_previous=protein_previous,daily_energy_carry=daily_energy_carry))
+                protein_previous=protein_previous,daily_energy_carry=daily_energy_carry,
+                same_day=today))
+            pool = _vary_equivalent_pool(
+                pool, target, today, request.variation_seed, slot_date, meal_type
+            )
             picked = diversify(pool, request.candidates_per_slot, start_id=1)
             from .practical_quality import protein_rotation, purchase_credit, candidate_priority
             for c in picked:
+                used_today = set().union(*(non_staple_base_ids(x) for x in today)) if today else set()
                 c.score_breakdown['context']={'repetition':round(repetition_cost(c,previous),4),
                     'protein_rotation':round(protein_rotation(c,protein_previous),4) if meal_type in ('午','晚') else 0.,
                     'purchase_credit':round(purchase_credit(c,previous),4),
-                    'daily_energy_carry_kcal':round(daily_energy_carry,2),'structure_tier':candidate_priority(c)[1]}
+                    'daily_energy_carry_kcal':round(daily_energy_carry,2),
+                    'same_day_non_staple_overlap':sorted(non_staple_base_ids(c)&used_today),
+                    'structure_tier':candidate_priority(c)[1]}
             for cand in picked:
                 _fill_copy(cand, target, targets)
             if len(picked) < 2:

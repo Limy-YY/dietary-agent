@@ -413,6 +413,29 @@ def _source_footer() -> str:
     return f"\n\n> 📚 数值口径来源：{names}"
 
 
+def _rag_material(items: list[dict], *, limit: int = 5) -> tuple[str, str]:
+    """为真实检索结果分配引用编号，并由程序组装来源列表。"""
+    records: list[str] = []
+    sources: list[str] = []
+    for index, item in enumerate((items or [])[:limit], 1):
+        title = str(item.get("title") or item.get("source") or f"资料 {index}").strip()
+        content = str(item.get("content") or "").strip()
+        source = str(item.get("source") or title).strip()
+        source_id = str(item.get("source_id") or item.get("doc_id") or "").strip()
+        source_url = str(item.get("source_url") or "").strip()
+        records.append(
+            f"[{index}] 标题：{title}\n内容：{content[:1200]}\n"
+            f"来源：{source}\n来源编号：{source_id or '未提供'}"
+        )
+        label = source
+        if source_id:
+            label += f"（{source_id}）"
+        sources.append(f"- [{index}] [{label}]({source_url})" if source_url else f"- [{index}] {label}")
+    material = "\n\n".join(records)
+    footer = "\n\n### 来源\n" + "\n".join(sources) if sources else ""
+    return material, footer
+
+
 def _explain_material(plan: dict) -> dict:
     """从当前方案抽取「为什么这样搭」的解释素材（只取后端/规则引擎给的数据，不自行计算）。"""
     meals = []
@@ -744,7 +767,11 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
         plan = st.get("current_plan")
         if not plan or plan.get("status") != "fixed":
             return {"summary": "方案还没确认，暂时没有食材清单，需先确认方案。"}
-        return {"summary": "食材清单已按类别整理好，可打开右侧工具栏「食材清单」面板查看、边买边勾。"}
+        shopping = bc.get_shopping_list(le.plan_id(plan))
+        return {
+            "summary": "已根据最终确认方案生成食材清单。",
+            "blocks": [blocks.shopping_list_block(shopping)],
+        }
 
     return {"summary": f"未知工具：{name}"}
 
@@ -1080,21 +1107,36 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
             le.remember(st,updated_plan)
             st["plans"].insert(0, dict(updated_plan))
 
+            analyze_requested = bool(re.search(r"分析|营养结构|营养报告|复盘", message))
+            report = None
+            report_error = None
+            if analyze_requested:
+                _st("正在分析营养结构")
+                try:
+                    report = bc.nutrition_analysis(int(updated_plan["meal_plan_id"]))
+                except Exception as exc:
+                    report_error = str(exc)
+
             fallback = (
                 f"已确认，方案已生效。{'已取代同期的旧方案。' if replace else ''}\n"
-                "食材清单已按类别整理好，点开右侧工具栏的「食材清单」即可查看，还能边买边勾选。"
+                + ("营养结构报告也已按最终方案生成。" if report is not None else "")
+                + (f"方案已确认，但营养分析未生成：{report_error}" if report_error else "")
+                + ("" if analyze_requested else "食材清单已按类别整理好，可在右侧「食材清单」查看。")
             )
             context = (
                 "动作：确认/固定当前方案。\n"
                 f"是否取代同期的旧方案：{'是' if replace else '否'}\n"
-                "引导：方案已生效（餐卡翻「已生效」）；食材清单已生成，右侧「食材清单」面板可查看并边买边勾。"
+                f"营养分析：{'已成功生成' if report is not None else ('生成失败：' + report_error if report_error else '用户未请求')}。"
             )
             narration = _narrate(message, context, fallback, history)
+            result_blocks = [blocks.meal_card_block(updated_plan)]
+            if report is not None:
+                result_blocks.append(blocks.report_block(report))
             return {
                 "narration": narration,
                 # 【改进】发带 fixed 状态的餐卡：前端按 meal_plan_id 就地更新原卡（翻成「已生效」并禁用按钮），
                 # 不在对话里追加新卡；清单只引导去右侧工具栏。
-                "blocks": [blocks.meal_card_block(updated_plan)]
+                "blocks": result_blocks,
             }
         except bc.BackendError as e:
             if getattr(e, "code", None) == 2005:  # PLAN_STATE_CONFLICT：同期已有固定方案
@@ -1201,9 +1243,10 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         try:
             r = bc.reverse_nutrition(message, 5)
             items = r.get("items", [])
-            content = "；".join((it.get("content") or it.get("title") or "")[:120] for it in items[:3])
+            content, source_footer = _rag_material(items)
         except Exception:
             content = ""
+            source_footer = ""
 
         fallback = "单看症状无法下结论，建议先就医检查；饮食上注意均衡，可结合档案做针对性调整（仅供参考，不构成诊断）。"
         narration = _llm_reply(
@@ -1215,7 +1258,7 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         # 【修复 BUG-026】只有真的检索到线索才可标注「来自知识库」；检索为空时不得声称有文献来源
         # （可溯源/零编造铁律）。后缀作为确定性免责声明在流式后追加，正文由 LLM 组织。
         if content:
-            suffix = "\n\n> 📚 以上营养线索来自知识库检索，仅供参考、不构成医学诊断，如有不适请及时就医。"
+            suffix = source_footer + "\n\n> 以上营养线索仅供参考、不构成医学诊断，如有不适请及时就医。"
         else:
             suffix = "\n\n(以上为通用营养学常识，未检索到具体文献，仅供参考、不构成医学诊断，如有不适请及时就医。)"
         return {"narration": narration, "suffix": suffix, "blocks": []}
@@ -1253,21 +1296,28 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         try:
             r = bc.rag_query(message, 5)
             items = r.get("items", [])
-            content = "；".join((it.get("content") or it.get("title") or "")[:160] for it in items[:3])
-            sources = items
+            content, source_footer = _rag_material(items)
         except Exception:
             content = ""
-            sources = []
+            source_footer = ""
 
-        fallback = "这个问题建议结合权威膳食指南理解；如需针对性建议，我可以按你的档案给出更具体的方案。"
+        if not content:
+            return {
+                "text": "知识库暂未检索到足够依据，我不会为这个问题编造来源。你可以换一个更具体的食材、营养素或人群条件再问。",
+                "blocks": [],
+            }
+
+        fallback = "已根据知识库检索结果整理回答，请对照文末来源核验。"
         narration = _llm_reply(
-            SYSTEM_INSTRUCTION + "\n用检索到的资料回答，结论标注出处，注意双口径（生重/成品）与油盐话术。" + _FMT,
-            f"问题：{message}\n检索资料：{content or '无'}",
+            SYSTEM_INSTRUCTION
+            + "\n只能使用下方编号资料回答，在对应结论后标注 [1] [2] 形式的引用。"
+              "不得生成新的文献名、来源编号或链接。资料不足时要明说局限。"
+              "注意双口径（生重/成品）与油盐话术。" + _FMT,
+            f"问题：{message}\n\n编号检索资料：\n{content}",
             fallback,
             history,
         )
-        # 【修改】停用 rag_sources 卡片，来源通过 LLM 文本呈现
-        return {"narration": narration, "blocks": []}
+        return {"narration": narration, "suffix": source_footer, "blocks": []}
 
     # 兜底（理论上不可达：classify 的 intent 均有分支，chat/plan_*/shopping_list 已路由到 _agent_loop）
     return {"text": "这个我暂时答不好。可以让我排今天的三餐、换候选、或生成膳食报告。", "blocks": []}

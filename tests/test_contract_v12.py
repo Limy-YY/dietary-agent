@@ -38,24 +38,18 @@ def expect(cond, msg=""):
 
 
 # ---------- G-A：SSE 三类事件解析 ----------
-FIXTURE_OK = """event: session
-data: {"conversation_id": 12}
-
-event: message
+FIXTURE_OK = """event: message
 data: {"type": "text", "content": "先确认一下你的过敏原"}
 
 event: artifact
-data: {"kind": "meal_plan", "plan_id": 3001}
+data: {"type": "meal_card", "meal_plan_id": 3001}
 
 event: done
 data: {"conversation_id": 12}
 
 """
 
-FIXTURE_CLARIFY = """event: session
-data: {"conversation_id": 7}
-
-event: clarify
+FIXTURE_CLARIFY = """event: clarify
 data: {"question": "减脂目标是每周 0.5kg 还是 1kg？", "options": ["0.5kg", "1kg"]}
 
 event: done
@@ -66,9 +60,9 @@ data: {"conversation_id": 7}
 
 def a1_parse_three_kinds():
     evs = parse_sse(FIXTURE_OK)
-    expect([e.name for e in evs] == ["session", "message", "artifact", "done"],
+    expect([e.name for e in evs] == ["message", "artifact", "done"],
            f"事件序列不符: {[e.name for e in evs]}")
-    expect(evs[2].data["plan_id"] == 3001, "artifact 的 plan_id 应为 3001")
+    expect(evs[1].data["meal_plan_id"] == 3001, "artifact 的 meal_plan_id 应为 3001")
     r = check_stream(evs)
     expect(r.ok, f"合法流被误判: {r.violations}")
 
@@ -84,17 +78,12 @@ def a2_clarify_must_ask():
 
 
 def a3_stream_must_frame():
-    r = check_stream(parse_sse("event: message\ndata: {\"content\": \"hi\"}\n\n"))
-    expect(not r.ok, "缺 session 首帧应判失败")
     r2 = check_stream(parse_sse(FIXTURE_OK.replace("event: done\ndata: {\"conversation_id\": 12}\n\n", "")))
     expect(not r2.ok, "缺 done 收尾应判失败")
 
 
 def a4_error_carries_valid_code():
-    stream = """event: session
-data: {"conversation_id": 3}
-
-event: error
+    stream = """event: error
 data: {"code": 2003, "message": "AI 解释暂不可用"}
 
 event: done
@@ -139,23 +128,23 @@ def b4_code_in_table():
 
 
 def c1_field_names():
-    artifact = {"kind": "meal_plan", "plan_id": 3001, "is_staple": True, "kcal_per_100g": 120.5}
-    expect("plan_id" in artifact and "meal_plan_id" not in artifact, "统一用 plan_id，不是 meal_plan_id")
-    expect(isinstance(artifact["is_staple"], bool), "is_staple 必须是布尔")
-    expect("kcal_per_100g" in artifact, "菜品级热量字段为 kcal_per_100g（菜品级 kcal 口径）")
+    artifact = {"type": "meal_card", "meal_plan_id": 3001, "goal_energy_kcal": 1800.0}
+    expect("meal_plan_id" in artifact and "plan_id" not in artifact, "统一用 meal_plan_id，不是旧 plan_id")
+    expect("is_staple" not in artifact, "v1.2 不再暴露 is_staple")
+    expect(isinstance(artifact["goal_energy_kcal"], (int, float)), "营养数值必须是 number 或 null")
 
 
 def main():
     verbose = "-v" in sys.argv
-    case("A-1", "SSE 解析 session/message/artifact/done 四帧", a1_parse_three_kinds)
+    case("A-1", "SSE 解析 message/artifact/done 三帧", a1_parse_three_kinds)
     case("A-2", "clarify 必须携带追问字段，缺失判失败", a2_clarify_must_ask)
-    case("A-3", "流必须 session 开头、done 收尾", a3_stream_must_frame)
+    case("A-3", "流必须以 done 收尾", a3_stream_must_frame)
     case("A-4", "error 事件错误码必须在码表内", a4_error_carries_valid_code)
     case("B-1", "成功包裹解包保留 data", b1_unwrap_success)
     case("B-2", "失败包裹 data 必须为 null", b2_unwrap_error_null_data)
     case("B-3", "缺 code/message 键或 code 非 int 判失败", b3_missing_wrapper_keys)
     case("B-4", "错误码必须在 1001~3001 码表内", b4_code_in_table)
-    case("C-1", "字段命名：plan_id / is_staple / kcal_per_100g", c1_field_names)
+    case("C-1", "字段命名：meal_plan_id / goal_energy_kcal", c1_field_names)
 
     passed = sum(1 for _, ok, _ in RESULTS if ok)
     for cid, ok, err in RESULTS:

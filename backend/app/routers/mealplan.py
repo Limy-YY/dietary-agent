@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -76,6 +77,7 @@ class GenerateRequest(BaseModel):
     goal_code: str | None = None
     exclude_ingredients: list[str] = Field(default_factory=list)
     soft_avoid: list[str] = Field(default_factory=list)
+    variation_seed: int | None = None
 
 
 class SwapRequest(BaseModel):
@@ -720,6 +722,8 @@ def _generate_and_persist(
         raise BizError(BizCode.PARAM_ERROR, f"plan_type 取值非法: {plan_type}")
 
     profile = _load_engine_profile(db, user_id)
+    if req.variation_seed is None:
+        req.variation_seed = secrets.randbits(31)
     engine_request = PlanRequest(
         start_date=req.start_date.isoformat(),
         end_date=req.end_date.isoformat(),
@@ -731,6 +735,7 @@ def _generate_and_persist(
         exclude_ingredients=req.exclude_ingredients,
         soft_avoid=req.soft_avoid,
         max_slots=span * len(req.meal_types),  # 引擎默认 21 餐位，按实际跨度放宽
+        variation_seed=req.variation_seed,
     )
 
     try:
@@ -773,6 +778,21 @@ def _macro_delta(new: dict, old: dict) -> dict:
     return out
 
 
+def _next_swap_candidate(candidates, previous_id):
+    """Cycle through every ranked alternative instead of toggling the first two."""
+    ordered = sorted(
+        candidates,
+        key=lambda c: (c.rank is None, c.rank if c.rank is not None else 10**9, c.candidate_id),
+    )
+    if len(ordered) < 2:
+        return None
+    current_index = next(
+        (i for i, candidate in enumerate(ordered) if candidate.candidate_id == previous_id),
+        -1,
+    )
+    return ordered[(current_index + 1) % len(ordered)]
+
+
 @router.post("/candidate/swap")
 def swap_candidate(
     req: SwapRequest,
@@ -801,10 +821,9 @@ def swap_candidate(
                 BizCode.NOT_FOUND, f"候选不属于该餐位: {req.candidate_id}", http_status=404
             )
     else:
-        others = [c for c in slot.candidates if c.candidate_id != previous_id]
-        if not others:
+        target = _next_swap_candidate(slot.candidates, previous_id)
+        if target is None:
             raise BizError(BizCode.PARAM_ERROR, "该餐位没有其他可选候选")
-        target = others[0]
 
     if target.candidate_id == previous_id:
         raise BizError(BizCode.PARAM_ERROR, "该候选已是当前选中，无需替换")

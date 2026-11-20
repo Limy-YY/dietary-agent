@@ -135,11 +135,11 @@ def main() -> int:
                f"plan_id={pid3} 含炸/红烧菜名命中 {hits or '无'}（软偏好为降权非硬删，命中即记录不判 FAIL）；"
                f"菜名样本：{names[:80]}")
 
-    # L-04 反向营养映射命中（v1.2r4：19 条已审核启用，见 41 号脚本）
+    # L-04 反向营养映射命中（v1.2r4：41 号脚本已入库，19 条审核启用，公网库已生效）
     # 契约：symptoms 为**字符串**（schemas/agent.py:27 `symptoms: str`），按子串命中 symptom/aliases；
     # 早前传 list 会被 400 参数校验拦下（code=1001），不是后端回退。
-    # 双态自适应：41 号脚本入库前表全未激活 → 必走 keyword_fallback；入库后 → 必命中 symptom_map。
-    # 两态都被判据覆盖，避免「入库了却仍回落」被 PASS 掩盖，也避免「未入库」被误判 FAIL。
+    # 判据已收敛（Anna 2026-11-20 #16 要求）：41 生效后必须 symptom_map，回落 keyword_fallback 判 FAIL，
+    # 不再保留双态 fallback 分支——否则「映射没生效却被兜底掩盖」会被刷成假绿。
     code, rep = call("POST", "/api/agent/reverse-nutrition", {"symptoms": "乏力、掉发", "top_k": 5})
     d = rep.get("data") or {}
     method = d.get("method")
@@ -155,10 +155,10 @@ def main() -> int:
                f"method=symptom_map（41_v1.2r4 已入库）命中 乏力={has_fatigue} 掉发={has_hairloss} "
                f"items={len(titles)} note={note[:50]}")
     else:
-        ok = method == "keyword_fallback" and bool(note)
-        record("L-04", "PASS" if ok else "FAIL",
-               f"method={method}（symptom_nutrient_map 未激活，41_v1.2r4 入库后应转 symptom_map；"
-               f"当前回落兜底符合预期）items={len(titles)} note={note[:50]}")
+        # 41 已入库生效，回落兜底=映射未真正启用，判 FAIL（不再放宽为 PASS）
+        record("L-04", "FAIL",
+               f"method={method}（41_v1.2r4 已入库，应为 symptom_map；回落说明映射未生效）"
+               f"items={len(titles)} note={note[:50]}")
 
     # L-05 检索溯源：kind=doc 条目必须带 source（BUG-027，修于 4f6c937）
     # 口径（安娜 #12 建议）：只对 kind=="doc" 判溯源；nutrient_knowledge 表无 source 列，

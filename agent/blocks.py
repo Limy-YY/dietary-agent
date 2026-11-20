@@ -34,6 +34,7 @@ def _slot_view(slot: dict) -> dict:
             "micro_estimate": c.get("micro_estimate", {}),
             "oil_salt_estimate": c.get("oil_salt_estimate", {}),
             "eating_order_advice": c.get("eating_order_advice", ""),
+            "sources": c.get("sources", []),
             "dishes": c.get("dishes", []),
         }
         for c in slot.get("candidates", [])

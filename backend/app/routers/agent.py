@@ -32,6 +32,7 @@ def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
     score 启发式（可复算）：doc 每个词 title 命中 0.9 / 分类命中 0.5 / 正文命中 0.7，
     取词均值；nutrient 每个词 id 命中 0.8 / 内容命中 0.6，取词均值。接入向量 RRF 后替换。
     """
+    query = (query or "").strip()
     terms = [t for t in query.split() if t]
     if not terms:
         return []
@@ -43,19 +44,37 @@ def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
         )
 
     params = {f"w{i}": f"%{t}%" for i, t in enumerate(terms)}
+    params["query"] = query
     params["limit"] = top_k
     n = len(terms)
 
-    doc_weight = " + ".join(
+    # 中文问句通常没有空格，不能把整句当成一个 AND 关键词。
+    # 优先用知识文档中的真实 aliases 做「别名是否出现在用户问句」匹配，
+    # 例如「高血压人群怎么控盐」可命中 aliases=["高血压", "限盐"]。
+    alias_match = (
+        "EXISTS (SELECT 1 FROM jsonb_array_elements_text("
+        "COALESCE(meta_data -> 'aliases', '[]'::jsonb)) AS a(value) "
+        "WHERE length(a.value) >= 2 AND :query ILIKE '%' || a.value || '%')"
+    )
+    title_in_query = "(length(title) >= 2 AND :query ILIKE '%' || title || '%')"
+
+    term_weight = " + ".join(
         f"(CASE WHEN title ILIKE :w{i} THEN 0.9 WHEN category ILIKE :w{i} THEN 0.5 ELSE 0.7 END)"
         for i in range(n)
+    )
+    doc_weight = (
+        f"CASE WHEN {alias_match} THEN 1.0 "
+        f"WHEN {title_in_query} THEN 0.95 "
+        f"ELSE ({term_weight}) / {n}::float END"
     )
     rows = db.execute(
         text(
             f"SELECT knowledge_doc_id, title, content, category, source, source_id, "
-            f"({doc_weight}) / {n}::float AS score "
+            f"       NULLIF(meta_data ->> 'source_url', '') AS source_url, "
+            f"({doc_weight}) AS score "
             f"FROM knowledge.knowledge_doc "
-            f"WHERE NOT is_deleted AND {_where(['title', 'content', 'category'])} "
+            f"WHERE NOT is_deleted AND ("
+            f"{_where(['title', 'content', 'category'])} OR {alias_match} OR {title_in_query}) "
             f"ORDER BY score DESC, knowledge_doc_id LIMIT :limit"
         ),
         params,
@@ -67,6 +86,7 @@ def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
             content=r["content"],
             source=r["source"],
             source_id=r["source_id"],
+            source_url=r["source_url"],
             category=r["category"],
             score=float(r["score"]) if r["score"] is not None else None,
             kind="doc",
@@ -111,10 +131,14 @@ def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], 
     settings = get_settings()
     embedding = embed_text(query)
     sql = text(
-        "SELECT knowledge_doc_id, title, category, content, score, vector_rank, text_rank "
+        "SELECT s.knowledge_doc_id, s.title, s.category, s.content, s.score, "
+        "       s.vector_rank, s.text_rank, d.source, d.source_id, "
+        "       NULLIF(d.meta_data ->> 'source_url', '') AS source_url "
         "FROM knowledge.search_documents("
         "CAST(:q AS text), CAST(:emb AS vector), "
-        "CAST(:limit AS integer), CAST(:min_sim AS numeric), CAST(:rrf_k AS integer))"
+        "CAST(:limit AS integer), CAST(:min_sim AS numeric), CAST(:rrf_k AS integer)) s "
+        "JOIN knowledge.knowledge_doc d ON d.knowledge_doc_id = s.knowledge_doc_id "
+        "ORDER BY s.score DESC, s.knowledge_doc_id"
     )
     try:
         rows = db.execute(
@@ -207,6 +231,7 @@ def _search_symptom_map(symptoms: str, db: Session) -> list[RagItem]:
                 content=r["advice"],
                 source=r["source_name"],
                 source_id=str(r["source_id"]) if r["source_id"] is not None else None,
+                source_url=r["source_url"],
                 category="symptom_nutrient_map",
                 kind="symptom",
             )
