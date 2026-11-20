@@ -217,7 +217,8 @@ for row in _ROWS.splitlines():
 
 
 def base_dish_id(value):
-    return value[:-3] if re.fullmatch(r'DISH-\d{3}-LS',value) else value
+    # 少盐变体 dish_id 以 '-LS' 结尾；用字符串后缀判断替代正则（热路径被调用数百万次）。
+    return value[:-3] if value.endswith('-LS') else value
 
 
 def non_staple_base_ids(candidate):
@@ -238,29 +239,38 @@ def non_staple_base_ids(candidate):
 
 
 def profile(dish):
+    cached = getattr(dish, 'dish_profile', None)
+    if cached is not None:
+        return cached
     base=base_dish_id(dish.dish_id)
     known = CATALOG.get(base)
     expected=known.name+('（少盐）' if base!=dish.dish_id else '') if known else None
     if known and expected == dish.name:
-        return known
+        result = known
     # Unreviewed real catalogue dishes must be reviewed before default generation.
     # Legacy/non-catalogue sources have conservative role inference, explicitly marked.
-    if known or re.fullmatch(r'DISH-\d+', dish.dish_id):
-        return DishProfile(dish.name, frozenset({'未知'}), '-', '-', '', 2, 2, False)
-    blob = ' '.join([dish.name or '', dish.category or '', *(dish.tags or []), *(dish.ingredient_names or [])])
-    roles = set()
-    if dish.is_staple or any(w in dish.name for w in ('燕麦','面包','馒头','粥')): roles.add('主食')
-    if dish.is_soup or '汤' in dish.name: roles.add('汤羹')
-    if any(w in blob for w in ('鸡','鸭','猪','牛肉','羊肉','鱼','虾','蛋','豆腐','豆干','蛤蜊','水产','肉类')): roles.add('蛋白质菜')
-    if any(w in blob for w in ('蔬菜','菠菜','西兰花','白菜','芹菜','萝卜','番茄','黄瓜','茄子','油菜','香菇')): roles.add('蔬菜')
-    if any(w in blob for w in ('酸奶','牛奶','奶酪')): roles.add('奶类')
-    if any(w in blob for w in ('香蕉','水果','苹果')): roles.add('水果')
-    sweet = '燕麦' in dish.name or '酸奶' in dish.name
-    staple = 'sweet' if sweet else ('porridge' if '粥' in dish.name else 'grain') if '主食' in roles else '-'
-    bf = 'B' if sweet else 'C' if staple != '-' else 'L' if roles & {'蛋白质菜','蔬菜'} else '-'
-    if len(roles - {'汤羹'}) > 1: roles.add('复合菜')
-    family = next((x for x, words in [('鸡肉',('鸡胸','鸡肉')),('鱼',('鱼',)),('豆腐',('豆腐',)),('鸡蛋',('鸡蛋',)),('猪肉',('猪','排骨')),('牛肉',('牛肉',)),('燕麦',('燕麦',))] if any(w in blob for w in words)), '')
-    return DishProfile(dish.name, frozenset(roles or {'未知'}), bf, staple, family, 2, 2, False)
+    elif known or re.fullmatch(r'DISH-\d+', dish.dish_id):
+        result = DishProfile(dish.name, frozenset({'未知'}), '-', '-', '', 2, 2, False)
+    else:
+        blob = ' '.join([dish.name or '', dish.category or '', *(dish.tags or []), *(dish.ingredient_names or [])])
+        roles = set()
+        if dish.is_staple or any(w in dish.name for w in ('燕麦','面包','馒头','粥')): roles.add('主食')
+        if dish.is_soup or '汤' in dish.name: roles.add('汤羹')
+        if any(w in blob for w in ('鸡','鸭','猪','牛肉','羊肉','鱼','虾','蛋','豆腐','豆干','蛤蜊','水产','肉类')): roles.add('蛋白质菜')
+        if any(w in blob for w in ('蔬菜','菠菜','西兰花','白菜','芹菜','萝卜','番茄','黄瓜','茄子','油菜','香菇')): roles.add('蔬菜')
+        if any(w in blob for w in ('酸奶','牛奶','奶酪')): roles.add('奶类')
+        if any(w in blob for w in ('香蕉','水果','苹果')): roles.add('水果')
+        sweet = '燕麦' in dish.name or '酸奶' in dish.name
+        staple = 'sweet' if sweet else ('porridge' if '粥' in dish.name else 'grain') if '主食' in roles else '-'
+        bf = 'B' if sweet else 'C' if staple != '-' else 'L' if roles & {'蛋白质菜','蔬菜'} else '-'
+        if len(roles - {'汤羹'}) > 1: roles.add('复合菜')
+        family = next((x for x, words in [('鸡肉',('鸡胸','鸡肉')),('鱼',('鱼',)),('豆腐',('豆腐',)),('鸡蛋',('鸡蛋',)),('猪肉',('猪','排骨')),('牛肉',('牛肉',)),('燕麦',('燕麦',))] if any(w in blob for w in words)), '')
+        result = DishProfile(dish.name, frozenset(roles or {'未知'}), bf, staple, family, 2, 2, False)
+    try:
+        dish.dish_profile = result
+    except AttributeError:
+        pass
+    return result
 
 
 def dish_roles(dish):
@@ -494,7 +504,7 @@ def selection_key(candidate, target, previous, repetition, *, protein_previous=N
             round(overall_quality, 4), tuple(candidate.dish_ids))
 
 
-def shortlist_combos(combos, target, relaxed, servings, diagnostics=None):
+def shortlist_combos(combos, target, relaxed, servings, diagnostics=None, option_cache=None):
     """Cheap necessary bounds; strict and approximate search are both bounded.
 
     Strict search keeps the 2400 feasible combinations closest to the macro
@@ -513,7 +523,8 @@ def shortlist_combos(combos, target, relaxed, servings, diagnostics=None):
                 ('carb_g',target.carb.low,target.carb.high,target.carb.target)]
     from .portion_policy import everyday_cost
     from .practical_quality import meal_options
-    option_cache = {}
+    if option_cache is None:
+        option_cache = {}
     for combo in combos:
         stats["combos_seen"]+=1
         for d in combo:

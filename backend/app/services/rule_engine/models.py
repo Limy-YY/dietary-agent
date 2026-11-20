@@ -189,6 +189,9 @@ class DishFacts:
     #: None = 尚未计算（用 None 而非 {} 作哨兵，避免「无可用配方数据」的菜被反复重算）。
     #: 请求内 dish 数据不可变、克隆候选浅拷贝共享同一 facts，故此缓存整次请求内不失效。
     ingredient_weights: Mapping[str, float] | None = None
+    #: 预计算的烹饪画像（meal_templates.DishProfile）；由 meal_templates.profile 首次访问时缓存。
+    #: None = 尚未计算。请求内 dish 不可变，缓存整次请求内不失效。
+    dish_profile: Any = None
 
     @property
     def is_staple(self) -> bool:

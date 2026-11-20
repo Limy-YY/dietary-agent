@@ -410,11 +410,13 @@ def build_candidates(
     compatible = (combo for combo in source
                   if required_ids.issubset(d.dish_id for d in combo)
                   and tuple(sorted(d.dish_id for d in combo)) not in excluded_combinations)
-    combos = shortlist_combos(compatible, target, relaxed, servings,stats)
-
     from .practical_quality import meal_options, portion_limits, energy_cost, composition_cost, candidate_priority
-    option_cache = {}
-    limit_cache = {}
+    dishes_all = [*keep_staples, *keep_sides]
+    limit_cache = {d.dish_id: portion_limits(d, target) for d in dishes_all}
+    option_cache = {d.dish_id: meal_options(d, target, servings, limit_cache[d.dish_id]) for d in dishes_all}
+
+    combos = shortlist_combos(compatible, target, relaxed, servings, stats, option_cache)
+
     for combo in combos:
         if len(pool) >= max_candidates * 3:
             # 组合按「距宏量目标距离」升序到达，够 3×max_candidates 个候选即可满足
@@ -427,10 +429,6 @@ def build_candidates(
         # Scale only dishes whose stored serving count is one. Other recipes retain legacy units
         # until the data team confirms precisely how ingredient amounts were recorded.
         from .portion_policy import combo_portion_options, portion_cost, breakfast_shape
-        for d in combo:
-            if d.dish_id not in option_cache:
-                option_cache[d.dish_id] = meal_options(d,target,servings)
-                limit_cache[d.dish_id] = portion_limits(d,target)
         options = combo_portion_options(combo, target.meal_type, servings, target,
                                         [option_cache[d.dish_id] for d in combo])
         practical_limits = [limit_cache[d.dish_id] for d in combo]

@@ -52,10 +52,10 @@ def portion_limits(d, target):
     add('meat',meat,100 if early else 150,160 if early else 220)
     return caps
 
-def meal_options(d,target,requested=1.):
+def meal_options(d,target,requested=1.,limits=None):
     from .portion_policy import serving_options
     opts=serving_options(d,requested)
-    limits=portion_limits(d,target)
+    limits=portion_limits(d,target) if limits is None else limits
     if not limits:return opts
     ok=lambda v:all(g*v<=cap+.01 for _,g,_,cap in limits)
     out=[v for v in opts if ok(v)]
