@@ -439,10 +439,12 @@ def selection_key(candidate, target, previous, repetition, *, protein_previous=N
 
 
 def shortlist_combos(combos, target, relaxed, servings, diagnostics=None):
-    """Cheap necessary bounds; approximate search is bounded with anchor/family coverage.
+    """Cheap necessary bounds; strict and approximate search are both bounded.
 
-    Strict search never truncates before nutrition validation. Approximate search
-    retains up to 2400 compatible combinations; this is a bounded heuristic.
+    Strict search keeps the 2400 feasible combinations closest to the macro
+    target (sorted by cheap distance) instead of scoring every feasible combo —
+    scoring is O(portion options) and explodes once the catalogue grows.
+    Approximate search retains up to 2400 with anchor/family coverage.
     """
     strict = []
     approx = []
@@ -483,7 +485,7 @@ def shortlist_combos(combos, target, relaxed, servings, diagnostics=None):
             distance += max(lo-want,want-hi,0)/max(want,1)
             distance += .12*abs(sum(values)*servings-want)/max(want,1)
         if not relaxed:
-            if feasible: strict.append(combo)
+            if feasible: strict.append((distance, combo))
             else:stats["macro_bounds_rejected"]+=1
         elif all(d.energy_kcal is not None for d in combo):
             # Cheap structure-first ordering before expensive portion search.
@@ -491,7 +493,11 @@ def shortlist_combos(combos, target, relaxed, servings, diagnostics=None):
             tier=structure_tier(a,target.meal_type) if all(getattr(d,'ingredient_amounts',None) for d in combo) else 0
             approx.append((tier*.75 + distance + everyday_cost(combo),tuple(d.dish_id for d in combo),combo))
     if not relaxed:
-        stats["shortlisted"]+=len(strict);return strict
+        strict.sort(key=lambda row: (row[0], tuple(sorted(d.dish_id for d in row[1]))))
+        head = strict[:2400]
+        stats["shortlisted"] += len(head)
+        stats["search_budget_pruned"] += max(0, len(strict) - 2400)
+        return [c for _, c in head]
     approx.sort(key=lambda row:(row[0],row[1]))
     stats["shortlisted"]+=min(2400,len(approx))
     stats["search_budget_pruned"]+=max(0,len(approx)-2400)

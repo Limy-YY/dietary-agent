@@ -416,6 +416,11 @@ def build_candidates(
     option_cache = {}
     limit_cache = {}
     for combo in combos:
+        if len(pool) >= max_candidates * 3:
+            # 组合按「距宏量目标距离」升序到达，够 3×max_candidates 个候选即可满足
+            # retain_pool 的多样性挑选，不再把剩余短名单全部打进打分（O(份量求解)）。
+            stats['search_budget_pruned'] += 1
+            break
         ids = tuple(sorted(f.dish_id for f in combo))
         if len(set(ids)) != len(combo) or not required_ids.issubset(ids) or ids in excluded_combinations:
             continue
