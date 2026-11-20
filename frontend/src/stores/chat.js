@@ -2,40 +2,62 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { streamChat } from '@/api/agent.js'
+import { listConversations, listMessages, renameConversation, deleteConversation } from '@/api/conversation.js'
+import { getToken } from '@/api/http.js'
 import { normalizeArtifact } from '@/utils/schema.js'
 import { groupOf, uid } from '@/utils/format.js'
 import { usePanelStore } from './panel.js'
 
-const STORAGE_KEY = 'sz_sessions_v1'
+/**
+ * 会话列表后端化（IMP-001）：会话与消息以后端 conversation/message 表为准，
+ * localStorage 只留 token 与 UI 偏好，不再存业务数据。
+ * 结构化块（餐卡/清单/报告）随 assistant 消息以「快照」落 app.message.structured_output，
+ * 历史回看时前端用 normalizeArtifact 原样还原（方案 A）；current_plan/quick_actions 瞬时块不落。
+ */
 
-function loadSessions() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.map((s) => ({
-      id: String(s.id || uid('conv')),
-      title: String(s.title || '新的对话'),
-      createdAt: s.createdAt || new Date().toISOString(),
-      updatedAt: s.updatedAt || s.createdAt || new Date().toISOString(),
-      conversationId: s.conversationId || null,
-      messages: Array.isArray(s.messages)
-        ? s.messages.map((m) => ({
-            id: m.id || uid('msg'),
-            role: m.role === 'user' ? 'user' : 'ai',
-            text: String(m.text || ''),
-            blocks: Array.isArray(m.blocks) ? m.blocks : [],
-            status: m.status || 'done',
-            error: m.error || '',
-            suggestions: Array.isArray(m.suggestions) ? m.suggestions : [],
-            clarify: m.clarify || null,
-            createdAt: m.createdAt || new Date().toISOString()
-          }))
-        : []
-    }))
-  } catch (e) {
-    return []
+/** 后端会话摘要 → 前端 session 对象 */
+function toSession(item) {
+  return {
+    id: String(item.conversation_id),
+    conversationId: item.conversation_id,
+    title: item.title || '新的对话',
+    createdAt: item.created_at,
+    updatedAt: item.updated_at || item.created_at,
+    messageCount: item.message_count || 0,
+    lastMessage: item.last_message || '',
+    messages: [],
+    _hydrated: false,
+    _loading: false
+  }
+}
+
+/** 后端消息 → 前端 message 对象：正文 + 结构化块（从 structured_output 快照还原） */
+function toMessage(item) {
+  const blocks = []
+  const structured = item.structured_output
+  if (structured && Array.isArray(structured.blocks)) {
+    for (const b of structured.blocks) {
+      if (b && b.type && b.payload) {
+        const block = normalizeArtifact(b.type, b.payload)
+        if (block && block.type && block.type !== 'unknown') {
+          block.readonly = true // 历史快照只读，禁用「换一换 / 确认」等修改动作
+          blocks.push(block)
+        }
+      }
+    }
+  }
+  return {
+    id: String(item.message_id),
+    role: item.role === 'user' ? 'user' : 'ai',
+    text: item.content || '',
+    blocks,
+    status: 'done',
+    error: '',
+    suggestions: [],
+    clarify: null,
+    createdAt: item.created_at,
+    thinking: '',
+    thinkingSteps: []
   }
 }
 
@@ -57,8 +79,8 @@ function replaceMealCardInPlace(session, block, excludeMsg = null) {
 }
 
 export const useChatStore = defineStore('chat', () => {
-  const sessions = ref(loadSessions())
-  const activeId = ref(sessions.value[0]?.id || '')
+  const sessions = ref([])
+  const activeId = ref('')
   const sending = ref(false)
   const abortController = ref(null)
   // 与 main.html 一致：首屏是问候语，只有「开启新对话」才展示欢迎页
@@ -88,68 +110,113 @@ export const useChatStore = defineStore('chat', () => {
       .map(([label, list]) => ({ label, list }))
   })
 
-  function persist() {
+  /** 把后端 conversation_id 采纳为会话唯一 id：首次发送时从临时 id 迁移到后端 id */
+  function adoptConversation(session, conversationId) {
+    if (conversationId == null) return
+    session.conversationId = conversationId
+    const newId = String(conversationId)
+    if (session.id !== newId) {
+      if (activeId.value === session.id) activeId.value = newId
+      session.id = newId
+    }
+  }
+
+  /** 懒加载某会话的历史消息（文本）。已在加载 / 已加载 / 无后端 id 时跳过。 */
+  async function hydrateSession(session) {
+    if (!session || session._hydrated || session._loading || session.conversationId == null) return
+    session._loading = true
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.value))
+      const { items } = await listMessages(session.conversationId, { pageSize: 200 })
+      session.messages = items.map(toMessage)
+      session._hydrated = true
     } catch (e) {
-      /* 超配额时忽略，不影响使用 */
+      /* 历史消息加载失败不打断使用，下次切回可重试 */
+    } finally {
+      session._loading = false
+    }
+  }
+
+  /** 从后端拉取会话列表（初始化时调用一次）。 */
+  async function refreshSessions() {
+    if (!getToken()) return
+    try {
+      const { items } = await listConversations({ pageSize: 100 })
+      sessions.value = items.map(toSession)
+      if (!activeId.value || !sessions.value.some((s) => s.id === activeId.value)) {
+        const first = sessions.value[0]
+        activeId.value = first?.id || ''
+        if (first) hydrateSession(first)
+      }
+    } catch (e) {
+      /* 会话列表加载失败不阻塞新建会话 */
+    }
+  }
+
+  /** 尚未落库的临时会话（conversationId=null，等首条消息由后端返回 id 后采纳） */
+  function newSessionDraft() {
+    return {
+      id: uid('conv'),
+      conversationId: null,
+      title: '新的对话',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messageCount: 0,
+      lastMessage: '',
+      messages: [],
+      _hydrated: true,
+      _loading: false
     }
   }
 
   function ensureSession() {
     if (activeSession.value) return activeSession.value
-    const session = {
-      id: uid('conv'),
-      title: '新的对话',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      conversationId: null,
-      messages: []
-    }
+    const session = newSessionDraft()
     sessions.value.unshift(session)
     activeId.value = session.id
-    persist()
     // 返回响应式代理，保证后续对流式内容的修改能被视图感知
     return sessions.value.find((s) => s.id === session.id) || session
   }
 
   function newChat() {
     if (sending.value) stop()
-    const session = {
-      id: uid('conv'),
-      title: '新的对话',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      conversationId: null,
-      messages: []
-    }
+    const session = newSessionDraft()
     sessions.value.unshift(session)
     activeId.value = session.id
     showWelcome.value = true
-    persist()
   }
 
   function switchSession(id) {
     if (sending.value) stop()
     showWelcome.value = false
     activeId.value = id
+    const s = sessions.value.find((x) => x.id === id)
+    if (s) hydrateSession(s)
   }
 
-  function renameSession(id, title) {
+  async function renameSession(id, title) {
     const s = sessions.value.find((x) => x.id === id)
     if (!s) return
     const next = String(title || '').trim().slice(0, 24)
     if (!next) return
+    if (s.conversationId != null) {
+      await renameConversation(s.conversationId, next)
+    }
     s.title = next
-    persist()
   }
 
-  function removeSession(id) {
+  async function removeSession(id) {
     const index = sessions.value.findIndex((x) => x.id === id)
     if (index < 0) return
+    const s = sessions.value[index]
+    if (s.conversationId != null) {
+      await deleteConversation(s.conversationId)
+    }
     sessions.value.splice(index, 1)
-    if (activeId.value === id) activeId.value = sessions.value[0]?.id || ''
-    persist()
+    if (activeId.value === id) {
+      activeId.value = sessions.value[0]?.id || ''
+      const next = sessions.value[0]
+      if (next) hydrateSession(next)
+    }
   }
 
   function stop() {
@@ -189,7 +256,7 @@ export const useChatStore = defineStore('chat', () => {
     session.messages.push(userMsg)
 
     if (!session.title || session.title === '新的对话') {
-      session.title = content.replace(/\s+/g, ' ').slice(0, 20)
+      session.title = content.replace(/\s+/g, ' ').slice(0, 30)
     }
     session.updatedAt = new Date().toISOString()
 
@@ -213,7 +280,6 @@ export const useChatStore = defineStore('chat', () => {
     sending.value = true
     const controller = new AbortController()
     abortController.value = controller
-    persist()
 
     try {
       await streamChat({
@@ -277,7 +343,7 @@ export const useChatStore = defineStore('chat', () => {
           if (evt.event === 'done') {
             aiMsg.status = 'done'
             aiMsg.thinking = '' // 兜底：确保思考步骤条不残留
-            if (payload.conversation_id) session.conversationId = payload.conversation_id
+            if (payload.conversation_id) adoptConversation(session, payload.conversation_id)
             if (payload.meal_plan_id != null) aiMsg.meal_plan_id = payload.meal_plan_id
             session.updatedAt = new Date().toISOString()
           }
@@ -305,7 +371,6 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       sending.value = false
       abortController.value = null
-      persist()
     }
   }
 
@@ -346,7 +411,7 @@ export const useChatStore = defineStore('chat', () => {
             }
           }
           if (evt.event === 'done') {
-            if (payload.conversation_id) session.conversationId = payload.conversation_id
+            if (payload.conversation_id) adoptConversation(session, payload.conversation_id)
             completed = payload.finish_reason === 'stop'
           }
           if (evt.event === 'clarify') errorMsg = payload.question || '需要补充信息'
@@ -367,7 +432,6 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       sending.value = false
       abortController.value = null
-      persist()
     }
   }
 
@@ -388,8 +452,11 @@ export const useChatStore = defineStore('chat', () => {
   function clearAll() {
     sessions.value = []
     activeId.value = ''
-    persist()
+    showWelcome.value = false
   }
+
+  // 初始化：从后端拉会话列表（无 token 时跳过，不触发鉴权提示）
+  refreshSessions()
 
   return {
     sessions,
@@ -400,6 +467,7 @@ export const useChatStore = defineStore('chat', () => {
     isWelcome,
     lastSuggestions,
     groupedSessions,
+    refreshSessions,
     ensureSession,
     newChat,
     switchSession,
@@ -409,7 +477,6 @@ export const useChatStore = defineStore('chat', () => {
     silentAction,
     retry,
     stop,
-    persist,
     clearAll
   }
 })

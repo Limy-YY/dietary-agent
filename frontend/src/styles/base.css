@@ -608,6 +608,11 @@ button {
   color: #8a8f98;
 }
 
+.status-tag.readonly {
+  background: #f0f1f3;
+  color: #8a8f98;
+}
+
 .meal-row {
   display: flex;
   justify-content: space-between;

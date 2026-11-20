@@ -14,7 +14,7 @@
         v-for="(c, i) in candidates"
         :key="c.candidate_id || i"
         class="cand"
-        :class="{ on: pickedCandidateId === c.candidate_id }"
+        :class="{ on: pickedCandidateId === c.candidate_id, readonly }"
         @click="pickCandidate(c)"
       >
         <div class="cand-radio"></div>
@@ -45,7 +45,7 @@
           <div class="meal-meta">{{ slot.dish_count }} 道菜 · 点这里看用量和做法</div>
         </div>
         <div class="action-col">
-          <button class="swap-btn" :disabled="isFixed || !slot.candidates.length || isSwapping(slot)" @click.stop="swap(slot)">
+          <button class="swap-btn" :disabled="readonly || isFixed || !slot.candidates.length || isSwapping(slot)" @click.stop="swap(slot)">
             {{ isSwapping(slot) ? '换一换…' : '换一换' }}
           </button>
         </div>
@@ -82,7 +82,7 @@
             </div>
             <div class="wd-meal-side">
               <span class="wd-meal-kcal">{{ fmtKcal(s.kcal) }} / 本餐目标 {{ fmtKcal(s.target_kcal) }} kcal</span>
-              <button class="wd-swap" :disabled="isFixed || !s.candidates.length || isSwapping(s)" @click.stop="swap(s)">
+              <button class="wd-swap" :disabled="readonly || isFixed || !s.candidates.length || isSwapping(s)" @click.stop="swap(s)">
                 {{ isSwapping(s) ? '换一换…' : '换一换' }}
               </button>
             </div>
@@ -94,7 +94,7 @@
     <div class="card-foot">
       <button class="card-foot-left" @click="onReason">💡 为什么这样搭？</button>
       <div class="action-col">
-        <button class="fix-btn" :disabled="isFixed" @click="onConfirm">
+        <button class="fix-btn" :disabled="readonly || isFixed" @click="onConfirm">
           {{ isFixed ? '已确认' : '确认方案' }}
         </button>
       </div>
@@ -178,8 +178,11 @@ const status = computed(() => {
   return raw === 'fixed' ? 'fixed' : raw === 'candidates' ? 'candidates' : 'draft'
 })
 const isFixed = computed(() => status.value === 'fixed')
-const statusText = computed(() => props.block.status_label || (isFixed.value ? '已生效' : '待确认'))
-const statusClass = computed(() => (isFixed.value ? 'fixed' : 'draft'))
+const readonly = computed(() => Boolean(props.block.readonly))
+const statusText = computed(() =>
+  readonly.value ? '历史快照' : props.block.status_label || (isFixed.value ? '已生效' : '待确认')
+)
+const statusClass = computed(() => (readonly.value ? 'readonly' : isFixed.value ? 'fixed' : 'draft'))
 
 const reasonSummary = computed(() => {
   const r = props.block.reason
@@ -197,7 +200,7 @@ function isSwapping(slot) {
 }
 
 async function pickCandidate(c) {
-  if (isFixed.value || chat.sending || swapping.value) return
+  if (readonly.value || isFixed.value || chat.sending || swapping.value) return
   // 点的是当前已选中的候选：后端会报「该候选已是当前选中」，直接忽略，避免误弹「选用失败」
   if (c.candidate_id === pickedCandidateId.value) return
   const label = slots.value[0]?.label || MEAL_LABELS[slots.value[0]?.meal_type] || '这一餐'
@@ -213,7 +216,7 @@ async function pickCandidate(c) {
 }
 
 async function swap(slot) {
-  if (isFixed.value || chat.sending || swapping.value) return
+  if (readonly.value || isFixed.value || chat.sending || swapping.value) return
   const label = slot.label || MEAL_LABELS[slot.meal_type] || '这一餐'
   swapping.value = slot.slot_id
   try {
@@ -235,7 +238,7 @@ function actionContext(action, slot = null, candidate = null) {
 }
 
 async function onConfirm() {
-  if (isFixed.value) return
+  if (readonly.value || isFixed.value) return
   try {
     await chat.silentAction(PHRASE.confirm, actionContext('confirm'))
   } catch (e) {
@@ -263,4 +266,6 @@ function openSlotRecipe(slot) {
   color: var(--text-sub);
   padding: 6px 2px;
 }
+
+.cand.readonly { cursor: default; }
 </style>

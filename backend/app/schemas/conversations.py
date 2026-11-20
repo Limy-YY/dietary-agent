@@ -27,3 +27,10 @@ class MessageItem(BaseModel):
     created_at: datetime
     referenced_plan_id: int | None = None
     intent: str | None = None
+    structured_output: dict | None = None
+
+
+class RenameConversationRequest(BaseModel):
+    """重命名会话请求体。"""
+
+    title: str

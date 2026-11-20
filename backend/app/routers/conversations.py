@@ -10,6 +10,8 @@
 
 数据来源：app.conversation / app.message（chat.py 在 SSE 链路里已落库）。
 """
+import json
+
 from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -19,7 +21,7 @@ from app.core.response import ApiResponse, PageData, page_data
 from app.core.security import decode_token
 from app.db import get_db
 from app.routers.chat import _extract_bearer
-from app.schemas.conversations import ConversationItem, MessageItem
+from app.schemas.conversations import ConversationItem, MessageItem, RenameConversationRequest
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -35,6 +37,18 @@ def _resolve_user_id(user_id: str | None, authorization: str | None) -> str:
     if user_id:
         return user_id
     raise BizError(code=BizCode.UNAUTHORIZED, message="缺少身份：请带 Authorization 或 user_id")
+
+
+def _ensure_owner(db: Session, conversation_id: int, uid: str) -> None:
+    """会话归属校验：不存在 → 1004，非本人 → 1003。"""
+    owner = db.execute(
+        text("SELECT user_id FROM app.conversation WHERE conversation_id = :cid"),
+        {"cid": conversation_id},
+    ).mappings().first()
+    if owner is None:
+        raise BizError(code=BizCode.NOT_FOUND, message=f"会话不存在: {conversation_id}")
+    if owner["user_id"] != uid:
+        raise BizError(code=BizCode.FORBIDDEN, message="会话归属校验失败")
 
 
 @router.get("")
@@ -96,14 +110,7 @@ def list_messages(
     """按时间正序返回某会话的消息（分页），供历史详情页复盘。"""
     uid = _resolve_user_id(user_id, authorization)
 
-    owner = db.execute(
-        text("SELECT user_id FROM app.conversation WHERE conversation_id = :cid"),
-        {"cid": conversation_id},
-    ).mappings().first()
-    if owner is None:
-        raise BizError(code=BizCode.NOT_FOUND, message=f"会话不存在: {conversation_id}")
-    if owner["user_id"] != uid:
-        raise BizError(code=BizCode.FORBIDDEN, message="会话归属校验失败")
+    _ensure_owner(db, conversation_id, uid)
 
     total = db.execute(
         text("SELECT count(*) FROM app.message WHERE conversation_id = :cid"),
@@ -115,7 +122,7 @@ def list_messages(
         text(
             """
             SELECT message_id, conversation_id, role, content, created_at,
-                   referenced_plan_id, intent
+                   referenced_plan_id, intent, structured_output
             FROM app.message
             WHERE conversation_id = :cid
             ORDER BY message_id
@@ -125,5 +132,53 @@ def list_messages(
         {"cid": conversation_id, "limit": page_size, "offset": offset},
     ).mappings().all()
 
-    items = [MessageItem(**{k: r[k] for k in r.keys()}) for r in rows]
+    items = []
+    for r in rows:
+        d = dict(r)
+        so = d.get("structured_output")
+        if isinstance(so, str):
+            try:
+                so = json.loads(so)
+            except json.JSONDecodeError:
+                so = None
+        d["structured_output"] = so if isinstance(so, dict) else None
+        items.append(MessageItem(**d))
     return ApiResponse(code=0, message="ok", data=page_data(items, total, page, page_size))
+
+
+@router.patch("/{conversation_id}")
+def rename_conversation(
+    conversation_id: int,
+    payload: RenameConversationRequest,
+    user_id: str | None = Query(None, description="用户 ID（迁移期兜底，token 存在时忽略）"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+) -> ApiResponse[None]:
+    """重命名会话（标题 1~24 字）。"""
+    uid = _resolve_user_id(user_id, authorization)
+    _ensure_owner(db, conversation_id, uid)
+    title = (payload.title or "").strip()[:24]
+    if not title:
+        raise BizError(code=BizCode.PARAM_ERROR, message="标题不能为空")
+    db.execute(
+        text("UPDATE app.conversation SET title = :title WHERE conversation_id = :cid"),
+        {"title": title, "cid": conversation_id},
+    )
+    db.commit()
+    return ApiResponse(code=0, message="ok", data=None)
+
+
+@router.delete("/{conversation_id}")
+def delete_conversation(
+    conversation_id: int,
+    user_id: str | None = Query(None, description="用户 ID（迁移期兜底，token 存在时忽略）"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+) -> ApiResponse[None]:
+    """删除会话及其消息（硬删）。"""
+    uid = _resolve_user_id(user_id, authorization)
+    _ensure_owner(db, conversation_id, uid)
+    db.execute(text("DELETE FROM app.message WHERE conversation_id = :cid"), {"cid": conversation_id})
+    db.execute(text("DELETE FROM app.conversation WHERE conversation_id = :cid"), {"cid": conversation_id})
+    db.commit()
+    return ApiResponse(code=0, message="ok", data=None)

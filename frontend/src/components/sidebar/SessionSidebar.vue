@@ -77,31 +77,41 @@ const isImageAvatar = computed(() => String(profile.avatar || '').startsWith('da
 
 async function onCommand(cmd, session) {
   if (cmd === 'rename') {
+    let value
     try {
-      const { value } = await ElMessageBox.prompt('给这个会话起个名字', '重命名', {
+      const res = await ElMessageBox.prompt('给这个会话起个名字', '重命名', {
         inputValue: session.title,
         inputPattern: /^.{1,24}$/,
         inputErrorMessage: '1～24 个字符',
         confirmButtonText: '保存',
         cancelButtonText: '取消'
       })
-      chat.renameSession(session.id, value)
+      value = res.value
+    } catch (e) {
+      return /* 用户取消 */
+    }
+    try {
+      await chat.renameSession(session.id, value)
       ElMessage.success('会话已重命名')
     } catch (e) {
-      /* 用户取消 */
+      /* 后端错误已由 http 拦截器提示，这里不再重复弹 */
     }
     return
   }
 
   if (cmd === 'delete') {
     try {
-      await ElMessageBox.confirm(`删除「${session.title}」？本机记录会被清掉。`, '删除会话', {
+      await ElMessageBox.confirm(`删除「${session.title}」？将从服务端删除该会话。`, '删除会话', {
         confirmButtonText: '删除',
         cancelButtonText: '取消',
         type: 'warning'
       })
-      chat.removeSession(session.id)
-      ElMessage.success('会话已删除')
+      try {
+        await chat.removeSession(session.id)
+        ElMessage.success('会话已删除')
+      } catch (e) {
+        /* 后端错误已由 http 拦截器提示 */
+      }
     } catch (e) {
       /* 用户取消 */
     }

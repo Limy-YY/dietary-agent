@@ -73,6 +73,11 @@ _ARTIFACT_TYPE_MAP = {
     "quick_actions": "quick_actions",
 }
 
+# 需要随消息落库、供历史会话回看还原的「内容型」artifact 类型。
+# current_plan 是瞬时态（面板实时拉 /meal-plan/current），quick_actions 是一次性动作按钮，
+# 两者回放无意义，不持久化。
+_PERSISTED_ARTIFACT_TYPES = {"meal_card", "shopping_list", "nutrition_report"}
+
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
@@ -101,16 +106,27 @@ def _get_or_create_conversation(req: ChatRequest, db: Session) -> int:
     return cid
 
 
-def _save_message(conversation_id: int, role: str, content: str, db: Session) -> None:
-    """消息落库。流式回复在流结束时整段落库，避免每帧一次 INSERT。"""
-    if not content:
+def _save_message(
+    conversation_id: int,
+    role: str,
+    content: str,
+    db: Session,
+    blocks: list[dict] | None = None,
+) -> None:
+    """消息落库。流式回复在流结束时整段落库，避免每帧一次 INSERT。
+
+    blocks：本轮下发、需随消息持久化的内容型结构化块（meal_card / shopping_list /
+    nutrition_report），写入 app.message.structured_output 供历史会话回看还原（IMP-001 方案 A）。
+    """
+    if not content and not blocks:
         return
+    structured = json.dumps({"blocks": blocks or []}, ensure_ascii=False)
     db.execute(
         text(
-            "INSERT INTO app.message (conversation_id, role, content, tool_calls) "
-            "VALUES (:cid, :role, :content, '[]'::jsonb)"
+            "INSERT INTO app.message (conversation_id, role, content, tool_calls, structured_output) "
+            "VALUES (:cid, :role, :content, '[]'::jsonb, cast(:structured AS jsonb))"
         ),
-        {"cid": conversation_id, "role": role, "content": content},
+        {"cid": conversation_id, "role": role, "content": content, "structured": structured},
     )
     db.commit()
 
@@ -258,12 +274,16 @@ def agent_chat(
         req.user_id = decode_token(token)
     conversation_id = _get_or_create_conversation(req, db)
     history = _load_history(db, conversation_id)
-    _save_message(conversation_id, "user", req.message, db)
+    # 静默动作（换一换 / 确认 / 选用候选）是 UI 按钮点击，不是真实对话轮次，不落库，
+    # 避免历史里冒出「更换午餐候选 / 换好啦」这类纯动作轮次（IMP-023 遗留「落库污染」收口）。
+    if not req.silent:
+        _save_message(conversation_id, "user", req.message, db)
 
     def _stream():
         finish_reason = "stop"
         meal_plan_id: int | None = None
         assistant_text: list[str] = []
+        structured_blocks: list[dict] = []
 
         try:
             if not _profile_exists(db, req.user_id) and not _looks_like_profile_input(req.message):
@@ -311,6 +331,9 @@ def agent_chat(
                                         meal_plan_id = int(pid)
                                     except (TypeError, ValueError):
                                         logger.warning("Agent artifact 的 plan_id 非整数：%r", pid)
+                                # 内容型块落库：随本轮 assistant 消息一起存快照，供历史回看
+                                if data.get("type") in _PERSISTED_ARTIFACT_TYPES:
+                                    structured_blocks.append(data)
                             elif event == "error":
                                 finish_reason = "error"
                             yield _sse(event, data)
@@ -346,7 +369,10 @@ def agent_chat(
             finish_reason = "error"
         finally:
             try:
-                _save_message(conversation_id, "assistant", "".join(assistant_text), db)
+                if not req.silent:
+                    _save_message(
+                        conversation_id, "assistant", "".join(assistant_text), db, blocks=structured_blocks
+                    )
             except Exception:  # noqa: BLE001
                 logger.exception("助手回复落库失败（不影响已下发的流）")
             yield _sse(
