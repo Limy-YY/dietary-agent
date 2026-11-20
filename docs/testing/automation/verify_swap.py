@@ -201,14 +201,23 @@ def main() -> int:
         c8, raw4 = e.code, e.read().decode(errors="replace")
     except Exception as e:  # noqa: BLE001
         c8, raw4 = 0, str(e)
+    # 取 SSE 里 message 事件的正文再判。不能用「raw 里出现『确认』」当判据：
+    # LLM 追问时爱说"想确认下要替换哪一餐"，那是追问信息不足，跟落确认流程是两件事。
+    import re as _re
+    text4 = " ".join(_re.findall(r'"type": "text", "content": "([^"]*)"', raw4))
+    # 确认流程的特征是「对已构造好的变更征求同意」，即确认+动作；追问则是确认+哪一餐/哪道菜。
+    confirm_flow = _re.search(r"确认(?:执行|替换|覆盖|应用|修改|方案)|是否确认|请回复确认|确认后(?:将|会)", text4) is not None
+    has_event_confirm = "event: confirm" in raw4 or '"intent": "confirm"' in raw4
     if "Agent 服务当前不可达" in raw4 or "AGENT_BASE_URL" in raw4:
         record("S-04", "BLOCKED",
                "后端可达但 agent:8001 未启动（后端原话：Agent 服务当前不可达），"
                "意图路由无法验证；需运维拉起 agent 服务后复跑")
-    elif "确认" in raw4 or "confirm" in raw4.lower():
-        record("S-04", "FAIL", f"含「替换」的话术仍触发确认流程 http={c8} SSE 片段={raw4[:160]}")
+    elif confirm_flow or has_event_confirm:
+        record("S-04", "FAIL",
+               f"含「替换」的话术仍落确认流程 http={c8} 正文={text4[:120]}")
     else:
-        record("S-04", "PASS", f"未落确认流程 http={c8} SSE 长度={len(raw4)} 事件={raw4.count('event:')}")
+        record("S-04", "PASS",
+               f"未落确认流程，走了追问/替换 http={c8} 正文={text4[:100]}")
 
     fails = [x for x in results if x["verdict"] == "FAIL"]
     print(f"\n共 {len(results)} 项：PASS {sum(1 for x in results if x['verdict']=='PASS')} / "

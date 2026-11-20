@@ -2,17 +2,17 @@
   {
     "case": "S-01",
     "verdict": "PASS",
-    "detail": "plan_id=71 status=candidates 槽位=2 候选数=[3, 3]"
+    "detail": "plan_id=73 status=candidates 槽位=2 候选数=[3, 3]"
   },
   {
     "case": "S-02",
     "verdict": "PASS",
-    "detail": "slot=416 1246->1247（期望 1247） http=200 code=0 msg=ok"
+    "detail": "slot=420 1262->1263（期望 1263） http=200 code=0 msg=ok"
   },
   {
     "case": "S-03a",
     "verdict": "PASS",
-    "detail": "替换 DISH-052 → ['DISH-058', 'DISH-017-LS', 'DISH-006-LS']（候选 1247→1252）"
+    "detail": "替换 DISH-052 → ['DISH-058', 'DISH-017-LS', 'DISH-006-LS']（候选 1263→1268）"
   },
   {
     "case": "S-03b",
@@ -21,7 +21,7 @@
   },
   {
     "case": "S-04",
-    "verdict": "BLOCKED",
-    "detail": "后端可达但 agent:8001 未启动（后端原话：Agent 服务当前不可达），意图路由无法验证；需运维拉起 agent 服务后复跑"
+    "verdict": "PASS",
+    "detail": "未落确认流程，走了追问/替换 http=200 正文=想帮你换菜，但还缺一点信息：你说的是哪天、哪一餐的哪道菜？现有方案里 2026-11-22 午餐是「二米饭 + 蘑菇豆腐快炒（少盐） + 土豆茄子炖牛肉」，2026-11-23 午餐是「山药米饭 + "
   }
 ]
