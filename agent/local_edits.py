@@ -129,8 +129,8 @@ PROPERTIES = {'plan_index':{'type':'integer','description':'用户指定第几�
               'exclude_ingredients':{'type':'array','items':{'type':'string'}},
               'soft_avoid':{'type':'array','items':{'type':'string'}}}
 TOOLS = [
-    {'type':'function','function':{'name':'regenerate_slot','description':'重新生成指定一餐，其他餐位不变。只在用户明确要求局部修改时调用。',
+    {'type':'function','function':{'name':'regenerate_slot','description':"重新生成整顿餐次（早餐/午餐/晚餐）。当用户说「换早餐」「早餐换成 A + B」「某餐我想吃…」或想把单菜餐卡改成多道菜组合时，必须调用此工具。",
      'parameters':{'type':'object','properties':{**PROPERTIES,'keep_dish_names':{'type':'array','items':{'type':'string'}}}}}},
-    {'type':'function','function':{'name':'replace_dish',"description": "必须严格等于当前餐卡中已存在的具体菜名，未指明旧菜时禁止调用此工具。仅用于替换当前餐次中的「某一道具体菜品」（1换1原地替换）。若用户一次指定了「A + B / A配B」多道菜组合，或当前餐次只有1道菜却想改成多道菜，禁止调用此工具，必须改用 regenerate_slot 整餐重生成。",
+    {'type':'function','function':{'name':'replace_dish',"description": "仅用于把当前餐卡中【已存在的某一道具体菜】一对一替换成另一道菜。严禁在「把早餐/午餐/晚餐换成…」「换成 A + B 多道菜」时调用。",
      'parameters':{'type':'object','properties':{**PROPERTIES,'old_dish_name':{'type':'string', "description": "必须严格等于当前餐卡中已存在的具体菜名，未指明旧菜时禁止调用此工具"},'replacement_query':{'type':'string','description':'指定替代食材或菜名；未要求时留空'}},'required':['old_dish_name']}}},
 ]

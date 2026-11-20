@@ -644,7 +644,7 @@ def _agent_system(profile: dict) -> str:
         + "局部修改必须使用对应工具，按用户明确指定的方案序号、日期和餐次定位，禁止擅自生成整份方案或确认；工具失败后停止，不得重试写操作或宣称成功。\n"
         + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
           "② 用户说「不想吃重复的」「换一换」等泛化请求且未指明具体餐次时，先对照已有方案找出跨餐重复菜，必须先调用 ask_clarification 追问用户想调整哪一餐（例如「午餐和晚餐都有「山药米饭」，你想换掉午餐的还是晚餐的？如果主食单换受限，也可以直接整餐重新生成」），禁止不问用户就擅自挑选餐次修改，也禁止诱导用户说「都换/一起换」（单轮仅支持修改一处）；"
-          "③ 区分「局部替换」与「整餐重生成」：只有当用户明确指明要替换当前餐卡中【已有的某道旧菜】（如「把燕麦碗换成…」「不要西兰花蒸蛋」）时才调用 replace_dish；只要用户表达「某餐我想吃 X」「X 加/和/配 Y」想重新指定整顿内容，或当前餐卡只有 1 道菜却想改成多道菜时，一律调用 regenerate_slot 整餐重生成，禁止调用 replace_dish；"
+          "③ 区分「局部替换」与「整餐重生成」：只有当用户明确指明要替换当前餐卡中【已有的某道具体菜】（如「把燕麦碗换成…」「不要西兰花蒸蛋」）时才调用 replace_dish；只要「换成/改成」前面是餐次名（如「早餐换成…」「晚餐改成…」），或用户表达「某餐我想吃 X」「X 加/和/配 Y」想指定整顿组合，或当前餐卡只有 1 道菜却想改成多道菜时，一律调用 regenerate_slot 整餐重生成，禁止调用 replace_dish；"
           "④ 需要行动先调用工具，别凭空捏造方案内容；⑤ 数值只引用工具返回，绝不自行计算；"
           "⑥ 最终回复面向用户、结论先行、简洁自然，不要出现「工具」「调用」等内部字眼。"
     )
@@ -709,14 +709,17 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
 
     if name in ("regenerate_slot", "replace_dish"):
         if ctx.get("local_edit_attempted"):
-            return {"terminal":True,"reply":"本轮已尝试局部修改，请检查结果后再提出下一项修改。"}
+            return {"terminal": True, "reply": "本轮已尝试局部修改，请检查结果后再提出下一项修改。"}
         ctx["local_edit_attempted"] = True
         try:
             updated, reply = le.execute(bc, st, name, args, ctx.get("message", ""))
             narrate_ctx = (
                 f"{reply}\n"
-                "提示：请对照用户原话检查最终菜品。若因单餐主食上限、营养均衡或结构约束导致部分点名菜品被自动替换，"
-                "先用一句话向用户自然说明原因（例如「小米粥和蒸红薯都属于主食，单餐不建议双碳水搭配」），再告知实际调整结果；若完全符合则简洁确认即可。"
+                "提示：请对照用户原话检查最终菜品。若用户点名的某道菜未出现在最终结果中，严禁含糊地说「没能排进」，"
+                "必须用一句话向用户明确说明具体的饮食规则原因（按实际情况判断：1. 同属主食，单餐不能双碳水叠加；"
+                "2. 餐次适配限制，如正餐肉菜/炒菜仅限午晚餐、不在早餐菜谱库中；3. 档案过敏忌口或单餐营养结构限制），"
+                "再说明已替换为当前餐次更均衡的同类营养菜品；若完全符合则简洁确认即可。"
+                "结尾只能引导当前餐次的后续操作，严禁编造「把菜挪到其他餐次」等不存在的功能。"
             )
             return {
                 "terminal": True,
@@ -725,9 +728,33 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
                 "blocks": [blocks.meal_card_block(updated)],
             }
         except ValueError as exc:
-            return {"terminal":True,"reply":str(exc),"blocks":[]}
+            raw_reply = str(exc)
+            fail_ctx = (
+                f"拦截原因：{raw_reply}\n"
+                "提示：用户的局部修改请求未通过菜名或餐次定位校验，原方案保持不变。请结合对话历史中的当前方案，"
+                "用一两句话自然向用户说明原因，并引导其指定当前餐卡中的具体菜名或餐次。"
+            )
+            return {
+                "terminal": True,
+                "reply": raw_reply,
+                "narration": _narrate(ctx.get("message", ""), fail_ctx, raw_reply, ctx.get("history")),
+                "blocks": [],
+            }
         except Exception as exc:
-            return {"terminal":True,"reply":f"局部修改未获成功确认：{exc}。请刷新方案核对状态。","blocks":[]}
+            raw_reply = f"局部修改未获成功确认：{exc}。请刷新方案核对状态。"
+            fail_ctx = (
+                f"拦截原因：{exc}\n"
+                "提示：本次局部修改未执行、原方案保留。请先核对当前餐卡的已有菜品：\n"
+                "1. 若用户想换入的新菜【已经存在于当前餐卡中】（如本餐已有二米饭却还要把别的菜换成二米饭），直接自然告知「本餐已经包含「XX」了，同一顿不会重复排两份相同的菜」，严禁扯双碳水或建议用它替换自己；\n"
+                "2. 若是两道不同的主食冲突，再说明「单餐不能同时搭配两种主食」；\n"
+                "3. 若因替换后缺少蛋白/蔬菜导致结构失衡，再提示选择同类菜品。严禁输出「局部修改未成功确认」「请刷新方案核对状态」等系统报错腔。"
+            )
+            return {
+                "terminal": True,
+                "reply": raw_reply,
+                "narration": _narrate(ctx.get("message", ""), fail_ctx, raw_reply, ctx.get("history")),
+                "blocks": [],
+            }
 
     if name == "generate_plan":
         if ctx.get("local_edit_only"):
