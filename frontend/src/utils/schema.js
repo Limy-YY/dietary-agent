@@ -464,6 +464,8 @@ function achievementView(achievement) {
   const micro = achievement.micro && typeof achievement.micro === 'object' ? achievement.micro : {}
   return {
     micro_overall_pct: numOrNull(pick(achievement, 'micro_overall_pct')),
+    micro_evaluable_count: numOrNull(pick(achievement, 'micro_evaluable_count')),
+    micro_total_count: numOrNull(pick(achievement, 'micro_total_count')),
     macro,
     micro
   }
@@ -569,7 +571,9 @@ export function normalizeReport(report) {
     micro: {
       title: '关键微量（覆盖度）',
       items: microItems,
-      overall_pct: achievement ? numOrNull(achievement.micro_overall_pct) : null
+      overall_pct: achievement ? numOrNull(achievement.micro_overall_pct) : null,
+      evaluable_count: achievement ? numOrNull(achievement.micro_evaluable_count) : null,
+      total_count: achievement ? numOrNull(achievement.micro_total_count) : null
     },
     completeness: {
       meal_count: mealCount,

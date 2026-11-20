@@ -563,6 +563,10 @@ def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
     return {
         "micro": micro,
         "micro_overall_pct": round(sum(pct_list) / len(pct_list), 1) if pct_list else None,
+        # overall 只对有完整参考值和日摄入数据的营养素取平均；
+        # 明确返回分母，避免前端把「2/7 项可评估」误写成「7 项达标率」。
+        "micro_evaluable_count": len(pct_list),
+        "micro_total_count": len(MICRO_IDS),
         "macro": macro_items,
     }
 

@@ -223,6 +223,10 @@ class PlanRequest:
     window_days: int = 7
     tolerance: float = DEFAULT_MACRO_TOLERANCE
     max_slots: int = 21
+    # API requests set a fresh seed so repeated generations vary only among
+    # candidates in the same safety/energy/structure band. Direct engine calls
+    # remain deterministic when the seed is omitted.
+    variation_seed: int | None = None
 
 
 # ---------------------------------------------------------------- 输出模型
