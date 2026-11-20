@@ -1,18 +1,22 @@
 Pager usage is off.
 DO
-        check_item         | result 
----------------------------+--------
- dish_used_ingredients     | 57
- dishes                    | 60
- dishes_with_fiber_calcium | 60
- health_conditions         | 4
- ingredients               | 128
- iron_female_50_64_rows    | 1
- iron_female_50_64_value   | 12
- knowledge_docs            | 43
- symptom_active_rows       | 0
- symptom_key_nutrients     | 7
- symptom_nutrient_rows     | 16
- symptom_pending_rows      | 16
-(12 rows)
+             check_item             | result 
+------------------------------------+--------
+ dish_used_ingredients              | 88
+ dishes                             | 120
+ dishes_with_fiber_calcium          | 60
+ health_conditions                  | 4
+ ingredients                        | 128
+ iron_female_50_64_rows             | 1
+ iron_female_50_64_value            | 12
+ knowledge_docs                     | 43
+ pending_fiber_ingredients_r2_batch | 30
+ r1_dishes_used_ingredients         | 57
+ symptom_active_rows                | 0
+ symptom_key_nutrients              | 7
+ symptom_low_rows                   | 6
+ symptom_moderate_rows              | 7
+ symptom_nutrient_rows              | 13
+ symptom_pending_rows               | 13
+(16 rows)
 

@@ -65,7 +65,9 @@ export const state = {
   profile: JSON.parse(JSON.stringify(DEFAULT_PROFILE)),
   plans: [],
   currentPlanId: null,
-  planSeq: 101
+  planSeq: 101,
+  reportArchive: null,
+  archiveSeq: 500
 }
 
 /** 仅 mock 联调使用：把内存状态清回初始值 */
@@ -74,6 +76,8 @@ export function resetState() {
   state.plans = []
   state.currentPlanId = null
   state.planSeq = 101
+  state.reportArchive = null
+  state.archiveSeq = 500
   return { ok: true }
 }
 
@@ -370,6 +374,85 @@ export function getReportPayload(planId) {
   if (!record) return { error: { code: 1004, message: '方案不存在' } }
   if (!record.report) return { error: { code: 1004, message: '该方案还没有生成报告' } }
   return record.report
+}
+
+/* ---------------- 报告存档（API-26b / API-26c） ---------------- */
+
+/** 存档只收 week/month/custom，方案级复盘（plan）不进列表，与后端 SQL 口径一致 */
+const ARCHIVE_TYPES = ['week', 'month', 'custom']
+
+function isoDayFromNow(offset = 0) {
+  const d = new Date()
+  const t = new Date(d.getFullYear(), d.getMonth(), d.getDate() + offset)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`
+}
+
+function isoStampFromNow(offsetDay = 0, hour = 20, minute = 15) {
+  const d = new Date()
+  d.setDate(d.getDate() + offsetDay)
+  d.setHours(hour, minute, 0, 0)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00+08:00`
+}
+
+function ensureArchive() {
+  if (!Array.isArray(state.reportArchive)) state.reportArchive = []
+  return state.reportArchive
+}
+
+/** 对话里生成周/月报告后，把同一份结果补一条存档（week/month），供存档面板回看 */
+export function addArchivedReport(sourceReport, { type = 'week', windowDays = 7 } = {}) {
+  if (!sourceReport || !ARCHIVE_TYPES.includes(type)) return null
+  const archive = ensureArchive()
+  state.archiveSeq = (state.archiveSeq || 500) + 1
+  const copy = JSON.parse(JSON.stringify(sourceReport))
+  copy.nutrition_report_id = state.archiveSeq
+  copy.user_id = state.profile.user_id
+  copy.report_type = type
+  copy.window_days = windowDays
+  // 周/月报告的回看区间按口径回推，避免面板上出现「1 天覆盖月报告」的错位
+  if (type === 'week') {
+    copy.period_start = isoDayFromNow(-7)
+    copy.period_end = isoDayFromNow(-1)
+  } else if (type === 'month') {
+    copy.period_start = isoDayFromNow(-30)
+    copy.period_end = isoDayFromNow(-1)
+  }
+  copy.generated_at = isoStampFromNow(0)
+  archive.push(copy)
+  return copy
+}
+
+/** GET /nutrition/report/list：week/month/custom 摘要，generated_at DESC, id DESC */
+export function listArchivedReports({ page = 1, page_size = 20 } = {}) {
+  const all = ensureArchive()
+    .filter((r) => ARCHIVE_TYPES.includes(r.report_type))
+    .sort((a, b) => {
+      if (a.generated_at === b.generated_at) return b.nutrition_report_id - a.nutrition_report_id
+      return a.generated_at < b.generated_at ? 1 : -1
+    })
+  const offset = (page - 1) * page_size
+  return {
+    total: all.length,
+    page,
+    page_size,
+    items: all.slice(offset, offset + page_size).map((r) => ({
+      nutrition_report_id: r.nutrition_report_id,
+      report_type: r.report_type,
+      period_start: r.period_start,
+      period_end: r.period_end,
+      meal_plan_id: r.meal_plan_id,
+      generated_at: r.generated_at
+    }))
+  }
+}
+
+/** GET /nutrition/report/{report_id}：按 id 回看，不存在返回 null（调用方转 1004/404） */
+export function getArchivedReport(reportId) {
+  const id = Number(reportId)
+  if (!Number.isFinite(id)) return null
+  return ensureArchive().find((r) => r.nutrition_report_id === id) || null
 }
 
 /* ---------------- 演示数据 ---------------- */

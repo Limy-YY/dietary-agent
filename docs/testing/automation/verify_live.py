@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -48,27 +49,39 @@ def call(name: str, method: str, path: str, body: dict | None = None,
     if auth:
         headers["Authorization"] = f"Bearer {TOKEN}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
     rec = {"id": name, "method": method, "path": path, "status": None, "pass": False, "note": ""}
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            rec["status"] = r.status
-            raw = r.read().decode("utf-8", errors="replace")
-            rec["pass"] = r.status == want
-            if sse:
-                frames = [ln[6:].strip() for ln in raw.splitlines() if ln.startswith("data:")]
-                rec["note"] = f"sse_frames={len(frames)}"
-            else:
-                payload = json.loads(raw)
-                rec["note"] = f"code={payload.get('code')}" if isinstance(payload, dict) else f"type={type(payload).__name__}"
-                if r.status == want and isinstance(payload, dict) and payload.get("code") not in (0, None):
-                    rec["pass"] = False
-                    rec["note"] += " (business code != 0)"
-    except urllib.error.HTTPError as e:
-        rec["status"] = e.code
-        rec["note"] = f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')[:120]}"
-    except Exception as e:
-        rec["note"] = f"{type(e).__name__}: {str(e)[:120]}"
+    # quick tunnel 偶发毛刺（连接/读超时、CF 边缘 5xx 读 body 卡住）不应判成业务 FAIL：
+    # 只对「非 HTTP 响应类」异常重试一次，HTTP 状态码原样记账不重试。
+    for attempt in (0, 1):
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                rec["status"] = r.status
+                raw = r.read().decode("utf-8", errors="replace")
+                rec["pass"] = r.status == want
+                if sse:
+                    frames = [ln[6:].strip() for ln in raw.splitlines() if ln.startswith("data:")]
+                    rec["note"] = f"sse_frames={len(frames)}"
+                else:
+                    payload = json.loads(raw)
+                    rec["note"] = f"code={payload.get('code')}" if isinstance(payload, dict) else f"type={type(payload).__name__}"
+                    if r.status == want and isinstance(payload, dict) and payload.get("code") not in (0, None):
+                        rec["pass"] = False
+                        rec["note"] += " (business code != 0)"
+            break
+        except urllib.error.HTTPError as e:
+            rec["status"] = e.code
+            try:
+                rec["note"] = f"HTTP {e.code}: {e.read().decode('utf-8', errors='replace')[:120]}"
+            except Exception:
+                rec["note"] = f"HTTP {e.code}: <body 读取超时，CF 边缘 5xx>"
+            break
+        except Exception as e:
+            if attempt == 0:
+                print(f"  [retry] {name} {type(e).__name__} —— 隧道抖动，2s 后重试一次")
+                time.sleep(2)
+                continue
+            rec["note"] = f"{type(e).__name__}: {str(e)[:120]}（已重试 1 次）"
     results.append(rec)
     print(f"[{'PASS' if rec['pass'] else 'FAIL'}] {name} {method} {path} -> {rec['status']} {rec['note']}")
     return rec

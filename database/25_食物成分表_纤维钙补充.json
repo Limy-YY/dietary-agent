@@ -902,7 +902,7 @@
       "tags": "无额外加盐描述",
       "allergens": "",
       "purine_level": "低",
-      "allergen_status": "未核查"
+      "allergen_status": "确认不含"
     },
     {
       "food_id": "CN-399",
@@ -998,7 +998,7 @@
       "tags": "无额外加盐描述",
       "allergens": "",
       "purine_level": "低",
-      "allergen_status": "未核查"
+      "allergen_status": "确认不含"
     },
     {
       "food_id": "CN-402",
@@ -5172,9 +5172,9 @@
       "fatty_acid_total_pct": null,
       "fatty_acid_total_g": null,
       "tags": "全谷物",
-      "allergens": "",
+      "allergens": "麸质",
       "purine_level": "较低",
-      "allergen_status": "未核查"
+      "allergen_status": "已确认含"
     },
     {
       "food_id": "CN-1500",
@@ -5510,7 +5510,7 @@
       "tags": "全谷物",
       "allergens": "",
       "purine_level": "较低",
-      "allergen_status": "未核查"
+      "allergen_status": "确认不含"
     },
     {
       "food_id": "FDC-170420",
@@ -5558,7 +5558,7 @@
       "tags": "",
       "allergens": "",
       "purine_level": "较高",
-      "allergen_status": "未核查"
+      "allergen_status": "确认不含"
     },
     {
       "food_id": "FDC-173757",
@@ -5606,7 +5606,7 @@
       "tags": "",
       "allergens": "",
       "purine_level": "较高",
-      "allergen_status": "未核查"
+      "allergen_status": "确认不含"
     },
     {
       "food_id": "CN-1448",

@@ -54,6 +54,30 @@ _W_OIL_TIGHTENED = 0.15
 _W_INCOMPLETE = 0.6
 _W_SOFT_AVOID = 0.4
 
+#: 过敏原别名（一对多）：把用户选项与数据细标签归一为集合，交集非空即命中。
+#: 「海鲜」是一个用户选项对应鱼类/软体贝类/甲壳类水产三类数据标签；
+#: 「麸质 / 小麦」库内两种写法并存，需双向映射（食材表用「麸质」、主食模板标「小麦」）。
+ALLERGEN_ALIASES: dict[str, set[str]] = {
+    "海鲜": {"鱼类", "软体贝类", "甲壳类水产", "海鲜"},
+    "鱼": {"鱼类"},
+    "鱼类": {"鱼类", "海鲜"},
+    "软体贝类": {"软体贝类", "海鲜"},
+    "甲壳类水产": {"甲壳类水产", "海鲜"},
+    "虾": {"甲壳类水产"},
+    "蟹": {"甲壳类水产"},
+    "贝类": {"软体贝类"},
+    "麸质": {"麸质", "小麦"},
+    "小麦": {"小麦", "麸质"},
+    "蛋": {"鸡蛋"},
+    "鸡蛋": {"鸡蛋"},
+    "牛奶": {"牛奶"},
+    "乳制品": {"牛奶"},
+    "奶": {"牛奶"},
+    "大豆": {"大豆"},
+    "黄豆": {"大豆"},
+    "花生": {"花生"},
+}
+
 
 def sum_or_none(values: Iterable[float | None]) -> float | None:
     """求和；任一为 None 则整体为 None（避免把缺失当 0）。"""
@@ -76,12 +100,9 @@ def hard_filter_reasons(
 
     # 1) 过敏原（strict_allergens 为「已确认含」）
     for allergen in targets.hard_allergens:
-        aliases = {"鱼": "鱼类", "牛奶": "牛奶", "乳制品": "牛奶", "奶": "牛奶",
-                   "蛋": "鸡蛋", "虾": "甲壳类水产", "蟹": "甲壳类水产", "贝类": "软体贝类",
-                   "大豆": "大豆", "黄豆": "大豆", "花生": "花生"}
-        canonical = aliases.get(allergen, allergen)
-        known = {aliases.get(a, a) for a in (facts.strict_allergens or [])}
-        if allergen and (canonical in known or allergen in name_blob):
+        canonical = ALLERGEN_ALIASES.get(allergen, {allergen})
+        known = {a for s in (facts.strict_allergens or []) for a in ALLERGEN_ALIASES.get(s, {s})}
+        if allergen and (canonical & known or allergen in name_blob):
             reasons.append(f"allergen:{allergen}")
 
     # 2) 宗教 / 伦理忌口

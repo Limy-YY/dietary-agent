@@ -533,7 +533,7 @@
           "condition-rules"
         ],
         "summary": "Rule Catalog",
-        "description": "查看疾病规则目录（含待审核规则与来源，T6）。",
+        "description": "查看疾病规则目录（含审核状态与来源；v1.2r4 起 9 条已审核、7 条生效，T6）。",
         "operationId": "rule_catalog_api_condition_rules_catalog_get",
         "parameters": [
           {
@@ -590,7 +590,7 @@
           "condition-rules"
         ],
         "summary": "Production Rules",
-        "description": "查询正式疾病规则（仅 production_ready=true，当前 0 条，T7）。",
+        "description": "查询正式疾病规则（仅 production_ready=true；v1.2r4 起 7 条，T7）。",
         "operationId": "production_rules_api_condition_rules_production_get",
         "responses": {
           "200": {

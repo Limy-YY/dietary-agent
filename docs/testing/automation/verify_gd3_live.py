@@ -7,8 +7,12 @@
 L-01 自定义区间：11-20~11-22 三天 → 方案覆盖 3 天
 L-02 餐次子集：只排午餐 → 槽位全为 lunch
 L-03 软偏好透传：soft_avoid=[油炸,炸] 且必含炸物候选请求 → 方案内炸物显著减少/为 0
-L-04 症状映射：/api/agent/reverse-nutrition 返回 method=symptom_map 或 keyword_fallback，
-     且 note 如实标注（IMP-036 口径）
+L-04 症状映射：/api/agent/reverse-nutrition 应命中 symptom_map
+     （v1.2r4 起 19 条映射已审核启用；「乏力、掉发」须同时命中 容易疲劳 与 掉发，见 41 号脚本）
+L-05 检索溯源：/api/agent/rag-query 的 kind=doc 条目 source 非空（BUG-027，
+     修于 4f6c937 应用层回查；query 用「主食」，非 doc 条目不计入分母）
+L-06 跨度边界：span=32 天请求被拒（#9 口径 MAX_SPAN_DAYS=31，
+     PARAM_ERROR + 「日期跨度上限 31 天」提示）
 
 前置不可达时统一判 BLOCKED 并退出码 2，不刷假 FAIL。
 """
@@ -131,14 +135,64 @@ def main() -> int:
                f"plan_id={pid3} 含炸/红烧菜名命中 {hits or '无'}（软偏好为降权非硬删，命中即记录不判 FAIL）；"
                f"菜名样本：{names[:80]}")
 
-    # L-04 反向营养映射标注
-    code, rep = call("POST", "/api/agent/reverse-nutrition", {"symptoms": ["乏力", "掉发"], "top_k": 5})
+    # L-04 反向营养映射命中（v1.2r4：41 号脚本已入库，19 条审核启用，公网库已生效）
+    # 契约：symptoms 为**字符串**（schemas/agent.py:27 `symptoms: str`），按子串命中 symptom/aliases；
+    # 早前传 list 会被 400 参数校验拦下（code=1001），不是后端回退。
+    # 判据已收敛（Anna 2026-11-20 #16 要求）：41 生效后必须 symptom_map，回落 keyword_fallback 判 FAIL，
+    # 不再保留双态 fallback 分支——否则「映射没生效却被兜底掩盖」会被刷成假绿。
+    code, rep = call("POST", "/api/agent/reverse-nutrition", {"symptoms": "乏力、掉发", "top_k": 5})
     d = rep.get("data") or {}
     method = d.get("method")
     note = d.get("note") or ""
-    ok = code == 200 and method in ("symptom_map", "keyword_fallback") and note
-    record("L-04", "PASS" if ok else "FAIL",
-           f"method={method} items={len(d.get('items') or [])} note={note[:60]}")
+    titles = [i.get("title") or "" for i in (d.get("items") or [])]
+    has_fatigue = any("容易疲劳" in t for t in titles)
+    has_hairloss = any("掉发" in t for t in titles)
+    if code != 200:
+        record("L-04", "FAIL", f"请求失败 code={code} {str(rep)[:160]}")
+    elif method == "symptom_map":
+        ok = bool(note) and has_fatigue and has_hairloss
+        record("L-04", "PASS" if ok else "FAIL",
+               f"method=symptom_map（41_v1.2r4 已入库）命中 乏力={has_fatigue} 掉发={has_hairloss} "
+               f"items={len(titles)} note={note[:50]}")
+    else:
+        # 41 已入库生效，回落兜底=映射未真正启用，判 FAIL（不再放宽为 PASS）
+        record("L-04", "FAIL",
+               f"method={method}（41_v1.2r4 已入库，应为 symptom_map；回落说明映射未生效）"
+               f"items={len(titles)} note={note[:50]}")
+
+    # L-05 检索溯源：kind=doc 条目必须带 source（BUG-027，修于 4f6c937）
+    # 口径（安娜 #12 建议）：只对 kind=="doc" 判溯源；nutrient_knowledge 表无 source 列，
+    # 非 doc 条目不计入分母。query 用「主食」——「低GI 主食怎么选」按空白分词 AND 全命中，
+    # 库里无对应文档，会恒返回 0 条被判 SKIP，判据不可达。
+    code, rep = call("POST", "/api/agent/rag-query", {"query": "主食", "top_k": 5})
+    d5 = rep.get("data") or {}
+    items5 = d5.get("items") or []
+    method5 = d5.get("method")
+    docs5 = [i for i in items5 if i.get("kind") == "doc"]
+    others5 = len(items5) - len(docs5)
+    if code != 200:
+        record("L-05", "FAIL", f"请求失败 code={code} {str(rep)[:160]}")
+    elif not docs5:
+        record("L-05", "SKIP",
+               f"检索无 doc 条目（method={method5} items={len(items5)}），source 判据不可达，不作 FAIL")
+    else:
+        missing = [i for i in docs5 if not i.get("source")]
+        record("L-05", "PASS" if not missing else "FAIL",
+               f"method={method5} doc={len(docs5)}（非 doc {others5} 条按口径不计） source 缺失 {len(missing)} 条"
+               + ("" if not missing else "（BUG-027：hybrid 路径 knowledge.search_documents 不返回 source/source_id，见 #12）"))
+
+    # L-06 跨度上限边界（#9 口径：MAX_SPAN_DAYS = 31，32 天应被拒）
+    start = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    end = start + timedelta(days=31)          # 起止相差 31 天 → span=32
+    code, rep = call("POST", "/api/meal-plan/week/generate", {
+        "start_date": start.isoformat(), "end_date": end.isoformat(),
+        "meal_types": ["早", "午", "晚"],
+    })
+    msg = str(rep.get("message") or "")
+    over_rejected = code != 200 and ("跨度上限" in msg or "31" in msg)
+    record("L-06", "PASS" if over_rejected else "FAIL",
+           f"span=32（{start}~{end}）→ http={code} message={msg[:80]}"
+           + ("" if over_rejected else "；期望 PARAM_ERROR + 「日期跨度上限 31 天」"))
 
     OUT.write_text(json.dumps({"base": BASE, "at": datetime.now().isoformat(timespec="seconds"),
                                "results": results}, ensure_ascii=False, indent=2), encoding="utf-8")

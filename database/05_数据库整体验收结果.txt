@@ -3,6 +3,8 @@ Database acceptance result — diet_agent v1.2r1
 验收日期：2026-11-13
 验收环境：PostgreSQL 18.6 (x86_64-windows)，本地临时实例 127.0.0.1:55433，trust 认证，库名 diet_agent
 
+【v1.2r4 合并版说明】本文件保留 v1.2r1 阶段的历史验收结果作为附录；合并版（120 道菜、13 条反向营养映射）在 PG18.7 + pgvector 0.8.7 合并库上的整体验收输出见 `34_合并版整体验收结果.txt`，数据补充专项验收输出见 `35_合并版数据补充验收结果.txt`。
+
 说明：本文件是 v1.2r1 的验收结果。文件末尾附上 v1.2 基线在正式库上的原始验收输出（附录 A），
 两者是不同环境、不同时间点的两次运行，不再拆成两个文件（原来 05 与 08 两份文件内容完全相同，
 那是复制造成的，见 08 的说明）。
@@ -374,7 +376,7 @@ PostgreSQL 18.7（/usr/lib/postgresql/18）+ postgresql-18-pgvector 0.8.7，干�
          knowledge.search_documents 能返回结果（vector_rank 1～5）
        注意：mock 只为验链路，它的余弦相似度只有 0.15～0.20，真实语义质量要等 bge-m3 接上再评。
 
-  C-7  docker/ 初始化链路（脚本逐条实跑；镜像 build 与首启已完成，见末段）
+  C-7  docker/ 初始化链路（脚本逐条实跑；镜像未 build）
        · initdb/ 八个脚本按 00→10→20→30→40→50→55→60 顺序执行：8/8 rc=0，整链日志 0 ERROR
        · 60 汇总表：condition_rows=4 / diet_app_role=present / dish_rows=60 / embedding_backlog=43 /
          ingredient_rows=128 / knowledge_topic=17 / knowledge_total=43 / legacy_fixed_plans=3 /
@@ -383,28 +385,11 @@ PostgreSQL 18.7（/usr/lib/postgresql/18）+ postgresql-18-pgvector 0.8.7，干�
        · 负向测试：缺 SQL 资产 → 00 rc=1；库名与 03 写死的 diet_agent 不符 → 30 rc=1
        · 脚本静态检查：八个 initdb 脚本 `bash -n` 全部通过（8/8，无语法错）
        · 交付包自校验：解压 zip 后在包根跑 `sha256sum -c 09_文件校验值.sha256`，30/30 OK、0 FAILED
-       · 数据岗本机未做 docker build（云主机是无特权容器：grep Cap /proc/self/status 全 0、
-         systemd-detect-virt=container-other、docker: command not found；其 Windows 机无 Docker/WSL）。
-         → 2026-11-16 后端补做，见下方实测段。
-       · 2026-11-16 后端实测（v1.2r2 合并版，本机 Windows + Docker Desktop）：
-         `docker build -f docker/Dockerfile -t diet-agent-pg:1.2r2 .` 成功（build context 取仓库根）；
-         空数据卷 `docker compose up -d` 首启约 10 秒跑完 00→10→20→30→40→50→55→56→57→60 十步，
-         10/10 rc=0、整链 0 ERROR / 0 FATAL；
-         04 摘要 11 项全绿（dishes 60 / goal_mappings 5 / ingredients 128 / key_micronutrients 7 /
-         legacy_plans_preserved 3 / r1 1 / r1b 1 / schema_migration 1 / staging_schema_removed true /
-         test_rows_after_rollback 3 / test_view_removed true）；
-         22 数据补充验收 12 项全绿（dish_used_ingredients 57 / dishes_with_fiber_calcium 60 /
-         iron_female_50_64 1 行、值 12 / symptom_nutrient_rows 16 其中 pending 16、active 0 /
-         symptom_key_nutrients 7 / knowledge_docs 43 / health_conditions 4）；
-         另测 knowledge_total=43、embedding_backlog=43、condition_rows=4、migrations=4、pgvector 0.8.7、PG 18.7。
-         账号模型：`POSTGRES_USER=postgres`，`diet_app` 由 03 建，实测 `rolsuper=false`；
-         旧 `deploy/docker-compose.yml` 写的是 `POSTGRES_USER: diet_app`，会让应用账号带超级用户权限。
-         链路口径：01 为 v1.2r2 合并版 dump，本身已含 12/18/19/20/21 的结果，后续复跑这些脚本属幂等验证
-         （与 08「恢复后再依次复跑 12、03、18、14、19、20、21、04、22」的实测口径一致）。
-         说明：docker/ 14 个文件此前未入仓（09 已登记其 sha256），本次按 07/08 重建等价实现并实测；
-         数据岗原版补传后以原版替换、并同步更新 09 的 docker 段校验值；首启日志摘录见 docker/README.md。
+       · 未做：docker build。云主机是无特权容器（grep Cap /proc/self/status 全 0、systemd-detect-virt=container-other、
+         docker: command not found），本机 Windows 无 Docker/WSL，所以镜像一层都没真正构建过。
+         第一次 build 可能要调 pgvector/pgvector:pg18 的 PGDATA/健康检查细节与 COPY 通配，见 docker/README.md。
 
   C-8  仍未验证
-       · 镜像 build 与容器内首次启动 —— 2026-11-16 已完成（v1.2r2，结论见 C-7 末段），不再是缺口
+       · 镜像 build 与容器内首次启动（原因见 C-7）
        · 真实嵌入模型 bge-m3（1024 维）与 p_min_similarity 默认 0.5 的实际召回质量
        · 19 的 17 篇主题未经业务/营养岗审稿（口径问题找谁改，见 17 第十节）
