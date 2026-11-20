@@ -343,66 +343,8 @@ export function normalizeGroups(groups) {
 /* ---------- NutritionReport ---------- */
 
 const MICRO_KEYS = ['calcium', 'iron', 'zinc', 'vitamin_a', 'vitamin_b1', 'vitamin_b2', 'vitamin_c']
-const MICRO_STATUS = { 达标: 'ok', 不足: 'warn', 超标: 'danger', 参考提示: 'neutral' }
-
-function microView(entry, key) {
-  const m = entry || {}
-  const pct = numOrNull(pick(m, 'covered_pct'))
-  const intake = numOrNull(pick(m, 'intake'))
-  const statusZh = str(pick(m, 'status'), '')
-  const unit = str(pick(m, 'unit'), '')
-  const gap = numOrNull(pick(m, 'gap'))
-  const ul = numOrNull(pick(m, 'ul'))
-  const covered = numOrNull(pick(m, 'covered_meals'))
-  const total = numOrNull(pick(m, 'selected_meals'))
-
-  // 三档：无数据 / 部分数据（已知餐次的下限估算）/ 完整数据。
-  // 部分数据仍不判达标/超标（null≠0），只展示「至少 X%」+ 覆盖率，避免一缺就整项清空。
-  let level
-  if (intake === null) level = 'none'
-  else if (pct == null) level = 'none' // 有摄入但缺参考值，无法算覆盖度
-  else if (covered != null && total != null) level = covered >= total ? 'full' : 'partial'
-  else level = statusZh === '参考提示' ? 'partial' : 'full'
-
-  let note
-  let value
-  let status
-  if (level === 'none') {
-    note = intake === null ? '数据不足' : '参考值缺失'
-    value = '—'
-    status = 'neutral'
-  } else if (level === 'partial') {
-    value = `≥${fmtPct(pct)}`
-    note = covered != null && total != null ? `覆盖 ${covered}/${total} 餐` : '部分餐次缺数据'
-    status = 'partial'
-  } else {
-    // 达标/不足/超标由 status_zh 决定：超标只看是否超过每日上限（UL），
-    // 超过推荐量（>100%）但未超 UL 仍算达标，避免把「吃够了」误报成「超标」。
-    if (statusZh === '超标') note = ul != null ? `超过每日上限 ${fmtNum(ul)}${unit}` : '超过每日上限'
-    else if (statusZh === '不足') note = gap != null ? `还差 ${fmtNum(-gap)}${unit}` : '未达标'
-    else note = '已达标'
-    value = fmtPct(pct)
-    status = MICRO_STATUS[statusZh] || 'neutral'
-  }
-
-  return {
-    key,
-    name: str(pick(m, 'name_zh'), key),
-    target: numOrNull(pick(m, 'target')),
-    ul,
-    unit,
-    intake,
-    gap,
-    percent: level === 'none' ? null : pct,
-    value,
-    status,
-    status_zh: statusZh,
-    level,
-    covered_meals: covered,
-    selected_meals: total,
-    note
-  }
-}
+// 达标天数维度（achievement.micro.level）→ 环形颜色
+const MICRO_LEVEL_STATUS = { ok: 'ok', warn: 'warn', danger: 'danger' }
 
 const MACRO_LEVEL_TAG = { ok: '达标', warn: '注意', low: '偏低', high: '偏高' }
 
@@ -471,18 +413,6 @@ function achievementView(achievement) {
   }
 }
 
-function composeSummary(daySpan, mealCount, energy, segments) {
-  const parts = []
-  if (daySpan != null) parts.push(`覆盖 ${daySpan} 天`)
-  if (energy != null) parts.push(`日均 ${energy} kcal`)
-  if (mealCount != null) parts.push(`共 ${mealCount} 餐`)
-  const pcts = segments
-    .filter((s) => s.percent !== null && s.percent !== undefined)
-    .map((s) => `${s.name} ${s.percent}%`)
-  if (pcts.length) parts.push(pcts.join(' / '))
-  return parts.join(' · ')
-}
-
 export function normalizeReport(report) {
   const r = report || {}
   const macro = r.macro_summary || {}
@@ -522,15 +452,28 @@ export function normalizeReport(report) {
     )
   ]
 
+  // 关键微量统一用「达标天数」口径：主指标 = 达标天数占比（achieved_days/valid_days），
+  // 环形进度与颜色都取 achievement（按天统计），不再混用日均达成率/覆盖度。
   const microItems = MICRO_KEYS.map((k) => {
-    const it = microView(microMap[k], k)
-    if (!it.name) return null
+    const m = microMap[k] || {}
     const a = microAchieve[k] || {}
-    it.achieved_days = numOrNull(a.achieved_days)
-    it.valid_days = numOrNull(a.valid_days)
-    it.achieved_pct = numOrNull(a.achieved_pct)
-    return it
-  }).filter(Boolean)
+    const achievedPct = numOrNull(a.achieved_pct)
+    const level = typeof a.level === 'string' && a.level ? a.level : 'unknown'
+    return {
+      key: k,
+      name: str(pick(m, 'name_zh'), k),
+      unit: str(pick(m, 'unit'), ''),
+      achieved_pct: achievedPct,
+      achieved_days: numOrNull(a.achieved_days),
+      valid_days: numOrNull(a.valid_days),
+      over_days: numOrNull(a.over_days),
+      under_days: numOrNull(a.under_days),
+      level,
+      percent: achievedPct,
+      value: achievedPct == null ? '—' : achievedPct + '%',
+      status: MICRO_LEVEL_STATUS[level] || 'neutral'
+    }
+  }).filter((x) => x.name)
 
   return {
     report_id: str(pick(r, 'nutrition_report_id'), ''),
@@ -557,19 +500,36 @@ export function normalizeReport(report) {
       total_meals: mealCount,
       target_kcal: energy
     },
-    summary_text: composeSummary(daySpan, mealCount, energy, segments),
     macro: {
       center_value: fmtNum(energy),
-      center_label: 'kcal',
+      center_label: '日均 kcal',
       segments
     },
     extra_metrics: [
-      { key: 'oil', name: '烹调油', value: pick(macro, 'oil_g'), unit: 'g' },
-      { key: 'salt', name: '食盐', value: pick(macro, 'salt_g'), unit: 'g' },
-      { key: 'fiber', name: '膳食纤维', value: pick(macro, 'fiber_g'), unit: 'g' }
+      {
+        key: 'oil', name: '烹调油', unit: 'g', ref_label: '上限',
+        value: numOrNull(pick(macro, 'oil_g')),
+        reference: numOrNull(pick(macro, 'oil_reference')),
+        pct: numOrNull(pick(macro, 'oil_pct')),
+        status: str(pick(macro, 'oil_status'), 'unknown')
+      },
+      {
+        key: 'sodium', name: '钠', unit: 'mg', ref_label: 'AI',
+        value: numOrNull(pick(macro, 'sodium_mg')),
+        reference: numOrNull(pick(macro, 'sodium_reference')),
+        pct: numOrNull(pick(macro, 'sodium_pct')),
+        status: str(pick(macro, 'sodium_status'), 'unknown')
+      },
+      {
+        key: 'fiber', name: '膳食纤维', unit: 'g', ref_label: 'AI',
+        value: numOrNull(pick(macro, 'fiber_g')),
+        reference: numOrNull(pick(macro, 'fiber_reference')),
+        pct: numOrNull(pick(macro, 'fiber_pct')),
+        status: str(pick(macro, 'fiber_status'), 'unknown')
+      }
     ],
     micro: {
-      title: '关键微量（覆盖度）',
+      title: '关键微量（达标天数）',
       items: microItems,
       overall_pct: achievement ? numOrNull(achievement.micro_overall_pct) : null,
       evaluable_count: achievement ? numOrNull(achievement.micro_evaluable_count) : null,

@@ -7,15 +7,15 @@
           {{ report.meta.range_text }}
           <span v-if="report.meta.valid_days">· 有效 {{ report.meta.valid_days }} 天</span>
           <span v-if="report.meta.total_meals"> · {{ report.meta.total_meals }} 餐</span>
+          <span class="rc-basis">日均口径</span>
         </div>
-        <div v-if="report.summary_text" class="rc-summary">{{ report.summary_text }}</div>
       </div>
       <button class="rc-toggle">{{ expanded ? '收起' : '展开查看' }}</button>
     </div>
 
     <div v-if="expanded" class="rc-body">
       <div class="rp-section">
-        <div class="rp-section-title">🥗 宏量供能比</div>
+        <div class="rp-section-title">🥗 宏量供能比（日均）</div>
         <div class="rp-donut-row">
           <div class="rp-donut">
             <div class="rp-donut-chart">
@@ -38,7 +38,12 @@
         <div class="rp-extra">
           <div v-for="m in report.extra_metrics" :key="m.key" class="rp-extra-item">
             <span class="rp-extra-name">{{ m.name }}</span>
-            <span class="rp-extra-val">{{ m.value === null || m.value === undefined ? '—' : m.value + ' ' + m.unit }}</span>
+            <span class="rp-extra-val">
+              <span class="rp-extra-num">{{ fmtNum(m.value) }}</span><span class="rp-extra-unit">{{ m.unit }}</span>
+              <span v-if="m.reference != null" class="rp-extra-ref">/ {{ m.ref_label }} {{ fmtNum(m.reference) }}{{ m.unit }}</span>
+              <span v-else class="rp-extra-ref">/ 参考值缺失</span>
+              <span :class="['rp-extra-tag', m.status]">{{ ctrlText(m.status) }}</span>
+            </span>
           </div>
         </div>
       </div>
@@ -46,22 +51,26 @@
       <div class="rp-section">
         <div class="rp-section-title">🔬 {{ report.micro.title }}</div>
         <div v-if="report.micro.overall_pct != null" class="rp-micro-overall">
+          综合达标率 <b>{{ report.micro.overall_pct }}%</b>
           <template v-if="report.micro.evaluable_count != null && report.micro.total_count != null">
-            已评估 {{ report.micro.evaluable_count }}/{{ report.micro.total_count }} 项 ·
+            · 可评估 {{ report.micro.evaluable_count }}/{{ report.micro.total_count }} 项
           </template>
-          达标天数占比 <b>{{ report.micro.overall_pct }}%</b>
         </div>
         <div class="rp-micro-grid">
           <div v-for="(m, i) in report.micro.items" :key="i" class="rp-micro">
             <MicroRing :item="m" :size="42" />
             <div class="rp-micro-name">{{ m.name }}</div>
-            <div class="rp-micro-note-item">{{ m.note }}</div>
-            <div v-if="m.valid_days > 0" class="rp-micro-note-item">{{ fmtNum(m.achieved_days) }}/{{ fmtNum(m.valid_days) }} 天达标</div>
-            <div v-if="m.status === 'danger'" class="rp-micro-tag danger">超标</div>
-            <div v-else-if="m.status === 'partial'" class="rp-micro-tag partial">估算</div>
+            <div v-if="m.valid_days != null && m.valid_days > 0" class="rp-micro-note-item">
+              {{ fmtNum(m.achieved_days) }}/{{ fmtNum(m.valid_days) }} 天达标
+            </div>
+            <div v-else class="rp-micro-note-item">无日数据</div>
+            <div class="rp-micro-flags">
+              <span v-if="m.over_days > 0" class="rp-flag over">超标 {{ fmtNum(m.over_days) }} 天</span>
+              <span v-if="m.under_days > 0" class="rp-flag under">不足 {{ fmtNum(m.under_days) }} 天</span>
+            </div>
           </div>
         </div>
-        <p class="rp-micro-note">覆盖度按方案内食材估算；「≥X%」为已知餐次的下限估算，「—」表示数据不足或参考值缺失，均不作为 0 处理。</p>
+        <p class="rp-micro-note">达标天数按「当日摄入 ≥ 每日参考量 80% 且未超每日上限」计；仅统计有数据的日期，数据不足的日期不计入。</p>
       </div>
 
       <div v-if="report.daily_trend.length" class="rp-section">
@@ -124,6 +133,11 @@ const props = defineProps({ block: { type: Object, required: true } })
 const report = computed(() => (props.block?.meta ? props.block : normalizeReport(props.block)))
 const expanded = ref(Boolean(props.block.expanded))
 
+const CTRL_TEXT = { ok: '合适', high: '偏高', low: '偏低', unknown: '数据不足' }
+function ctrlText(s) {
+  return CTRL_TEXT[s] || '—'
+}
+
 const maxCalories = computed(() => {
   const list = report.value.daily_trend.map((d) => Number(d.calories) || 0)
   return Math.max(...list, 1)
@@ -169,29 +183,54 @@ function barHeight(d) {
 .rp-extra-val {
   font-size: 13px;
   font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
 }
 
-.rp-bar.neutral {
-  background: var(--chart-empty, #f0f0f0);
+.rp-extra-num {
+  font-weight: 600;
 }
 
-.rp-micro-tag {
-  margin-top: 2px;
-  font-size: 10px;
-  padding: 0 4px;
-  border-radius: 4px;
+.rp-extra-unit {
+  font-size: 11px;
+  font-weight: 500;
   color: var(--text-sub);
-  background: var(--bg-soft, #f2f3f5);
+  margin-right: 2px;
 }
 
-.rp-micro-tag.danger {
+.rp-extra-ref {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-sub);
+}
+
+.rp-extra-tag {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-soft, #f2f3f5);
+  color: var(--text-sub);
+}
+
+.rp-extra-tag.ok {
+  color: var(--chart-protein);
+  background: rgba(76, 175, 80, 0.12);
+}
+
+.rp-extra-tag.high {
   color: var(--chart-danger);
   background: rgba(239, 83, 80, 0.12);
 }
 
-.rp-micro-tag.partial {
-  color: #5c6b7a;
-  background: rgba(154, 165, 177, 0.18);
+.rp-extra-tag.low {
+  color: var(--chart-warn);
+  background: rgba(255, 152, 0, 0.12);
+}
+
+.rp-bar.neutral {
+  background: var(--chart-empty, #f0f0f0);
 }
 
 .rp-micro-note-item {
@@ -199,6 +238,31 @@ function barHeight(d) {
   font-size: 10px;
   color: var(--text-sub);
   white-space: nowrap;
+}
+
+.rp-micro-flags {
+  margin-top: 3px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.rp-flag {
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.rp-flag.over {
+  color: var(--chart-danger);
+  background: rgba(239, 83, 80, 0.12);
+}
+
+.rp-flag.under {
+  color: var(--chart-warn);
+  background: rgba(255, 152, 0, 0.12);
 }
 
 .rp-micro-note {

@@ -31,6 +31,7 @@ from app.core.errors import BizCode, BizError
 from app.core.response import ApiResponse, api_success
 from app.core.security import CurrentUser
 from app.db import get_db
+from app.services.rule_engine.models import DEFAULT_MEAL_RATIOS
 
 router = APIRouter(prefix="/nutrition", tags=["nutrition"])
 
@@ -290,6 +291,8 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
     meals_with_micro = 0
 
     by_date: dict[str, dict] = {}
+    # 天当量累计：每餐按能量权重折算（早0.25/午0.4/晚0.35），完整一天=1.0
+    day_equiv = 0.0
 
     def _bump(drow: dict, key: str, value: float) -> None:
         drow["sum"][key] = drow["sum"].get(key, 0.0) + value
@@ -305,6 +308,7 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
         if r["selected_candidate_id"] is None:
             continue
         drow["selected"] += 1
+        day_equiv += DEFAULT_MEAL_RATIOS.get(r["meal_type"], 0.0)
         macro = r["macro_estimate"] if isinstance(r["macro_estimate"], dict) else {}
         micro = r["micro_estimate"] if isinstance(r["micro_estimate"], dict) else {}
         os_est = r["oil_salt_estimate"] if isinstance(r["oil_salt_estimate"], dict) else {}
@@ -347,14 +351,28 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
             meals_with_micro += 1
             drow["micro_meals"] += 1
 
+    # ── 日均口径 ────────────────────────────────────────────────
+    # 日均 = Σ(所有已选餐位的该项摄入) ÷ 天当量
+    #
+    # 分母「天当量」= Σ 每餐的能量权重（DEFAULT_MEAL_RATIOS：早 0.25 / 午 0.4 / 晚 0.35），
+    # 而不是窗口天数、也不是「有餐次的天数」：
+    #   · 完整一天（早+午+晚）= 0.25 + 0.4 + 0.35 = 1.0 天
+    #   · 只有午餐的一天            = 0.4 天
+    #   · 只有早餐的一天            = 0.25 天
+    #   · 没数据的日子              = 0（不进分子、也不进分母）
+    # 这样不完整的日子按它那一餐的能量权重折算，既不会被当成整天摊薄，也不会按 1/3 等权。
+    covered_day_equiv = day_equiv or 1.0
+
     def _daily(values: list[float], digits: int) -> float | None:
-        # 任一餐位缺该指标时不做「缺值当 0」的合计，直接返回 None（null ≠ 0）
-        if not values or len(values) < selected_meals or days <= 0:
+        # 分子 = 所有「已选餐位」该项摄入之和（values 只在餐位有值时 append）。
+        # null ≠ 0：只要有一个已选餐位缺该指标，整体返回 None，不做「缺值当 0」的合计。
+        if not values or len(values) < selected_meals:
             return None
-        return round(sum(values) / days, digits)
+        return round(sum(values) / covered_day_equiv, digits)
 
     return {
         "days": days,
+        "covered_day_equiv": _r(covered_day_equiv, 2),
         "meal_count": meal_count,
         "selected_meals": selected_meals,
         "known_meal_count": meals_with_micro,
@@ -369,7 +387,7 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
         "sodium_mg": _daily(sodium, 1),
         "total_salt_equivalent_g": _daily(total_salt_equivalent, 2),
         "micro_daily": {
-            k: (round(sum(micro_values[k]) / days, 2) if micro_count[k] else None)
+            k: (round(sum(micro_values[k]) / covered_day_equiv, 2) if micro_count[k] else None)
             for k in MICRO_IDS
         },
         "micro_count": micro_count,
@@ -378,7 +396,7 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
     }
 
 
-def _macro_summary(agg: dict) -> dict:
+def _macro_summary(agg: dict, refs: dict | None = None) -> dict:
     energy = agg["energy_kcal"]
     protein = agg["protein_g"]
     fat = agg["fat_g"]
@@ -389,16 +407,56 @@ def _macro_summary(agg: dict) -> dict:
         carb_pct = carb * 4.0 / energy * 100
     else:
         protein_pct = fat_pct = carb_pct = None
+
+    refs = refs or {}
+
+    def _ref_val(nid: str) -> float | None:
+        return _num((refs.get(nid) or {}).get("reference_value"))
+
+    fiber_g = agg["fiber_g"]
+    sodium_mg = agg["sodium_mg"]
+    oil_g = agg["oil_g"]
+    # 膳食纤维 / 钠取数据字典参考值（AI）；烹调油字典无参考值，用规则引擎内部建议上限
+    fiber_ref = _ref_val("dietary_fiber")
+    sodium_ref = _ref_val("sodium")
+    oil_ref = 25.0
+
+    def _pct(v: float | None, ref: float | None) -> float | None:
+        return None if (v is None or not ref) else round(v / ref * 100, 1)
+
+    def _ctrl(v: float | None, ref: float | None, kind: str) -> str:
+        # 量级估计三态：纤维宜达到（偏低=低于80% AI）；钠/油宜少（超过参考即偏高）
+        pct = _pct(v, ref)
+        if pct is None:
+            return "unknown"
+        if kind == "fiber":
+            if pct < 80:
+                return "low"
+            if pct > 120:
+                return "high"
+            return "ok"
+        return "high" if pct > 100 else "ok"
+
     return {
         "energy_kcal": _r(energy, 1),
         "protein_pct": _r(protein_pct, 1),
         "fat_pct": _r(fat_pct, 1),
         "carb_pct": _r(carb_pct, 1),
-        "oil_g": _r(agg["oil_g"], 1),
+        "oil_g": _r(oil_g, 1),
         "salt_g": _r(agg["salt_g"], 1),
-        "sodium_mg": _r(agg["sodium_mg"], 1),
+        "sodium_mg": _r(sodium_mg, 1),
         "total_salt_equivalent_g": _r(agg["total_salt_equivalent_g"], 2),
-        "fiber_g": _r(agg["fiber_g"], 1),
+        "fiber_g": _r(fiber_g, 1),
+        # 油盐纤维量级参考（供前端渲染「日均值 vs 参考值 + 状态」）
+        "fiber_reference": _r(fiber_ref, 1),
+        "fiber_pct": _pct(fiber_g, fiber_ref),
+        "fiber_status": _ctrl(fiber_g, fiber_ref, "fiber"),
+        "sodium_reference": _r(sodium_ref, 1),
+        "sodium_pct": _pct(sodium_mg, sodium_ref),
+        "sodium_status": _ctrl(sodium_mg, sodium_ref, "sodium"),
+        "oil_reference": oil_ref,
+        "oil_pct": _pct(oil_g, oil_ref),
+        "oil_status": _ctrl(oil_g, oil_ref, "oil"),
     }
 
 
@@ -521,13 +579,19 @@ def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
         ul = _num(ref.get("ul_value"))
         valid_days = 0
         achieved_days = 0
+        over_days = 0
+        under_days = 0
         for drow in agg["_by_date"].values():
             v = _daily_value(drow, "m:" + k, 2)
             if v is None or not target:
                 continue
             valid_days += 1
-            if v >= target * 0.8 and (ul is None or v <= ul):
+            if ul is not None and v > ul:
+                over_days += 1
+            elif v >= target * 0.8:
                 achieved_days += 1
+            else:
+                under_days += 1
         pct = round(achieved_days / valid_days * 100, 1) if valid_days else None
         if pct is None:
             level = "unknown"
@@ -546,6 +610,8 @@ def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
             "valid_days": valid_days,
             "achieved_days": achieved_days,
             "achieved_pct": pct,
+            "over_days": over_days,
+            "under_days": under_days,
             "level": level,
         }
 
@@ -661,7 +727,7 @@ def analyze_plan(
     agg = _aggregate(db, req.meal_plan_id, days)
     refs = _load_reference(db, user_id)
 
-    macro = _macro_summary(agg)
+    macro = _macro_summary(agg, refs)
     micro, shortfall = _micro_summary(agg, refs, agg["selected_meals"])
 
     reference_hints: list[str] = [
@@ -816,13 +882,18 @@ def analyze_period(
     agg = _aggregate_rows(rows, window_days, "窗口")
     refs = _load_reference(db, user_id)
 
-    macro = _macro_summary(agg)
+    macro = _macro_summary(agg, refs)
     micro, shortfall = _micro_summary(agg, refs, agg["selected_meals"])
 
     reference_hints: list[str] = [
         f"以下为日均口径：{window_start}~{window_end} 内已固定方案的摄入按天数折算后"
         f"与每日参考量比较"
     ]
+    reference_hints.append(
+        f"日均按餐次能量权重折算为天当量：共 {agg['selected_meals']} 餐 ≈ "
+        f"{agg['covered_day_equiv']} 天当量（早 25%／午 40%／晚 35%），"
+        f"没数据的日子不计入分母"
+    )
     if plan_stats["total_plans"]:
         reference_hints.append(
             f"统计口径：窗口内覆盖 {plan_stats['total_plans']} 份已固定方案，"

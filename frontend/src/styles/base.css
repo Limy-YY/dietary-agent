@@ -1610,6 +1610,17 @@ button {
   line-height: 1.5;
 }
 
+.rc-basis {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--brand-hover);
+  background: var(--brand-light);
+  border-radius: 4px;
+}
+
 .rc-summary {
   font-size: 13px;
   margin-top: 8px;
