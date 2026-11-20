@@ -6,7 +6,7 @@ Unknown production catalogue IDs are not silently classified as reviewed.
 """
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
-from itertools import combinations
+from itertools import combinations, product
 import re
 
 # id | exact current name | roles | breakfast use | staple kind | family
@@ -229,24 +229,64 @@ def template_for(combo, meal_type):
     return '灵活家常搭配'
 
 
+from itertools import combinations, product
+
 def iter_template_combos(dishes, meal_type):
-    """Enumerate bounded practical combinations without enforcing a plate formula."""
+    """按餐盘结构分桶枚举，避免 C(N,3) 组合爆炸及双主食搭配。"""
     available = list({d.dish_id: d for d in dishes}.values())
     metas = {d.dish_id: profile(d) for d in available}
     def m(d): return metas[d.dish_id]
-    if meal_type in ('早','加餐'):
-        eligible = [d for d in available if m(d).breakfast != '-'
-                    or (m(d).commonness == 0 and m(d).complexity == 0
-                        and '蛋白质菜' in m(d).roles)]
-        for n in (1,2,3):
-            for combo in combinations(eligible,n):
-                if template_for(combo,meal_type): yield combo
+
+    if meal_type in ('早', '加餐'):
+        eligible = [
+            d for d in available if m(d).breakfast != '-'
+            or (m(d).commonness == 0 and m(d).complexity == 0 and '蛋白质菜' in m(d).roles)
+        ]
+        bf_staples = [d for d in eligible if '主食' in m(d).roles]
+        bf_non_staples = [d for d in eligible if '主食' not in m(d).roles]
+        bf_proteins = [d for d in bf_non_staples if '蛋白质菜' in m(d).roles]
+        bf_sides = [d for d in bf_non_staples if '蛋白质菜' not in m(d).roles]
+
+        # 1道菜：仅复合主食（如燕麦香蕉酸奶碗）
+        for s in bf_staples:
+            if '复合菜' in m(s).roles and template_for((s,), meal_type):
+                yield (s,)
+        # 2道菜：1主食 + 1非主食，或 1蛋白 + 1配菜
+        for combo in product(bf_staples, bf_non_staples):
+            if template_for(combo, meal_type): yield combo
+        for combo in product(bf_proteins, bf_sides):
+            if template_for(combo, meal_type): yield combo
+        # 3道菜：1主食 + 1蛋白 + 1配菜，或 1主食 + 2非蛋白配菜（如牛奶+水果）
+        for combo in product(bf_staples, bf_proteins, bf_sides):
+            if template_for(combo, meal_type): yield combo
+        for s in bf_staples:
+            for a, b in combinations(bf_sides, 2):
+                if template_for((s, a, b), meal_type): yield (s, a, b)
         return
-    savory = [d for d in available if m(d).breakfast not in ('B','M','F')
-              and not m(d).roles & {'未知','奶类','水果'}]
-    for n in (1,2,3):
-        for combo in combinations(savory,n):
-            if template_for(combo,meal_type): yield combo
+
+    # 午/晚餐按角色拆成 4 个互不重叠的桶
+    savory = [
+        d for d in available if m(d).breakfast not in ('B', 'M', 'F')
+        and not m(d).roles & {'未知', '奶类', '水果'}
+    ]
+    pure_staples = [d for d in savory if '主食' in m(d).roles and len(m(d).roles - {'汤羹'}) == 1]
+    staple_mains = [d for d in savory if '主食' in m(d).roles and len(m(d).roles - {'汤羹'}) > 1]
+    proteins = [d for d in savory if '蛋白质菜' in m(d).roles and '主食' not in m(d).roles]
+    veg_soups = [d for d in savory if '主食' not in m(d).roles and '蛋白质菜' not in m(d).roles]
+
+    # 1道菜：仅允许自带主食的复合正餐（如糙米鹰嘴豆拌饭、疙瘩汤）
+    for d in staple_mains:
+        if template_for((d,), meal_type): yield (d,)
+    # 2道菜：主食 + 蛋白质菜/复合主食，或 蛋白质菜 + 蔬菜/汤
+    for combo in product(pure_staples, proteins + staple_mains):
+        if template_for(combo, meal_type): yield combo
+    for combo in product(proteins, veg_soups):
+        if template_for(combo, meal_type): yield combo
+    # 3道菜（剪枝核心）：1纯主食 × 1蛋白质主菜 × 1蔬菜/汤（从 62 万组直接降到约 4~5 万组）
+    for combo in product(pure_staples, proteins, veg_soups):
+        if template_for(combo, meal_type): yield combo
+    for combo in product(staple_mains, proteins, veg_soups):
+        if template_for(combo, meal_type): yield combo
 
 
 def extension_combos(dishes, meal_type):
