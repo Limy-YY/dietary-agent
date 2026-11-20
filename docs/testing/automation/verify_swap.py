@@ -9,7 +9,12 @@ S-02 候选切换：POST /candidate/swap 切到另一个候选 → 200 且 selec
      （ab67a09 修的是此处 rank 约束 400/500）
 S-03 单菜替换：POST /dish/replace 换掉当前候选里的一道菜 → 200 且菜品集合变化
      （ab67a09 修的是局部修改被误拦截）
-S-04 意图路由观察：POST /api/agent/chat 含「替换」时不应落入确认流程（仅记录，不判 FAIL）
+     S-03a 带 allow_approximate=true（与 agent 侧 local_edits 实际下发一致）
+     S-03b 不带 allow_approximate（严格模式）：放通=一步到位，按营养近似拒绝=预期，5xx=回退
+     replacement_query 留空走「同角色替换」；传具体菜名会先按名称/配料过滤，容易池空拿到
+     业务性 400，那样验不到修复点。
+S-04 意图路由观察：POST /api/agent/chat 含「替换」时不应落入确认流程
+     需读完整 SSE 判断；agent:8001 未启动时判 BLOCKED，不冒充 PASS
 
 用法：
     LIVE_BASE_URL=https://<隧道域名> python docs/testing/automation/verify_swap.py
@@ -129,37 +134,81 @@ def main() -> int:
                f"msg={str(r3.get('message'))[:40]}")
 
     # S-03 单菜替换（ab67a09：局部修改被误拦截）
-    c5, det3 = call("GET", f"/api/meal-plan/{pid}")
-    plan3 = det3.get("data") or {}
-    slot3 = slots_of(plan3)[0]
-    cand3 = slot3.get("selected_candidate") or {}
-    ds = dishes_of(cand3)
+    # 注意：replacement_query 传具体菜名会先按名称/配料过滤，容易池空而拿到 400「没有符合…的替代菜」，
+    # 那是业务性拒绝，验不到修复点。这里留空走"同角色替换"，与前端「换掉这道菜」的实际路径一致。
+    def latest_slot() -> dict:
+        _, dd = call("GET", f"/api/meal-plan/{pid}")
+        ss = slots_of(dd.get("data") or {})
+        return ss[0] if ss else {}
+
+    s3 = latest_slot()
+    ds = dishes_of(s3.get("selected_candidate") or {})
+    replaced, detail_a = False, ""
     if len(ds) < 2:
-        record("S-03", "BLOCKED", f"当前候选菜品不足（{ds}），无法做单菜替换")
+        record("S-03a", "BLOCKED", f"当前候选菜品不足（{ds}），无法做单菜替换")
     else:
-        target = ds[-1]
-        body = {"meal_plan_id": pid, "meal_slot_id": slid,
-                "expected_candidate_id": int(slot3["selected_candidate_id"]),
-                "dish_id": target, "replacement_query": "青菜"}
-        c6, r6 = call("POST", "/api/meal-plan/dish/replace", body)
-        c7, det4 = call("GET", f"/api/meal-plan/{pid}")
-        after_ds = dishes_of((slots_of(det4.get("data") or {})[0] or {}).get("selected_candidate") or {})
-        changed = after_ds != ds
-        ok = c6 == 200 and r6.get("code") == 0 and changed
-        # 业务性拒绝（约束下无替代菜）不算修复回退，但要留痕
-        verdict = "PASS" if ok else ("WARN" if c6 == 200 and r6.get("code") not in (0, None) else "FAIL")
-        record("S-03", verdict,
-               f"替换 {target} 前{ds} 后{after_ds} http={c6} code={r6.get('code')} "
-               f"msg={str(r6.get('message'))[:60]}")
+        for target in list(reversed(ds)):
+            body = {"meal_plan_id": pid, "meal_slot_id": int(s3["meal_slot_id"]),
+                    "expected_candidate_id": int(s3["selected_candidate_id"]),
+                    "dish_id": target, "replacement_query": "", "allow_approximate": True}
+            c6, r6 = call("POST", "/api/meal-plan/dish/replace", body)
+            s3b = latest_slot()
+            after = dishes_of(s3b.get("selected_candidate") or {})
+            if c6 == 200 and r6.get("code") == 0 and after != ds:
+                replaced = True
+                detail_a = f"替换 {target} → {after}（候选 {s3.get('selected_candidate_id')}→{s3b.get('selected_candidate_id')}）"
+                break
+            detail_a = f"替换 {target} http={c6} code={r6.get('code')} msg={str(r6.get('message'))[:50]}"
+        record("S-03a", "PASS" if replaced else "WARN", detail_a)
+    if not replaced:
+        record("S-03b", "BLOCKED", "同角色替换均未成功，严格模式无需再验")
+    else:
+        # 严格模式：不带 allow_approximate。放通则说明一步到位，被拒且理由是营养近似属预期，
+        # 只有 5xx / 约束异常 / 其它 400 才算修复回退。
+        s3c = latest_slot()
+        ds3 = dishes_of(s3c.get("selected_candidate") or {})
+        c7, r7 = call("POST", "/api/meal-plan/dish/replace",
+                      {"meal_plan_id": pid, "meal_slot_id": int(s3c["meal_slot_id"]),
+                       "expected_candidate_id": int(s3c["selected_candidate_id"]),
+                       "dish_id": ds3[-1], "replacement_query": ""})
+        msg7 = str(r7.get("message"))
+        s3d = latest_slot()
+        ds4 = dishes_of(s3d.get("selected_candidate") or {})
+        if c7 == 200 and r7.get("code") == 0 and ds4 != ds3:
+            record("S-03b", "PASS", f"严格模式直接放通 {ds3} → {ds4}")
+        elif "营养" in msg7 or "近似" in msg7:
+            record("S-03b", "INFO", f"严格模式按预期要求确认近似：code={r7.get('code')} msg={msg7[:60]}")
+        elif c7 >= 500:
+            record("S-03b", "FAIL", f"严格模式 5xx（约束异常未修好）：http={c7} msg={msg7[:60]}")
+        else:
+            record("S-03b", "WARN", f"严格模式其它拒绝：http={c7} code={r7.get('code')} msg={msg7[:60]}")
 
     # S-04 意图路由观察（仅记录）：含「替换」不应落确认流程
-    c8, r8 = call("POST", "/api/agent/chat",
-                  {"message": "把这道菜替换成青菜", "session_id": f"swap-{pid}"})
-    txt = json.dumps(r8, ensure_ascii=False)
-    hit = "确认" in txt
-    record("S-04", "INFO",
-           f"chat http={c8} 含「确认」字样={hit}（ab67a09 修「替换」误触发确认，人工复核返回文本）"
-           f" body={txt[:120]}")
+    # /api/agent/chat 是 SSE，入参为 {user_id, message, conversation_id?, context?}，与方案接口不同。
+    # call() 只保留 200 字符，判断 SSE 语义需要全文，这里单独发一次并读完整流。
+    raw4 = ""
+    try:
+        req4 = urllib.request.Request(
+            BASE + "/api/agent/chat",
+            data=json.dumps({"user_id": UID, "message": "把这道菜替换成青菜",
+                             "context": {"meal_plan_id": pid}}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {jwt_for()}"})
+        with urllib.request.urlopen(req4, timeout=180) as resp4:
+            raw4 = resp4.read().decode(errors="replace")
+        c8 = 200
+    except urllib.error.HTTPError as e:
+        c8, raw4 = e.code, e.read().decode(errors="replace")
+    except Exception as e:  # noqa: BLE001
+        c8, raw4 = 0, str(e)
+    if "Agent 服务当前不可达" in raw4 or "AGENT_BASE_URL" in raw4:
+        record("S-04", "BLOCKED",
+               "后端可达但 agent:8001 未启动（后端原话：Agent 服务当前不可达），"
+               "意图路由无法验证；需运维拉起 agent 服务后复跑")
+    elif "确认" in raw4 or "confirm" in raw4.lower():
+        record("S-04", "FAIL", f"含「替换」的话术仍触发确认流程 http={c8} SSE 片段={raw4[:160]}")
+    else:
+        record("S-04", "PASS", f"未落确认流程 http={c8} SSE 长度={len(raw4)} 事件={raw4.count('event:')}")
 
     fails = [x for x in results if x["verdict"] == "FAIL"]
     print(f"\n共 {len(results)} 项：PASS {sum(1 for x in results if x['verdict']=='PASS')} / "

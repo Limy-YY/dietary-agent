@@ -1,0 +1,27 @@
+[
+  {
+    "case": "S-01",
+    "verdict": "PASS",
+    "detail": "plan_id=71 status=candidates 槽位=2 候选数=[3, 3]"
+  },
+  {
+    "case": "S-02",
+    "verdict": "PASS",
+    "detail": "slot=416 1246->1247（期望 1247） http=200 code=0 msg=ok"
+  },
+  {
+    "case": "S-03a",
+    "verdict": "PASS",
+    "detail": "替换 DISH-052 → ['DISH-058', 'DISH-017-LS', 'DISH-006-LS']（候选 1247→1252）"
+  },
+  {
+    "case": "S-03b",
+    "verdict": "PASS",
+    "detail": "严格模式直接放通 ['DISH-058', 'DISH-017-LS', 'DISH-006-LS'] → ['DISH-058', 'DISH-017-LS', 'DISH-052']"
+  },
+  {
+    "case": "S-04",
+    "verdict": "BLOCKED",
+    "detail": "后端可达但 agent:8001 未启动（后端原话：Agent 服务当前不可达），意图路由无法验证；需运维拉起 agent 服务后复跑"
+  }
+]
