@@ -609,20 +609,20 @@ BEGIN
     -- v1.2r2 批次：DISH-061..120（菜式库 60 → 120）
     SELECT count(*) INTO r20_dishes
     FROM core.dish
-    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS'
       AND NOT is_deleted;
 
     SELECT count(*) INTO r20_di_rows
     FROM core.dish_ingredient
-    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120';
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS';
 
     SELECT count(*) INTO r20_live_rows
     FROM app.v_dish_live_nutrition
-    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120';
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS';
 
     SELECT count(*) INTO r20_bad_nutrition
     FROM app.v_dish_live_nutrition
-    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS'
       AND (
           NOT energy_complete
           OR NOT protein_complete
@@ -634,12 +634,12 @@ BEGIN
 
     SELECT count(*) INTO r20_bad_amount
     FROM core.dish_ingredient
-    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS'
       AND amount_g <= 0;
 
     SELECT count(*) INTO r20_bad_source
     FROM core.dish
-    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+    WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS'
       AND (
           source IS NULL
           OR source = ''
@@ -659,7 +659,7 @@ BEGIN
             COALESCE(sum(di.amount_g) FILTER (WHERE di.generated_from = 'salt_g'), 0) AS salt_g
         FROM core.dish d
         JOIN core.dish_ingredient di USING (dish_id)
-        WHERE d.dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+        WHERE d.dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND d.dish_id NOT LIKE '%-LS'
         GROUP BY d.dish_id
     ) x
     WHERE x.default_oil_g <> x.oil_g
@@ -669,7 +669,7 @@ BEGIN
     FROM core.dish_ingredient di
     LEFT JOIN core.dish d USING (dish_id)
     LEFT JOIN core.ingredient i USING (ingredient_id)
-    WHERE di.dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+    WHERE di.dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND di.dish_id NOT LIKE '%-LS'
       AND (d.dish_id IS NULL OR i.ingredient_id IS NULL);
 
     SELECT count(*) INTO r20_migration_rows
@@ -977,7 +977,8 @@ $$;
 SELECT
     count(*) FILTER (WHERE NOT is_deleted) AS 有效菜式总数,
     count(*) FILTER (WHERE dish_id BETWEEN 'DISH-031' AND 'DISH-060' AND dish_id NOT LIKE '%-LS' AND NOT is_deleted) AS r1批次菜式,
-    count(*) FILTER (WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND NOT is_deleted) AS r2批次菜式
+    count(*) FILTER (WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS' AND NOT is_deleted) AS r2批次菜式,
+    count(*) FILTER (WHERE dish_id BETWEEN 'DISH-121' AND 'DISH-170' AND dish_id NOT LIKE '%-LS' AND NOT is_deleted) AS r3批次菜式
 FROM core.dish;
 
 SELECT
@@ -1014,7 +1015,7 @@ SELECT
     category AS 类别,
     count(*) AS 新增数量
 FROM core.dish
-WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS'
 GROUP BY category
 ORDER BY category;
 
@@ -1022,7 +1023,7 @@ SELECT
     source_id AS 来源编号,
     count(*) AS 菜式数量
 FROM core.dish
-WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS'
 GROUP BY source_id
 ORDER BY source_id;
 
@@ -1036,5 +1037,5 @@ SELECT
     strict_allergens,
     unverified_food_ids
 FROM app.v_dish_live_nutrition
-WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120'
+WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS'
 ORDER BY dish_id;
