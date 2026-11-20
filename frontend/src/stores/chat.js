@@ -357,12 +357,14 @@ export const useChatStore = defineStore('chat', () => {
       })
 
       if (aiMsg.status === 'streaming') aiMsg.status = 'done'
+      aiMsg.thinking = '' // 兜底：流正常结束但未收到 done 事件时，也不残留过程状态
       session.updatedAt = new Date().toISOString()
       // 对话完成后通知面板刷新：生成/确认/报告都可能在服务端改了固定方案、清单、历史或报告
       panel.bump()
     } catch (e) {
       if (e.name === 'AbortError' || e.code === 'CANCELED') {
         aiMsg.status = 'stopped'
+        aiMsg.thinking = '' // 停止后清除「正在生成…」过程状态，避免思考步骤条残留
         if (!aiMsg.text) aiMsg.text = '（已停止本次生成）'
       } else {
         aiMsg.status = 'error'

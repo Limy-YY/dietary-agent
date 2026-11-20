@@ -320,3 +320,11 @@
 ## 附：元问题（非单个 bug）
 
 本轮 6 个缺陷几乎同一病根——**后端/Agent 实际吐出的字段与「输出契约 v1.2」约定对不上**（字段缺失、字段名不一致、类型不一致）。建议 Agent 岗 + 后端岗按契约逐字段对一遍，否则还会继续冒出「食材清单缺名」「报告字段错位」等同款问题。
+
+## BUG-029 · 停止生成后消息上方残留「正在生成配餐方案」状态
+
+- **现象**：对话流式生成中，点输入框的「停止生成」后，AI 气泡上方仍保留带脉冲圆点的「正在生成配餐方案」思考步骤条，与下方的「已停止生成」提示矛盾，看起来像还在生成。
+- **层面**：前端（对话流渲染）。
+- **根因**：[chat.js](github仓库/frontend/src/stores/chat.js) 的 `send()` 在 `AbortError`/`CANCELED` 分支只把 `aiMsg.status` 置为 `'stopped'`，未清空 `aiMsg.thinking`；而 [ChatMessage.vue](github仓库/frontend/src/components/chat/ChatMessage.vue#L14-L16) 的思考步骤条只判断 `message.thinking` 是否有值，不看 `status`，导致停止后仍显示上次 `status` 事件写入的阶段文字。
+- **状态**：已修（2026-11-20）。
+- **修复**：`AbortError`/`CANCELED` 分支补 `aiMsg.thinking = ''`；另在流正常结束但未收到 `done` 事件的兜底分支同样清空 `thinking`，杜绝同类残留。
