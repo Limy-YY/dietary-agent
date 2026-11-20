@@ -22,7 +22,7 @@
 | event | data | 前端处理 |
 |---|---|---|
 | `message` | `{"type":"text","content":"…"}` | `type === 'text'` 时把 `content` 追加到当前 AI 气泡；空内容不建气泡 |
-| `artifact` | `{"type":"meal_card\|shopping_list\|current_plan\|nutrition_report","payload":{…}}` | 立即归一化并渲染/更新；同 `type + raw_id` 原位替换，不重复追加 |
+| `artifact` | `{"type":"meal_card\|shopping_list\|current_plan\|nutrition_report\|quick_actions","payload":{…}}` | 立即归一化并渲染/更新；同 `type + raw_id` 原位替换，不重复追加 |
 | `status` | `{"stage":"正在生成配餐方案"}` | 过程可见：在 AI 气泡顶部渲染「思考步骤条」，正文首帧到达后隐藏；非流式（无该事件）时前端不展示 |
 | `clarify` | `{"question":"…","missing_fields":["gender","age"]}` | 在气泡内渲染追问与缺失字段，不新增 assistant 轮次 |
 | `error` | `{"code":2001,"message":"…"}` | 气泡内提示错误码语义；`2001~2004` 可重试，其余不自动重试 |
@@ -31,7 +31,7 @@
 约束：
 
 - 一次对话可下发多个 `artifact`；`done` 必发且只发一次。
-- 前端**只认这四个 artifact type**；未知 type 进入 `{type:'unknown', raw_type, payload}` 兜底，按纯文本/原始 JSON 提示，不白屏。
+- 前端**只认这五类 artifact type**（`meal_card` / `shopping_list` / `current_plan` / `nutrition_report` / `quick_actions`）；未知 type 进入 `{type:'unknown', raw_type, payload}` 兜底，按纯文本/原始 JSON 提示，不白屏。
 - 流式文本按服务端切片到达，前端自行拼接，不做二次切分。
 
 ### 1.2 数值三条硬规则
@@ -90,6 +90,9 @@
 | `dishes[].estimated_g` | number / null | 估算克数 |
 | `dishes[].portion_text` | string / null | 份量描述（如「1 碗（熟重 150g）」）；null 显示「—」 |
 | `dishes[].method_override` | string / null | 做法覆盖 |
+| `dishes[].method_text` | string / null | 做法名（`method_override` 缺省时回落展示） |
+| `dishes[].ingredients` | string[] | 食材清单（名称 + 克重 + 角色），供「看完整食谱」弹窗 |
+| `dishes[].steps` | string[] / null | 做法步骤要点（库内无步骤文本时为空） |
 | `dishes[].display_order` | integer | 菜内顺序 |
 | `why_summary` | string | 整份方案说明 |
 | `reference_hints` | string[] | 提示条，中性色 |
@@ -139,11 +142,12 @@
 | `start_date` / `end_date` | string / null | 日期范围 |
 | `fixed_at` | string / null | 固定时间；`candidates` 时为空 |
 | `goal_energy_kcal` | number / null | 「N kcal 目标」 |
+| `slots[]` | array | 与 MealCard 槽位同构（嵌套 `candidates[]`，非平铺）；真后端 `_serialize_plan` 直接复用 `_serialize_slot` 结构 |
 | `slots[].meal_slot_id` / `slot_date` / `meal_type` / `display_order` | — | 按天分组展示 |
 | `slots[].selected_candidate_id` | integer / null | 透传 |
-| `slots[].dish_ids` | string[] | 菜品编码 |
-| `slots[].dish_names` | string[] | 菜品名（列表主文案） |
-| `slots[].kcal` | number / null | 该餐热量；null 显示「—」 |
+| `slots[].candidates[]` | array | 同 MealCard `candidates[]`（含 `dishes[]` / `macro_estimate` 等） |
+
+> 旧 Mock 的平铺字段 `dish_ids` / `dish_names` / `kcal` 已废弃，仅 `normalizeCurrentPlan` 保留兼容分支，待 Mock 对齐后删除。
 
 规则：只展示生效方案摘要，不含候选；`has_plan=false` 或接口 `1004` 时为空态，不编数据。
 

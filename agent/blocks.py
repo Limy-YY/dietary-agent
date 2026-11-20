@@ -70,8 +70,8 @@ def _slot_view(slot: dict) -> dict:
 
 
 def meal_card_block(plan: dict) -> dict:
-    scope = plan.get("plan_type", "day")
-    is_week = scope == "week"
+    scope = plan.get("plan_type", "日")
+    is_week = scope == "周"
 
     # 【核心修复 1】兼容后端新版 v1.2 的 ID 命名：优先取 meal_plan_id
     real_plan_id = plan.get("meal_plan_id") or plan.get("plan_id", "")
@@ -89,7 +89,7 @@ def meal_card_block(plan: dict) -> dict:
     goal = plan.get("goal_text", "")
     kcal_text = f"约 {day_kcal} kcal" if day_kcal is not None else "热量待估"
     subtitle = f"目标：{goal} · 已安排餐次合计{kcal_text}"
-    title = {"week": "📅 一周食谱", "meal": "🍱 午餐搭配", "day": "🗓️ 今日食谱"}.get(scope, "🗓️ 今日食谱")
+    title = {"周": "📅 一周食谱", "餐": "🍱 一餐搭配", "日": "🗓️ 今日食谱", "多日": "🗓️ 多日方案", "自定义": "🗓️ 膳食方案"}.get(scope, "🗓️ 膳食方案")
 
     return {
         "type": "meal_card",
@@ -122,7 +122,7 @@ def meal_card_block(plan: dict) -> dict:
             "summary": plan.get("why_summary") or "按档案与近期微量摄入平衡排出这套方案",
             "points": plan.get("reason_points", []),
         },
-        "action_scope_label": {"week": "整周规划", "meal": "这一餐"}.get(scope, "规划"),
+        "action_scope_label": {"周": "整周规划", "餐": "这一餐", "日": "今日规划", "多日": "多日规划", "自定义": "膳食规划"}.get(scope, "规划"),
     }
 
 
