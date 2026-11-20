@@ -113,3 +113,9 @@ localStorage.setItem('sz_token', '<token>')
 - 交付说明：[database/07_数据库交付说明.md](database/07_数据库交付说明.md)
 - 空库恢复与复跑：[database/08_空库恢复与复跑说明.md](database/08_空库恢复与复跑说明.md)
 - 一键起库（[docker/](docker/)）：空数据卷首次启动自动建成 v1.2r2 合并版库并跑完两套验收（04 + 22），约 10 秒。
+
+已有数据卷需手动执行最新的 RAG 来源链接迁移（新建空卷会自动执行）：
+
+```bash
+docker exec -i diet-agent-db psql -U postgres -d diet_agent < database/41_RAG真实来源链接_v1.2r4.sql
+```

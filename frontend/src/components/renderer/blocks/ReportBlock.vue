@@ -46,7 +46,10 @@
       <div class="rp-section">
         <div class="rp-section-title">🔬 {{ report.micro.title }}</div>
         <div v-if="report.micro.overall_pct != null" class="rp-micro-overall">
-          7 项关键微量达标率 <b>{{ report.micro.overall_pct }}%</b>
+          <template v-if="report.micro.evaluable_count != null && report.micro.total_count != null">
+            已评估 {{ report.micro.evaluable_count }}/{{ report.micro.total_count }} 项 ·
+          </template>
+          达标天数占比 <b>{{ report.micro.overall_pct }}%</b>
         </div>
         <div class="rp-micro-grid">
           <div v-for="(m, i) in report.micro.items" :key="i" class="rp-micro">

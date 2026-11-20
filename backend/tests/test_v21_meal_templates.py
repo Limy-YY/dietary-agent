@@ -3,7 +3,7 @@ import sys, unittest
 from pathlib import Path
 from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from app.services.rule_engine.meal_templates import (CATALOG,profile,template_for,iter_template_combos,staple_key,selection_key,retain_pool)
+from app.services.rule_engine.meal_templates import (CATALOG,profile,template_for,iter_template_combos,staple_key,selection_key,retain_pool,non_staple_base_ids)
 
 def mock(key):
     p=CATALOG['DISH-'+key]
@@ -30,6 +30,10 @@ class TemplateTests(unittest.TestCase):
             with self.subTest(keys=keys,mt=mt): self.assertIsNotNone(template_for(combo(*keys),mt))
         for keys,mt in [(('030','056'),'早'),(('049','056','014'),'早'),(('061','069','088'),'午'),(('061','071','088'),'晚')]:
             with self.subTest(keys=keys,mt=mt): self.assertIsNotNone(template_for(combo(*keys),mt))
+
+    def test_full_rice_meals_are_not_breakfast_eligible(self):
+        rows=list(iter_template_combos([mock('061'),mock('067'),mock('078')],'早'))
+        self.assertFalse(any('DISH-061' in {d.dish_id for d in row} for row in rows))
     def test_full_catalog_enumeration(self):
         ds=[mock(f'{i:03}') for i in range(1,111)]
         for mt in ('早','午','晚'):
@@ -50,5 +54,17 @@ class TemplateTests(unittest.TestCase):
         target=SimpleNamespace(kcal=700); prev=[c(['A','B'],700)]
         self.assertLess(selection_key(c(['A','C'],650,.2),target,prev,.2),selection_key(c(['A','B'],700),target,prev,0))
         self.assertGreater(selection_key(c(['A','C'],350),target,prev,0),selection_key(c(['A','B'],700),target,prev,0))
+
+    def test_same_day_avoids_exact_non_staple_and_low_salt_variant(self):
+        def c(ids,kcal=700,score=0):
+            return SimpleNamespace(dish_ids=ids,totals={'kcal':kcal},score=score,
+                                   reason_codes=[],score_breakdown={})
+        target=SimpleNamespace(kcal=700,meal_type='晚')
+        breakfast=c(['DISH-109','DISH-014'])
+        repeated=c(['DISH-062','DISH-014-LS'])
+        fresh=c(['DISH-062','DISH-107'])
+        self.assertEqual(non_staple_base_ids(breakfast),{'DISH-014'})
+        self.assertLess(selection_key(fresh,target,[],0,same_day=[breakfast]),
+                        selection_key(repeated,target,[],0,same_day=[breakfast]))
 
 if __name__=='__main__': unittest.main()

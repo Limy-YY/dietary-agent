@@ -42,9 +42,25 @@ def serving_options(d,requested=1.0):
 
 
 def breakfast_shape(portions,meal_type):
-    # Roles are soft preferences. The only shape limit here is an executable
-    # number of breakfast items; nutrition and redundant starches are scored.
-    return meal_type!='早' or 1<=len(portions)<=3
+    if meal_type!='早':
+        return True
+    if not 1<=len(portions)<=3:
+        return False
+    from .meal_templates import profile
+    metas=[profile(p.facts) for p in portions]
+    # A breakfast must be recognised as breakfast food by the reviewed
+    # catalogue. Full rice meals are intentionally lunch/dinner-only.
+    if any(m.breakfast=='-' for m in metas):
+        return False
+    # Soup + fruit (and soup-heavy breakfast in general) was repeatedly chosen
+    # only because its macros fit. It is not an executable default breakfast.
+    if any('汤羹' in m.roles for m in metas):
+        return False
+    # Sweet bowls combine with milk/soy drink or fruit, not a cooked savoury
+    # side. This prevents nutritionally valid but culinary incoherent拼盘.
+    if any(m.staple=='sweet' for m in metas):
+        return all(m.staple=='sweet' or m.breakfast in ('M','F') for m in metas)
+    return True
 
 
 def combo_portion_options(combo,meal_type,requested=1.,target=None,allowed_options=None):

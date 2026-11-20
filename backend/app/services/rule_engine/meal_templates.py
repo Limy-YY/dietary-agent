@@ -43,7 +43,7 @@ _ROWS = '''001|蒜香清蒸鸡胸肉|P|-|-|鸡肉
 026|番茄黄瓜沙拉|V|L|-|黄瓜
 027|西葫芦蘑菇快炒|V|-|-|西葫芦
 028|四季豆炒胡萝卜|V|-|-|四季豆
-029|糙米鹰嘴豆拌饭|SP|C|grain|鹰嘴豆
+029|糙米鹰嘴豆拌饭|SP|-|grain|鹰嘴豆
 030|燕麦香蕉酸奶碗|SDF|B|sweet|燕麦
 031|清蒸鲈鱼|P|-|-|鱼
 032|白萝卜炖牛肉|PV|-|-|牛肉
@@ -60,7 +60,7 @@ _ROWS = '''001|蒜香清蒸鸡胸肉|P|-|-|鸡肉
 043|香菇炒油菜|V|L|-|油菜
 044|白菜炖豆腐|PV|L|-|豆腐
 045|紫菜蛋花汤|PVT|L|-|鸡蛋
-046|山药米饭|S|C|grain|米饭
+046|山药米饭|S|-|grain|米饭
 047|菜花胡萝卜炒里脊|PV|-|-|猪肉
 048|冬瓜排骨玉米汤|PVT|-|-|猪肉
 049|小米粥|S|C|porridge|小米
@@ -72,10 +72,10 @@ _ROWS = '''001|蒜香清蒸鸡胸肉|P|-|-|鸡肉
 055|番茄菠菜疙瘩汤|SVT|-|soupgrain|小麦
 056|蒸红薯|S|N|tuber|红薯
 057|蒸南瓜|S|N|tuber|南瓜
-058|二米饭|S|C|grain|米饭
+058|二米饭|S|-|grain|米饭
 059|酸奶燕麦片|SD|B|sweet|燕麦
 060|醋溜土豆丝|V|-|-|土豆
-061|白米饭|S|C|grain|米饭|0|0
+061|白米饭|S|-|grain|米饭|0|0
 062|白馒头|S|C|grain|小麦|0|0
 063|原味切片面包|S|N|grain|小麦|0|0
 064|蒸玉米|S|N|grain|玉米|0|0
@@ -158,6 +158,23 @@ for row in _ROWS.splitlines():
 
 def base_dish_id(value):
     return value[:-3] if re.fullmatch(r'DISH-\d{3}-LS',value) else value
+
+
+def non_staple_base_ids(candidate):
+    """Return exact non-staple identities used by a candidate.
+
+    Low-salt variants share the base identity with the original dish, so a
+    normal dish and its low-salt variant cannot masquerade as two different
+    dishes within the same day. Unknown catalogue items are conservatively
+    treated as non-staples until their culinary metadata is reviewed.
+    """
+    out = set()
+    for dish_id in getattr(candidate, 'dish_ids', ()):
+        base = base_dish_id(dish_id)
+        known = CATALOG.get(base)
+        if known is None or '主食' not in known.roles:
+            out.add(base)
+    return out
 
 
 def profile(dish):
@@ -285,7 +302,8 @@ def retain_pool(pool, limit):
     return sorted(out,key=lambda c: (*candidate_priority(c),tuple(c.dish_ids)))
 
 
-def selection_key(candidate, target, previous, repetition, *, protein_previous=None, daily_energy_carry=0.):
+def selection_key(candidate, target, previous, repetition, *, protein_previous=None,
+                  daily_energy_carry=0., same_day=None):
     # Never buy diversity at the cost of choosing a grossly off-target meal.
     deviation = abs(candidate.totals['kcal'] - target.kcal) / max(target.kcal,1)
     band = 0 if deviation <= .15 else 1 if deviation <= .25 else 2 if deviation <= .40 else 3
@@ -300,10 +318,22 @@ def selection_key(candidate, target, previous, repetition, *, protein_previous=N
     if "macro_range_relaxed" in candidate.reason_codes:overall_quality+=.12
     from .practical_quality import candidate_priority
     tier=candidate_priority(candidate)[1]
+    same_day_overlap = 0
+    if same_day is not None:
+        used = set().union(*(non_staple_base_ids(c) for c in same_day)) if same_day else set()
+        same_day_overlap = len(non_staple_base_ids(candidate) & used)
     # Structure first inside a reasonable energy range; nutrition remains a
-    # score and gross deficit still loses. Exact repeats are soft for real meals.
+    # score and gross deficit still loses. Within a usable energy/structure
+    # band, avoid reusing an exact non-staple dish already served that day.
     if getattr(candidate,'score_breakdown',{}).get('attributes'):
+        if same_day is not None:
+            return (band>=2, tier>=2, bool(same_day_overlap), tier,
+                    round(overall_quality+.25*repeated,4),band,tuple(candidate.dish_ids))
         return (band>=2,tier,round(overall_quality+.25*repeated,4),band,tuple(candidate.dish_ids))
+    if same_day is not None:
+        return (band, bool(same_day_overlap), repeated,
+                'macro_range_relaxed' in candidate.reason_codes,
+                round(overall_quality, 4), tuple(candidate.dish_ids))
     return (band, repeated, 'macro_range_relaxed' in candidate.reason_codes,
             round(overall_quality, 4), tuple(candidate.dish_ids))
 

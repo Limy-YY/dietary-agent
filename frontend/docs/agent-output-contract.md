@@ -180,6 +180,7 @@
 - 钠只在 `macro_summary.salt_g`，不进微量区。
 - `summary.data_quality_notes` 与 `completeness` 在面板底部常驻展示，不折叠。
 - 「膳食报告」面板为**报告存档列表**：`GET /nutrition/report/list` 拉取 week/month/custom 报告摘要，点开按 `GET /nutrition/report/{id}` 回看详情；空态引导生成周/月报告或先配餐。方案级营养复盘（plan）在历史方案详情里查看，不进膳食报告存档。
+- `summary.achievement.micro_overall_pct` 是「可评估微量营养素的达标天数占比平均值」，必须同时展示 `micro_evaluable_count / micro_total_count`；不得简写为「7 项达标率」。
 
 ---
 

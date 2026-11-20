@@ -31,6 +31,14 @@ class Practical(unittest.TestCase):
         self.assertTrue(combo_portion_options([rice,tuber],'早'))
         options=combo_portion_options([porridge,tuber],'早');self.assertTrue(options)
         self.assertGreater(portion_cost([rice,tuber],[1,1],'早'),portion_cost([rice],[1],'早'))
+    def test_breakfast_rejects_full_rice_and_soup(self):
+        rice=dish('DISH-061','白米饭',[['大米',50]])
+        soup=dish('DISH-016','小白菜豆腐汤',[['小白菜',100],['豆腐',100]])
+        fruit=dish('DISH-078','猕猴桃',[['猕猴桃',100]])
+        egg=dish('DISH-067','水煮鸡蛋',[['鸡蛋',50]])
+        p=lambda d:N(facts=d,servings=1.)
+        self.assertFalse(breakfast_shape([p(rice),p(egg),p(fruit)],'早'))
+        self.assertFalse(breakfast_shape([p(soup),p(fruit)],'早'))
     def test_main_starch(self):
         d=dish('DISH-061','白米饭',[['大米',50]])
         self.assertIn(2.,serving_options(d));self.assertIn('大米100g',practical_text(d,2.))

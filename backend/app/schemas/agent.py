@@ -13,6 +13,7 @@ class RagItem(BaseModel):
     content: str
     source: str | None = None
     source_id: str | None = None
+    source_url: str | None = None
     category: str | None = None
     score: float | None = None
     kind: str = "doc"  # doc | nutrient
