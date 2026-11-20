@@ -2,6 +2,7 @@
 from itertools import product
 from math import isfinite
 import re
+from types import MappingProxyType
 
 # Inputs are the actual recipe's edible-ingredient weights, not cooked weights.
 COUNT_EGGS = {'水煮鸡蛋','清蒸鸡蛋羹','洋葱炒蛋','肉末蒸蛋','少油番茄炒蛋','韭菜炒鸡蛋','西兰花蒸蛋'}
@@ -9,8 +10,11 @@ SEASON = ('盐','油','酱油','醋','姜','大蒜','大葱','小葱','胡椒','
 BULK_STARCH = {'白米饭','二米饭','山药米饭','白粥','小米粥','白馒头','原味切片面包','清汤面','原味米粉'}
 DRINK_FRUIT = {'无糖豆浆','纯牛奶','原味酸奶','苹果','香蕉','橙子','梨','葡萄','西瓜','桃','猕猴桃'}
 
-def ingredient_weights(d):
-    rows=getattr(d,'ingredient_amounts',None) or []
+def _parse_ingredient_weights(rows):
+    """把 ingredient_amounts（[(食材名,克数),...]）解析成 {食材名: 克数}。
+
+    任一行非法（非二元组 / 克数 None / 非有限 / <=0）→ 整体返回 {}（保守：宁可不用也不半用）。
+    """
     if not rows or any(not isinstance(r,(list,tuple)) or len(r)!=2 or r[1] is None for r in rows): return {}
     out={}
     for name,amount in rows:
@@ -19,6 +23,23 @@ def ingredient_weights(d):
         if not isfinite(n) or n<=0: return {}
         out[str(name)]=out.get(str(name),0)+n
     return out
+
+
+def ingredient_weights(d):
+    """返回一道菜的 {食材名: 克数}（只读 Mapping）。结果缓存到 DishFacts 对象上，之后 O(1) 读取。
+
+    ingredient_amounts 在请求内不可变（get_dish_facts 每请求只查一次），
+    打分/排序/诊断的内层循环反复调本函数时不必再重新解析。
+    返回只读视图：任何调用方就地修改都会抛 TypeError，避免误改共享缓存。
+    """
+    cached = getattr(d, 'ingredient_weights', None)
+    if cached is None:
+        cached = MappingProxyType(_parse_ingredient_weights(getattr(d,'ingredient_amounts',None) or []))
+        try:
+            d.ingredient_weights = cached
+        except AttributeError:
+            pass
+    return cached
 
 
 def egg_count(d):

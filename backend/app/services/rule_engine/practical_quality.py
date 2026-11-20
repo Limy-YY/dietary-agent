@@ -2,6 +2,8 @@
 from collections import Counter
 from math import sqrt
 
+from .models import _UNSET
+
 # Explicit ingredient families, not dish names; unmatched facts are not invented.
 PROTEINS = {
     '鸡肉': ('鸡胸','鸡腿','鸡翅','鸡肉','鸡丁','鸡脯'),
@@ -133,6 +135,9 @@ def candidate_priority(c):
 def main_family(c):
     # Match ingredient records and weight by actual grams; soup with a small
     # piece of meat shouldn't override a substantial main. Exclude incidental eggs.
+    cached = getattr(c, '_main_family', _UNSET)
+    if cached is not _UNSET:
+        return cached
     from .meal_templates import profile
     totals=Counter()
     for p in getattr(c,'portions',()):
@@ -144,26 +149,42 @@ def main_family(c):
             if f and n not in CONDIMENT and g*p.servings>=15:
                 # Soy drink is not equivalent to an equal weight of meat/solid tofu.
                 totals[f]+=g*p.servings*factor*(.25 if n=='豆浆' else .75 if f=='豆制品' else 1.)
-    return totals.most_common(1)[0][0] if totals else None
+    result = totals.most_common(1)[0][0] if totals else None
+    try:
+        c._main_family = result
+    except AttributeError:
+        pass
+    return result
 
 def purchases(c):
-    return {n for p in getattr(c,'portions',()) for n,g in weights(p.facts).items()
-            if n not in CONDIMENT and g*p.servings>=15}
+    cached = getattr(c, '_purchases', _UNSET)
+    if cached is not _UNSET:
+        return cached
+    result = frozenset(n for p in getattr(c,'portions',()) for n,g in weights(p.facts).items()
+                       if n not in CONDIMENT and g*p.servings>=15)
+    try:
+        c._purchases = result
+    except AttributeError:
+        pass
+    return result
 
-def protein_rotation(c,previous):
+def protein_rotation(c,previous,*,families=None):
     f=main_family(c)
     if not f:return 0.
-    history=[v for x in previous if (v:=main_family(x))]
+    if families is None:
+        history=[v for x in previous if (v:=main_family(x))]
+    else:
+        history=[v for v in families if v]
     if not history:return 0.
     # Only recent meals; soft penalty, no quotas or exclusion.
     recent=history[-6:]
     return .24*(recent[-1]==f)+.12*sum(v==f for v in recent)+.07*sum(v==f for v in history)+.18*(len(recent)>=2 and recent[-2:]==[f,f])
 
-def purchase_credit(c,previous):
+def purchase_credit(c,previous,*,recent_purchases=None):
     if not previous:return 0.
     now=purchases(c)
     if not now:return 0.
-    recent=set().union(*(purchases(x) for x in previous[-4:]))
+    recent = recent_purchases if recent_purchases is not None else set().union(*(purchases(x) for x in previous[-4:]))
     # Small positive preference; do not penalize trying fresh ingredients.
     return .09*min(1.,len(now&recent)/3.)
 

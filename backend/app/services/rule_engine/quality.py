@@ -60,16 +60,26 @@ def structure_penalty(combo, meal_type):
     return penalty
 
 
-def repetition_cost(candidate,previous):
+def repetition_cost(candidate,previous,*,ctx=None):
     if not previous: return 0.0
     from .meal_templates import base_dish_id
-    recent=previous[-6:]
-    counts=Counter(base_dish_id(d) for c in previous for d in c.dish_ids)
-    recent_counts=Counter(base_dish_id(d) for c in recent for d in c.dish_ids)
-    adjacent={base_dish_id(d) for d in previous[-1].dish_ids}
+    if ctx is not None:
+        counts=ctx.rep_counts
+        recent_counts=ctx.rep_recent_counts
+        adjacent=ctx.rep_adjacent
+        veg_families=ctx.rep_veg_families
+        prev_sweet=ctx.rep_prev_sweet
+        dish_sets=ctx.dish_sets
+    else:
+        recent=previous[-6:]
+        counts=Counter(base_dish_id(d) for c in previous for d in c.dish_ids)
+        recent_counts=Counter(base_dish_id(d) for c in recent for d in c.dish_ids)
+        adjacent={base_dish_id(d) for d in previous[-1].dish_ids}
+        veg_families=Counter(profile(p.facts).family for c in previous for p in c.portions
+                             if profile(p.facts).roles=={'蔬菜'})
+        prev_sweet=sum(profile(q.facts).staple=='sweet' for c in previous for q in c.portions)
+        dish_sets=[frozenset(base_dish_id(d) for d in c.dish_ids) for c in previous]
     penalty=0.
-    veg_families=Counter(profile(p.facts).family for c in previous for p in c.portions
-                         if profile(p.facts).roles=={'蔬菜'})
     for p in candidate.portions:
         meta=profile(p.facts); key=base_dish_id(p.dish_id)
         if meta.roles=={'主食'}:continue
@@ -81,9 +91,9 @@ def repetition_cost(candidate,previous):
         if key in adjacent:penalty+=weight*.65
         if meta.roles=={'蔬菜'}:penalty+=.045*veg_families[meta.family]
         if meta.staple=='sweet':
-            penalty+=.12*sum(profile(q.facts).staple=='sweet' for c in previous for q in c.portions)
-    keyset={base_dish_id(d) for d in candidate.dish_ids}
-    penalty+=.65*sum(keyset=={base_dish_id(d) for d in c.dish_ids} for c in previous)
+            penalty+=.12*prev_sweet
+    keyset=frozenset(base_dish_id(d) for d in candidate.dish_ids)
+    penalty+=.65*sum(1 for ds in dish_sets if ds==keyset)
     return penalty
 
 

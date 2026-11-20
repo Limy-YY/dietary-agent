@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from collections.abc import Mapping
 
 # ---------------------------------------------------------------- 常量
 
@@ -183,6 +184,11 @@ class DishFacts:
     ingredient_names: list[str] = field(default_factory=list)
     source: str | None = None
     ingredient_amounts: list = field(default_factory=list)
+    #: 预计算的 {食材名: 克数}（只读 Mapping，防调用方误改共享缓存）；
+    #: 由 portion_policy.ingredient_weights 首次访问时缓存到本对象。
+    #: None = 尚未计算（用 None 而非 {} 作哨兵，避免「无可用配方数据」的菜被反复重算）。
+    #: 请求内 dish 数据不可变、克隆候选浅拷贝共享同一 facts，故此缓存整次请求内不失效。
+    ingredient_weights: Mapping[str, float] | None = None
 
     @property
     def is_staple(self) -> bool:
@@ -367,6 +373,10 @@ class DishPortion:
         }
 
 
+#: 缓存哨兵：区分「尚未计算」与「计算结果为 None / 空集」。
+_UNSET = object()
+
+
 @dataclass(slots=True)
 class Candidate:
     """一个餐位候选。"""
@@ -384,6 +394,11 @@ class Candidate:
     eating_order_advice: str = ""
     notes: list[str] = field(default_factory=list)
     signature: tuple[str, ...] = ()
+    #: 预计算缓存（不参与相等比较 / repr）。依赖只读的 portions/facts，
+    #: 克隆候选浅拷贝共享同一 facts，故整次请求内不失效；
+    #: 由 practical_quality.main_family / purchases 首次访问时回填。
+    _main_family: Any = field(default=_UNSET, repr=False, compare=False)
+    _purchases: Any = field(default=_UNSET, repr=False, compare=False)
 
     @property
     def dish_ids(self) -> list[str]:

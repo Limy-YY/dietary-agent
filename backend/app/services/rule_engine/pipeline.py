@@ -39,6 +39,7 @@ from .repository import RuleEngineDataSource
 from .targets import compute_targets
 from .quality import dish_roles, repetition_cost, selected
 from .meal_templates import (
+    build_selection_context,
     non_staple_base_ids,
     profile as culinary_profile,
     template_for,
@@ -80,6 +81,8 @@ def clone_candidate(source: Candidate) -> Candidate:
         reason_codes=list(source.reason_codes),
         notes=list(source.notes),
         signature=source.signature,
+        _main_family=source._main_family,
+        _purchases=source._purchases,
     )
 
 
@@ -285,10 +288,11 @@ def generate_plan(
             protein_previous = [c for s in slots
                                 if (s.slot_date == slot_date or s.meal_type in ("午", "晚"))
                                 and (c := selected(s)) is not None]
+            ctx = build_selection_context(previous, protein_previous, today)
             pool.sort(key=lambda c: selection_key(c, target, previous,
-                repetition_cost(c, previous),
+                repetition_cost(c, previous, ctx=ctx),
                 protein_previous=protein_previous,daily_energy_carry=daily_energy_carry,
-                same_day=today))
+                same_day=today, ctx=ctx))
             pool = _vary_equivalent_pool(
                 pool, target, today, request.variation_seed, slot_date, meal_type
             )

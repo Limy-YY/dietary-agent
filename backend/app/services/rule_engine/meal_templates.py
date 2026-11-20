@@ -402,26 +402,82 @@ def retain_pool(pool, limit):
     return sorted(out,key=lambda c: (*candidate_priority(c),tuple(c.dish_ids)))
 
 
+@dataclass(frozen=True)
+class SelectionContext:
+    """一个餐位排序前对「历史已选餐」做的一次性聚合，供 selection_key / repetition_cost 复用。
+
+    排序键内部原本逐候选重扫 previous（O(pool×历史)）；本上下文把这些聚合量
+    提前算一次，排序键内只做 O(1) 查表。字段分别对齐 previous / protein_previous / same_day。
+    """
+    rep_counts: dict
+    rep_recent_counts: dict
+    rep_adjacent: frozenset
+    rep_veg_families: dict
+    rep_prev_sweet: int
+    dish_sets: tuple
+    families: tuple
+    recent_purchases: frozenset
+    today_used: frozenset
+
+
+def build_selection_context(previous, protein_previous, same_day):
+    """按 selection_key / repetition_cost 需要的口径，把历史聚合量算一次。"""
+    from .practical_quality import main_family, purchases
+
+    recent = previous[-6:] if previous else []
+    rep_counts = Counter(base_dish_id(d) for c in previous for d in c.dish_ids)
+    rep_recent_counts = Counter(base_dish_id(d) for c in recent for d in c.dish_ids)
+    rep_adjacent = frozenset(base_dish_id(d) for d in previous[-1].dish_ids) if previous else frozenset()
+    rep_veg_families = Counter(profile(p.facts).family for c in previous for p in c.portions
+                               if profile(p.facts).roles == {'蔬菜'})
+    rep_prev_sweet = sum(profile(q.facts).staple == 'sweet' for c in previous for q in c.portions)
+    dish_sets = tuple(frozenset(base_dish_id(d) for d in c.dish_ids) for c in previous)
+
+    fam_src = protein_previous if protein_previous is not None else previous
+    families = tuple(main_family(c) for c in fam_src)
+    recent_purchases = frozenset().union(*(purchases(c) for c in previous[-4:]))
+    today_used = frozenset().union(*(non_staple_base_ids(c) for c in same_day)) if same_day else frozenset()
+
+    return SelectionContext(
+        rep_counts=rep_counts, rep_recent_counts=rep_recent_counts,
+        rep_adjacent=rep_adjacent, rep_veg_families=rep_veg_families,
+        rep_prev_sweet=rep_prev_sweet, dish_sets=dish_sets, families=families,
+        recent_purchases=recent_purchases, today_used=today_used,
+    )
+
+
 def selection_key(candidate, target, previous, repetition, *, protein_previous=None,
-                  daily_energy_carry=0., same_day=None):
+                  daily_energy_carry=0., same_day=None, ctx=None):
     # Never buy diversity at the cost of choosing a grossly off-target meal.
     deviation = abs(candidate.totals['kcal'] - target.kcal) / max(target.kcal,1)
     band = 0 if deviation <= .15 else 1 if deviation <= .25 else 2 if deviation <= .40 else 3
-    repeated = sum({base_dish_id(d) for d in candidate.dish_ids}=={base_dish_id(d) for d in c.dish_ids} for c in previous)
+    keyset = frozenset(base_dish_id(d) for d in candidate.dish_ids)
+    repeated = (sum(1 for ds in ctx.dish_sets if ds == keyset) if ctx is not None
+                else sum(keyset == frozenset(base_dish_id(d) for d in c.dish_ids) for c in previous))
     # Family rotation and procurement are finite ranking terms; specialty is
     # never a categorical gate. Preserve the existing energy and exact-repeat bands.
     from .practical_quality import protein_rotation, purchase_credit
-    rotation = protein_rotation(candidate, previous if protein_previous is None else protein_previous) if getattr(target,'meal_type',None) in ('午','晚') else 0.
+    if getattr(target,'meal_type',None) in ('午','晚'):
+        src = previous if protein_previous is None else protein_previous
+        rotation = (protein_rotation(candidate, src, families=ctx.families) if ctx is not None
+                    else protein_rotation(candidate, src))
+    else:
+        rotation = 0.
     carry=max(-target.kcal*.12,min(target.kcal*.12,float(daily_energy_carry or 0.)))
     daily_energy_cost=.45*abs(candidate.totals['kcal']-(target.kcal+carry))/max(target.kcal,1)
-    overall_quality = candidate.score + repetition + rotation + daily_energy_cost - purchase_credit(candidate,previous)
+    purchase = (purchase_credit(candidate, previous, recent_purchases=ctx.recent_purchases) if ctx is not None
+                else purchase_credit(candidate, previous))
+    overall_quality = candidate.score + repetition + rotation + daily_energy_cost - purchase
     if "macro_range_relaxed" in candidate.reason_codes:overall_quality+=.12
     from .practical_quality import candidate_priority
     tier=candidate_priority(candidate)[1]
     same_day_overlap = 0
     if same_day is not None:
-        used = set().union(*(non_staple_base_ids(c) for c in same_day)) if same_day else set()
-        same_day_overlap = len(non_staple_base_ids(candidate) & used)
+        if ctx is not None:
+            same_day_overlap = len(non_staple_base_ids(candidate) & ctx.today_used)
+        else:
+            used = set().union(*(non_staple_base_ids(c) for c in same_day)) if same_day else set()
+            same_day_overlap = len(non_staple_base_ids(candidate) & used)
     # Structure first inside a reasonable energy range; nutrition remains a
     # score and gross deficit still loses. Within a usable energy/structure
     # band, avoid reusing an exact non-staple dish already served that day.
