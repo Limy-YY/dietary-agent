@@ -1013,12 +1013,11 @@ def fix_plan(
         partial = [o for o in overlaps if not o["fully_covered"]]
         parts: list[str] = []
         if full:
-            ids = ",".join(str(o["meal_plan_id"]) for o in full)
-            parts.append(f"已有覆盖同期的已固定方案（id={ids}），替换会将其整份作废")
+            parts.append("这段时间已经有一份固定方案，确认新方案会把它整份作废")
         for o in partial:
             parts.append(
-                f"方案 {o['meal_plan_id']} 与本方案在 {o['overlap_start']}~{o['overlap_end']} "
-                f"部分重叠，整份替换会让它其余日期一并失效"
+                f"新方案与已有固定方案在 {o['overlap_start']}~{o['overlap_end']} 部分重叠，"
+                "整份替换会让它其余日期一并失效"
             )
         raise BizError(
             BizCode.PLAN_STATE_CONFLICT,

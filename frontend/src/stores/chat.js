@@ -392,6 +392,7 @@ export const useChatStore = defineStore('chat', () => {
     abortController.value = controller
 
     let errorMsg = ''
+    let errorCode = null
     let completed = false
     let matchingCard = false
     try {
@@ -419,11 +420,16 @@ export const useChatStore = defineStore('chat', () => {
           if (evt.event === 'clarify') errorMsg = payload.question || '需要补充信息'
           if (evt.event === 'error') {
             errorMsg = payload.message || '操作失败'
+            errorCode = payload.code ?? null
           }
         }
       })
 
-      if (errorMsg) throw new Error(errorMsg)
+      if (errorMsg) {
+        const err = new Error(errorMsg)
+        err.code = errorCode
+        throw err
+      }
       if (!completed || !matchingCard) throw new Error('未获操作成功确认，请刷新方案核对。')
       // 确认会影响当前方案、清单和历史；换候选/选用只更新原卡片。
       if (context?.action === 'confirm') usePanelStore().bump()

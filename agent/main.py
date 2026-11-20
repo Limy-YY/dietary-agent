@@ -104,7 +104,13 @@ async def _stream(req: AgentChatRequest):
                     else:
                         matched = matched or bool(slot.get("selected_candidate_id"))
         if not matched:
-            yield _sse("error", {"code": 2003, "message": result.get("text") or "未获操作成功确认，请刷新方案核对。"})
+            # 固定方案冲突：confirm 遇到同期 fixed 方案时，Agent 返回的是 quick_actions（替换/取消）
+            # 而非 meal_card。这里不能当普通错误吞掉，保留 2005 让前端退回对话路径渲染按钮。
+            conflict = action == "confirm" and any(
+                b.get("type") == "quick_actions" for b in (result.get("blocks") or [])
+            )
+            code = 2005 if conflict else 2003
+            yield _sse("error", {"code": code, "message": result.get("text") or "未获操作成功确认，请刷新方案核对。"})
             yield _sse("done", {"conversation_id": conv_id, "finish_reason": "error"})
             return
 

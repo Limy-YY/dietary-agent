@@ -11,7 +11,7 @@ import requests
 import config
 
 BASE = config.BACKEND_BASE_URL.rstrip("/")
-_TIMEOUT = 30
+_TIMEOUT = 120
 
 # 本机回连后端（127.0.0.1）不走系统代理：requests 默认 trust_env 会读系统代理，
 # 在开了 Clash/V2Ray 等代理的机器上会把 localhost 也路由到代理导致 502。

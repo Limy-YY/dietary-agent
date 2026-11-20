@@ -328,3 +328,19 @@
 - **根因**：[chat.js](github仓库/frontend/src/stores/chat.js) 的 `send()` 在 `AbortError`/`CANCELED` 分支只把 `aiMsg.status` 置为 `'stopped'`，未清空 `aiMsg.thinking`；而 [ChatMessage.vue](github仓库/frontend/src/components/chat/ChatMessage.vue#L14-L16) 的思考步骤条只判断 `message.thinking` 是否有值，不看 `status`，导致停止后仍显示上次 `status` 事件写入的阶段文字。
 - **状态**：已修（2026-11-20）。
 - **修复**：`AbortError`/`CANCELED` 分支补 `aiMsg.thinking = ''`；另在流正常结束但未收到 `done` 事件的兜底分支同样清空 `thinking`，杜绝同类残留。
+
+## BUG-030 · 确认方案遇同期固定方案冲突时，只弹裸警告、无「替换/取消」按钮
+
+- **现象**：已有同期 fixed 方案时，点餐卡「确认方案」按钮 → 只弹一条 ElMessage toast「已有覆盖同期的已固定方案（id=85）…」，没有可点的「替换/取消」，用户看起来像「被卡住、无法修改」。
+- **层面**：Agent 静默路径 + 前端卡片确认 + 后端文案。
+- **根因**：餐卡「确认方案」走 `chat.silentAction`（静默动作）。Agent [main.py](github仓库/agent/main.py) 的静默守卫只认 `meal_card`，而 confirm 遇到 2005 冲突时 Agent 返回的是 `quick_actions`（替换/取消）块，被守卫判 `matched=False` 后降级成 `error(2003)`，只透传 `text`、把 `quick_actions` 块丢弃；前端 `silentAction` 收到 error → throw → `onConfirm` 用 ElMessage 弹裸文案。同时文案泄露内部主键 id（IMP-031 已记）。
+- **状态**：已修（2026-11-20）。
+- **修复**：
+  1. [main.py](github仓库/agent/main.py) 静默守卫：confirm 冲突（结果含 `quick_actions`）时保留 2005 码而非 2003，供前端区分。
+  2. [chat.js](github仓库/frontend/src/stores/chat.js) `silentAction` 透出 `errorCode`，抛错时挂到 `err.code`。
+  3. [MealCardBlock.vue](github仓库/frontend/src/components/renderer/blocks/MealCardBlock.vue) `onConfirm`：捕获 `code===2005` 时退回对话路径 `chat.send('确认当前方案')`（不带 context，避免后端把 `current_plan` 当聊天卡下发），并加 `confirming` 状态让按钮在确认/追问期间禁用，避免重复点。
+  4. [mealplan.py](github仓库/backend/app/routers/mealplan.py) 冲突文案去掉内部 id，改用户向表述（对应 IMP-031）。
+  5. [agent.py](github仓库/agent/agent.py) 冲突追问定位：confirm 遇 2005 时把目标方案 id 记进会话态 `_pending_confirm_plan_id`，`_operation_plan` 在多方案且无 context 时用它兜底定位；「替换/取消」命中后清除。这样裸话术「替换」在多方案场景也能定位。
+  6. [ActionsBlock.vue](github仓库/frontend/src/components/renderer/blocks/ActionsBlock.vue) 「替换/取消」改一次性按钮：点过一次即禁用，避免重复点出第二次追问。
+  7. [agent.py](github仓库/agent/agent.py) 「替换」成功后的回复改**确定性文案**（`text` 而非 LLM `narration`）：此前「替换」这个裸词交给 LLM 叙事，会被误读成「待确认替换范围」再追问一次，反而诱导用户继续输入「替换午餐」撞上「已固定不可改」。现在直接回「已确认，方案已生效。已取代同期的旧方案。」+ 固定后的餐卡。
+- **备注**：能力本身一直都在（`replace=true` → 旧方案标 `superseded`），只是按钮路径先把选择入口吞了、再把方案定位丢了、最后把成功文案交给了容易跑偏的 LLM。修复后链路为：卡上「确认方案」→ 冲突 → 气泡出现「替换/取消」→ 点「替换」携带 Agent 记住的目标方案 id 完成取代并给出确定文案。

@@ -5,20 +5,31 @@
       :key="i"
       class="qa-btn"
       :class="i === 0 ? 'qa-primary' : 'qa-ghost'"
-      @click="$emit('phrase', a.phrase)"
+      :disabled="consumed || chat.sending"
+      @click="onClick(a)"
     >{{ a.label }}</button>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { useChatStore } from '@/stores/chat.js'
 
 const props = defineProps({ block: { type: Object, required: true } })
-defineEmits(['phrase'])
+const chat = useChatStore()
 
 const actions = computed(() =>
   props.block && Array.isArray(props.block.actions) ? props.block.actions : []
 )
+
+// 一次性按钮：点过「替换/取消」后即禁用，避免重复点出第二次追问
+const consumed = ref(false)
+
+function onClick(a) {
+  if (consumed.value || !a.phrase || chat.sending) return
+  consumed.value = true
+  chat.send(a.phrase)
+}
 </script>
 
 <style scoped>
@@ -35,6 +46,10 @@ const actions = computed(() =>
   cursor: pointer;
   border: 1px solid transparent;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.qa-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .qa-primary {
   background: #4a7c59;

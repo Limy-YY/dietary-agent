@@ -269,9 +269,9 @@ async function onConfirm() {
   } catch (e) {
     if (e && e.code === 2005) {
       // 同期已有固定方案冲突：静默路径会吞掉「替换/取消」按钮，
-      // 退回对话路径，让 quick_actions 按钮在气泡里渲染供用户二选一。
-      // await 让按钮在本次确认（含追问）期间保持禁用，避免重复点。
-      await chat.send(PHRASE.confirm, actionContext('confirm'))
+      // 退回对话路径（不带 context，避免后端把 current_plan 当聊天卡下发），
+      // 方案定位交给 Agent 记住的「冲突目标方案」。await 让按钮在追问期间保持禁用。
+      await chat.send(PHRASE.confirm)
     } else {
       ElMessage(e.message || '确认失败，请重试')
     }

@@ -100,7 +100,7 @@ def execute(bc,state,name,args,message):
         plans.append(actual)
     target=tr.resolve(plans,message,args)
     plan,slot=target.plan,target.slot
-    if plan.get('status') != 'candidates': raise ValueError('已固定或非待确认方案不能直接修改')
+    if plan.get('status') != 'candidates': raise ValueError('方案已生效（已固定），不能直接修改。如需调整，请重新生成一份覆盖该餐次的方案，确认后选择「替换」取代当前方案。')
     payload = dict(meal_plan_id=plan_id(plan),meal_slot_id=slot['meal_slot_id'],expected_candidate_id=slot['selected_candidate_id'],
                    exclude_ingredients=args.get('exclude_ingredients') or [],soft_avoid=args.get('soft_avoid') or [])
     if name == 'regenerate_slot':

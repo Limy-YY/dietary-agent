@@ -373,6 +373,13 @@ def _operation_plan(state,message,context):
         state['current_plan']=plans[indices[0]-1];state['active_plan_id']=le.plan_id(plans[indices[0]-1])
         return plans[indices[0]-1]
     if len(plans)==1:return plans[0]
+    # 固定冲突追问（替换/取消）不随身带方案 id：用上一轮「确认冲突」记住的目标方案兜底定位，
+    # 避免多方案场景下裸话术「替换」定位失败。
+    pid = state.get('_pending_confirm_plan_id')
+    if pid is not None:
+        for p in plans:
+            if str(le.plan_id(p)) == str(pid):
+                return p
     if not plans:return None
     raise ValueError('当前有多份方案，请说明方案编号，或使用对应方案卡片操作')
 
@@ -1148,6 +1155,7 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
 
     # 取消（覆盖追问的否定回答）
     if kind == "cancel":
+        st.pop("_pending_confirm_plan_id", None)
         return {"text": "好的，已保留旧方案，没有改动。", "blocks": []}
 
     # 确认 / 固定
@@ -1164,6 +1172,7 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
             updated_plan = bc.fix_meal_plan(
                 meal_plan_id=plan.get("meal_plan_id", ""), replace=replace
             )
+            st.pop("_pending_confirm_plan_id", None)
 
             le.remember(st,updated_plan)
             st["plans"].insert(0, dict(updated_plan))
@@ -1189,10 +1198,13 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
                 f"是否取代同期的旧方案：{'是' if replace else '否'}\n"
                 f"营养分析：{'已成功生成' if report is not None else ('生成失败：' + report_error if report_error else '用户未请求')}。"
             )
-            narration = _narrate(message, context, fallback, history)
             result_blocks = [blocks.meal_card_block(updated_plan)]
             if report is not None:
                 result_blocks.append(blocks.report_block(report))
+            if replace:
+                # 「替换」是确定性动作：直接给确定文案，避免 LLM 把「替换」误读成待确认范围、再追问一次
+                return {"text": fallback, "blocks": result_blocks}
+            narration = _narrate(message, context, fallback, history)
             return {
                 "narration": narration,
                 # 【改进】发带 fixed 状态的餐卡：前端按 meal_plan_id 就地更新原卡（翻成「已生效」并禁用按钮），
@@ -1203,6 +1215,8 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
             if getattr(e, "code", None) == 2005:  # PLAN_STATE_CONFLICT：同期已有固定方案
                 # 后端消息已完整（含冲突说明），不再重复追加提示，也不重复渲染方案卡片；
                 # 改用行内快捷按钮让用户二选一，点击后发「替换/取消」固定话术走意图路由。
+                # 记住本次冲突的目标方案 id，供下一轮「替换/取消」在无 context 时定位（多方案场景）。
+                st["_pending_confirm_plan_id"] = plan.get("meal_plan_id")
                 return {
                     "text": str(e),
                     "blocks": [
