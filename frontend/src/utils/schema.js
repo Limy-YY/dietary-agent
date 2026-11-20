@@ -84,13 +84,24 @@ export function mealLabel(v) {
 
 /* ---------- 菜品 / 候选 / 餐位 ---------- */
 
+/**
+ * 份量描述去重：后端 portion_text 形如「1份（约2个蛋；配方用量：番茄120g、鸡蛋100g）」，
+ * 其中「配方用量：…」枚举与下方「食材」清单重复，展示时只保留「N份」与实用比喻（如「约2个蛋」）。
+ */
+function cleanPortion(text) {
+  if (!text) return text
+  return text
+    .replace(/；?配方用量：[^）]*/, '')
+    .replace(/（）/, '')
+}
+
 function dishView(d) {
   const estimated = numOrNull(pick(d, 'estimated_g'))
   return {
     dish_id: str(pick(d, 'dish_id'), ''),
     name: str(pick(d, 'name'), '未命名菜品'),
     role: str(pick(d, 'role'), ''),
-    amount: str(pick(d, 'portion_text'), '') || (estimated === null ? '—' : `约 ${estimated} g`),
+    amount: cleanPortion(str(pick(d, 'portion_text'), '')) || (estimated === null ? '—' : `约 ${estimated} g`),
     kcal: null,
     // 做法要点：method_override（换做法覆盖）优先，缺省回落到 core.dish 的 method_text
     tip: str(pick(d, 'method_override', 'method_text'), ''),
