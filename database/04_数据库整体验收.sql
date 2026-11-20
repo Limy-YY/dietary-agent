@@ -734,6 +734,69 @@ BEGIN
 END
 $$;
 
+-- v21 合并段（博淇：DISH-121..170 + -LS 少盐变体）细断言
+DO $$
+DECLARE
+    m_dishes       integer;
+    m_empty_ing    integer;
+    m_null_energy  integer;
+    m_snapshot_bad integer;
+    m_dup_name     integer;
+BEGIN
+    SELECT count(*) INTO m_dishes
+      FROM core.dish
+     WHERE source_id IN ('home-basics-v2.1-20261119','home-variants-v2.1-20261119','v21-low-salt-round1')
+       AND NOT is_deleted;
+
+    SELECT count(*) INTO m_empty_ing
+      FROM core.dish d
+     WHERE d.source_id IN ('home-basics-v2.1-20261119','home-variants-v2.1-20261119','v21-low-salt-round1')
+       AND NOT d.is_deleted
+       AND NOT EXISTS (SELECT 1 FROM core.dish_ingredient di WHERE di.dish_id = d.dish_id);
+
+    SELECT count(*) INTO m_null_energy
+      FROM core.dish d
+      JOIN app.v_dish_live_nutrition v ON v.dish_id = d.dish_id
+     WHERE d.source_id IN ('home-basics-v2.1-20261119','home-variants-v2.1-20261119','v21-low-salt-round1')
+       AND NOT d.is_deleted
+       AND v.energy_kcal IS NULL;
+
+    SELECT count(*) INTO m_snapshot_bad
+      FROM core.dish d
+      JOIN app.v_dish_live_nutrition v ON v.dish_id = d.dish_id
+     WHERE d.source_id IN ('home-basics-v2.1-20261119','home-variants-v2.1-20261119','v21-low-salt-round1')
+       AND NOT d.is_deleted
+       AND COALESCE(d.avoid_snapshot -> 'strict_allergens', '[]'::jsonb)
+           <> COALESCE(to_jsonb(v.strict_allergens), '[]'::jsonb);
+
+    SELECT count(*) INTO m_dup_name
+      FROM (SELECT name
+              FROM core.dish
+             WHERE source_id IN ('home-basics-v2.1-20261119','home-variants-v2.1-20261119','v21-low-salt-round1')
+               AND NOT is_deleted
+             GROUP BY name
+            HAVING count(*) > 1) t;
+
+    IF m_dishes <> 84 THEN
+        RAISE EXCEPTION 'v21 合并段菜式应为84，实际为%', m_dishes;
+    END IF;
+    IF m_empty_ing <> 0 THEN
+        RAISE EXCEPTION 'v21 合并段有%道菜配料为空', m_empty_ing;
+    END IF;
+    IF m_null_energy <> 0 THEN
+        RAISE EXCEPTION 'v21 合并段有%道菜 energy_kcal 为空', m_null_energy;
+    END IF;
+    IF m_snapshot_bad <> 0 THEN
+        RAISE EXCEPTION 'v21 合并段有%道菜 strict_allergens 快照与实时视图不一致', m_snapshot_bad;
+    END IF;
+    IF m_dup_name <> 0 THEN
+        RAISE EXCEPTION 'v21 合并段存在%组重名', m_dup_name;
+    END IF;
+
+    RAISE NOTICE 'v21 合并段验收通过：84 道，配料非空 / energy_kcal 非空 / 快照一致 / 菜名唯一 全部通过';
+END
+$$;
+
 -- v1.2r4 过敏原复核：未核查清零；存储快照与实时视图一致；含已确认含配料的菜式不得 strict_allergens 为空
 DO $$
 DECLARE
