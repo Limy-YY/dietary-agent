@@ -499,6 +499,7 @@ ORDER BY check_item;
 DO $$
 DECLARE
     total_dishes integer;
+    dish_nls integer;
     new_dishes integer;
     new_ingredient_rows integer;
     live_rows integer;
@@ -522,6 +523,10 @@ BEGIN
     SELECT count(*) INTO total_dishes
     FROM core.dish
     WHERE NOT is_deleted;
+
+    SELECT count(*) INTO dish_nls
+    FROM core.dish
+    WHERE dish_id NOT LIKE '%-LS' AND NOT is_deleted;
 
     SELECT count(*) INTO new_dishes
     FROM core.dish
@@ -671,8 +676,11 @@ BEGIN
     FROM audit.schema_migration
     WHERE migration_id = '2026-11-19-dish-expansion-120';
 
-    IF total_dishes <> 204 THEN
-        RAISE EXCEPTION '有效菜式总数应为204，实际为%', total_dishes;
+    IF total_dishes <> 213 THEN
+        RAISE EXCEPTION '有效菜式总数应为213（170基础+43少盐变体），实际为%', total_dishes;
+    END IF;
+    IF dish_nls <> 170 THEN
+        RAISE EXCEPTION '非-LS基础菜式应为170，实际为%', dish_nls;
     END IF;
     IF new_dishes <> 30 THEN
         RAISE EXCEPTION '本批新增菜式应为30，实际为%', new_dishes;
