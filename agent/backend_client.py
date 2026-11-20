@@ -210,7 +210,6 @@ def regenerate_slot(**payload):
 
 
 def replace_dish(**payload):
-    print(payload)
     return _post("/api/meal-plan/dish/replace", payload)
 
 

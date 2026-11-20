@@ -165,17 +165,24 @@ def _regex_intent(message: str) -> dict | None:
     m = message.strip()
     has = lambda pat: re.search(pat, m) is not None  # noqa: E731
 
-    if has(r"换一换|更换|换一餐|换个|换掉"):
-        meal_alias = {
-            "早餐": "早餐", "早饭": "早餐", "早上": "早餐",
-            "午餐": "午餐", "午饭": "午餐", "中午": "午餐",
-            "晚餐": "晚餐", "晚饭": "晚餐", "晚上": "晚餐",
-        }
-        label = next((v for k, v in meal_alias.items() if k in m), "午餐")
-        return {"intent": "swap_candidate", "meal_type": label}
+    meal_alias = {
+        "早餐": "早餐", "早饭": "早餐", "早上": "早餐",
+        "午餐": "午餐", "午饭": "午餐", "中午": "午餐",
+        "晚餐": "晚餐", "晚饭": "晚餐", "晚上": "晚餐",
+    }
+
+    if has(r"换一换|换一餐|换个候选|换个方案"):
+
+        label = next((v for k, v in meal_alias.items() if k in m), None)
+        # 只有明确指定了餐次、且不带“来点新鲜的/局部替换”意图时，才走快捷切候选；否则交给 LLM 结合上下文判断
+        if label and not has(r"新鲜|重生成|重新|替换|换成|不想吃|不要"):
+            return {"intent": "swap_candidate", "meal_type": label}
+        return None
     if has(r"选用|就用|选这个|选方案"):
-        label = next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")
-        return {"intent": "choose_candidate", "meal_type": label, "name": m}
+        label = next((v for k, v in meal_alias.items() if k in m), None)
+        if label:
+            return {"intent": "choose_candidate", "meal_type": label, "name": m}
+        return None
     if not has(r"(?:别|不要|不)固定") and (
             has(r"确认|固定|就这个|就它|就选|就这么|定了")
             or re.fullmatch(r"(?:替换|覆盖|取代)[。！!\s]*", m)
@@ -589,14 +596,14 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "swap_candidate",
-            "description": "调整已有方案某一餐的候选（如「晚餐清淡点」「午餐不要牛肉」）。",
+            "description": "仅当用户明确要求「把某餐整顿换成另一套备选套餐」且已指明餐次时调用。若用户想去掉某道具体菜、嫌菜品重复、或只说「换一换」未指明整餐，禁止调用此工具，应改用 replace_dish 或 ask_clarification。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "meal_type": {"type": "string", "enum": ["早餐", "午餐", "晚餐"]},
+                    "meal_type": {"type": "string", "enum": ["早餐", "午餐", "晚餐"],
+                                  "description": "用户明确指定的餐次；未指定则留空"},
                     "prefer": {"type": "string", "description": "调整意图，如「清淡」「不要牛肉」"},
                 },
-                "required": ["meal_type"],
             },
         },
     },
@@ -636,8 +643,8 @@ def _agent_system(profile: dict) -> str:
           "swap_candidate（仅切换已有候选）、regenerate_slot（重生成单餐）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
         + "局部修改必须使用对应工具，按用户明确指定的方案序号、日期和餐次定位，禁止擅自生成整份方案或确认；工具失败后停止，不得重试写操作或宣称成功。\n"
         + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
-          "② 需要行动先调用工具，别凭空捏造方案内容；③ 数值只引用工具返回，绝不自行计算；"
-          "④ 需求含糊（没说几天/哪几餐/有歧义）先调 ask_clarification，别擅自假设；"
+          "② 用户说「不想吃重复的」「换一换」等泛化请求时，先对照已有方案检查菜品：若有跨餐重复菜优先用 replace_dish 替换其中一餐的重复菜，目标不明确时先调 ask_clarification 追问，不要擅自用 swap_candidate 换掉整餐；"
+          "③ 需要行动先调用工具，别凭空捏造方案内容；④ 数值只引用工具返回，绝不自行计算；"
           "⑤ 最终回复面向用户、结论先行、简洁自然，不要出现「工具」「调用」等内部字眼。"
     )
 
@@ -749,7 +756,9 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
         except ValueError as exc:return {"terminal":True,"reply":str(exc)}
         if not plan:
             return {"summary": "还没有待调整的方案。"}
-        meal_type = args.get("meal_type") or "午餐"
+        meal_type = (args.get("meal_type") or "").strip()
+        if not meal_type:
+            return {"summary": "未指明要调整哪一餐，请追问用户具体想调整早餐、午餐还是晚餐。"}
         slot = _operation_slot(plan,meal_type,ctx.get('context'))
         if not slot:
             return {"summary": "没找到对应的餐位。"}
@@ -987,7 +996,7 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
             return {"text": "您还没有待确认的方案，要不要先生成今天的配餐？", "blocks": []}
 
         # 找到要换的是哪一餐
-        slot = _operation_slot(plan,intent.get("meal_type") or "午餐",context)
+        slot = _operation_slot(plan,intent.get("meal_type") or "",context)
         if not slot:
             return {"text": "没找到对应的餐位。", "blocks": []}
 
@@ -1040,7 +1049,7 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         if not plan:
             return {"text": "还没有方案。先生成一份吧。", "blocks": []}
 
-        slot = _operation_slot(plan,intent.get("meal_type") or "午餐",context)
+        slot = _operation_slot(plan,intent.get("meal_type") or "",context)
         if not slot:
             return {"text": "没找到这一餐。", "blocks": []}
 

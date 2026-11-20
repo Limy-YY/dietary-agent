@@ -735,7 +735,6 @@ def replace_dish(req: DishReplaceRequest, user_id: str = CurrentUser, db: Sessio
     except RuleEngineError as exc:
         db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,str(exc)) from exc
     except Exception as exc:
-        print("replace_dish error:", repr(exc))
         db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,'单菜替换失败，原方案保留') from exc
 
 
