@@ -52,10 +52,13 @@
       </div>
     </template>
 
-    <!-- 一周食谱：按天折叠 -->
+    <!-- 一周食谱：按天折叠（可同时展开多天） -->
     <div v-else class="week-list">
-      <div v-for="(day, di) in days" :key="day.iso + di" class="week-day" :class="{ 'is-today': day.is_today, open: openDay === di }">
-        <div class="week-day-head" @click="openDay = openDay === di ? -1 : di">
+      <div class="week-list-toolbar">
+        <button class="expand-all-btn" @click="toggleAllDays">{{ allOpen ? '全部收起' : '全部展开' }}</button>
+      </div>
+      <div v-for="(day, di) in days" :key="day.iso + di" class="week-day" :class="{ 'is-today': day.is_today, open: isOpen(di) }">
+        <div class="week-day-head" @click="toggleDay(di)">
           <div class="wd-date">
             <div class="wd-day">
               {{ day.weekday }}
@@ -94,8 +97,8 @@
     <div class="card-foot">
       <button class="card-foot-left" @click="onReason">💡 为什么这样搭？</button>
       <div class="action-col">
-        <button class="fix-btn" :disabled="readonly || isFixed" @click="onConfirm">
-          {{ isFixed ? '已确认' : '确认方案' }}
+        <button class="fix-btn" :disabled="readonly || isFixed || confirming || chat.sending" @click="onConfirm">
+          {{ isFixed ? '已确认' : confirming ? '确认中…' : '确认方案' }}
         </button>
       </div>
     </div>
@@ -128,15 +131,36 @@ const ui = useUi()
 const chat = useChatStore()
 
 const reasonOpen = ref(false)
-// 默认展开「今天」；方案内没有今天时展开第一天
-const openDay = ref(defaultOpenDay())
+// 默认展开「今天」；方案内没有今天时展开第一天。支持同时展开多天。
+const openDays = ref(defaultOpenDays())
 
-function defaultOpenDay() {
+function defaultOpenDays() {
   const idx = arr(props.block.days).findIndex((d) => d.is_today)
-  return idx >= 0 ? idx : 0
+  return [idx >= 0 ? idx : 0]
+}
+
+const allOpen = computed(() => {
+  const n = days.value.length
+  return n > 0 && openDays.value.length === n
+})
+
+function isOpen(di) {
+  return openDays.value.includes(di)
+}
+
+function toggleDay(di) {
+  const i = openDays.value.indexOf(di)
+  if (i >= 0) openDays.value.splice(i, 1)
+  else openDays.value.push(di)
+}
+
+function toggleAllDays() {
+  openDays.value = allOpen.value ? [] : days.value.map((_, i) => i)
 }
 // 正在「换一换」的餐位 slot_id（用于按钮 spinner / 禁用）
 const swapping = ref('')
+// 确认方案进行中（含冲突退回对话的追问阶段）：置真期间禁用「确认方案」按钮，避免重复点
+const confirming = ref(false)
 
 const scope = computed(() => props.block.plan_key || props.block.scope || 'day')
 const isMultiDay = computed(() => days.value.length > 1)
@@ -238,11 +262,21 @@ function actionContext(action, slot = null, candidate = null) {
 }
 
 async function onConfirm() {
-  if (readonly.value || isFixed.value) return
+  if (readonly.value || isFixed.value || confirming.value || chat.sending) return
+  confirming.value = true
   try {
     await chat.silentAction(PHRASE.confirm, actionContext('confirm'))
   } catch (e) {
-    ElMessage(e.message || '确认失败，请重试')
+    if (e && e.code === 2005) {
+      // 同期已有固定方案冲突：静默路径会吞掉「替换/取消」按钮，
+      // 退回对话路径，让 quick_actions 按钮在气泡里渲染供用户二选一。
+      // await 让按钮在本次确认（含追问）期间保持禁用，避免重复点。
+      await chat.send(PHRASE.confirm, actionContext('confirm'))
+    } else {
+      ElMessage(e.message || '确认失败，请重试')
+    }
+  } finally {
+    confirming.value = false
   }
 }
 
@@ -261,6 +295,12 @@ function openSlotRecipe(slot) {
 </script>
 
 <style scoped>
+.week-list-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 20px 2px;
+}
+
 .cand-empty {
   font-size: 13px;
   color: var(--text-sub);
