@@ -188,10 +188,12 @@ class DishFacts:
     #: 由 portion_policy.ingredient_weights 首次访问时缓存到本对象。
     #: None = 尚未计算（用 None 而非 {} 作哨兵，避免「无可用配方数据」的菜被反复重算）。
     #: 请求内 dish 数据不可变、克隆候选浅拷贝共享同一 facts，故此缓存整次请求内不失效。
-    ingredient_weights: Mapping[str, float] | None = None
+    #: init=False 关键：dataclasses.replace() 只拷 init 字段，缓存字段不随之拷贝，
+    #: 否则「改 name/ingredient_names 的新菜」会继承旧菜画像（陈旧缓存）。
+    ingredient_weights: Mapping[str, float] | None = field(default=None, init=False, repr=False, compare=False)
     #: 预计算的烹饪画像（meal_templates.DishProfile）；由 meal_templates.profile 首次访问时缓存。
-    #: None = 尚未计算。请求内 dish 不可变，缓存整次请求内不失效。
-    dish_profile: Any = None
+    #: None = 尚未计算。请求内 dish 不可变，缓存整次请求内不失效。init=False 同上，防 replace() 带陈旧画像。
+    dish_profile: Any = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def is_staple(self) -> bool:
