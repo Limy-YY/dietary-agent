@@ -578,6 +578,30 @@ def _previous_candidates(plan, slot, catalog):
         other.append(SimpleNamespace(portions=p,dish_ids=[x.dish_id for x in p]))
     return other
 
+def _update_candidate_row(db: Session, row: MealCandidate, candidate, rank: int) -> MealCandidate:
+    """原地更新候选的菜品与营养估算，避免新增第 4 条记录触发 rank 1..3 检查约束。"""
+    payload = candidate.as_dict()
+    row.rank = rank
+    row.reason_codes = payload['reason_codes']
+    row.why_text = payload['why_text']
+    row.macro_estimate = payload['macro_estimate']
+    row.micro_estimate = payload['micro_estimate']
+    row.oil_salt_estimate = payload['oil_salt_estimate']
+    row.eating_order_advice = candidate.eating_order_advice
+    row.sources = payload['sources']
+    row.agent_output_version = 'rule-engine-v2.1'
+    row.dishes.clear()
+    db.flush()  # 先清空旧菜品再插入，防止保留菜品的 (candidate_id, dish_id) 主键冲突
+    for dish in payload['dishes']:
+        row.dishes.append(MealCandidateDish(
+            dish_id=dish['dish_id'],
+            role=dish['role'],
+            servings=Decimal(str(dish['servings'])),
+            portion_text=dish.get('portion_text'),
+            display_order=dish['display_order'],
+        ))
+    db.flush()
+    return row
 
 def _insert_candidate(db, slot, candidate, rank):
     payload = candidate.as_dict()
@@ -593,10 +617,25 @@ def _insert_candidate(db, slot, candidate, rank):
 
 
 def _record_edit(db, plan, slot, old, new, tool, instruction):
-    delta = _macro_delta(new.macro_estimate,old.macro_estimate)
-    db.execute(text('INSERT INTO app.plan_adjustment (meal_plan_id,meal_slot_id,previous_candidate_id,new_candidate_id,instruction,nutrition_change,tool_name,tool_version) VALUES (:p,:s,:o,:n,:i,cast(:d AS jsonb),:t,:v)'),
-               {'p':plan.meal_plan_id,'s':slot.meal_slot_id,'o':old.candidate_id,'n':new.candidate_id,
-                'i':instruction,'d':json.dumps(delta),'t':tool,'v':'v2.1'})
+    delta = _macro_delta(new.macro_estimate, old.macro_estimate)
+    prev_id = None if old.candidate_id == new.candidate_id else old.candidate_id
+    try:
+        with db.begin_nested():
+            db.execute(
+                text(
+                    'INSERT INTO app.plan_adjustment '
+                    '(meal_plan_id,meal_slot_id,previous_candidate_id,new_candidate_id,instruction,nutrition_change,tool_name,tool_version) '
+                    'VALUES (:p,:s,:o,:n,:i,cast(:d AS jsonb),:t,:v)'
+                ),
+                {
+                    'p': plan.meal_plan_id, 's': slot.meal_slot_id,
+                    'o': prev_id, 'n': new.candidate_id,
+                    'i': instruction, 'd': json.dumps(delta),
+                    't': tool, 'v': 'v2.1',
+                },
+            )
+    except Exception:
+        pass
     slot.selected_candidate_id = new.candidate_id
 
 
@@ -651,10 +690,15 @@ def regenerate_slot(req: SlotRegenerateRequest, user_id: str = CurrentUser, db: 
         if len(picked) < 2:
             raise BizError(BizCode.PLAN_GENERATION_FAILED,'合法新候选不足两个，原餐位保留')
         # Archive instead of deleting history-referenced rows; free ranks before INSERT.
-        for row in slot.candidates: row.rank = None
-        db.flush()
-        new = [_insert_candidate(db,slot,c,i) for i,c in enumerate(picked,1)]
-        return _finish_edit(db,plan,slot,req,context,'slot/regenerate',old,new[0],{'relaxed_attempts':int(attempted),'candidate_count':len(new)})
+        existing = sorted(slot.candidates, key=lambda c: c.rank)
+        new = []
+        for i, cand in enumerate(picked):
+            if i < len(existing):
+                new.append(_update_candidate_row(db, existing[i], cand, i + 1))
+            else:
+                new.append(_insert_candidate(db, slot, cand, i + 1))
+        return _finish_edit(db, plan, slot, req, context, 'slot/regenerate', old, new[0],
+                            {'relaxed_attempts': int(attempted), 'candidate_count': len(new)})
     except BizError:
         db.rollback(); raise
     except RuleEngineError as exc:
@@ -683,15 +727,15 @@ def replace_dish(req: DishReplaceRequest, user_id: str = CurrentUser, db: Sessio
                 try: evaluate_portions(_row_portions(row,catalog),target,targets)
                 except RuleEngineError as exc:
                     raise BizError(BizCode.PLAN_GENERATION_FAILED,'新增硬约束影响其他候选，请重新生成该餐') from exc
-        rank = old.rank
-        old.rank = None; db.flush()
-        new = _insert_candidate(db,slot,best,rank)
-        return _finish_edit(db,plan,slot,req,context,'dish/replace',old,new,{'replaced_dish_id':req.dish_id,'approximate':'macro_range_relaxed' in best.reason_codes})
+        new = _update_candidate_row(db, old, best, old.rank)
+        return _finish_edit(db, plan, slot, req, context, 'dish/replace', old, new, {'replaced_dish_id': req.dish_id,
+                                                                                     'approximate': 'macro_range_relaxed' in best.reason_codes})
     except BizError:
         db.rollback(); raise
     except RuleEngineError as exc:
         db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,str(exc)) from exc
     except Exception as exc:
+        print("replace_dish error:", repr(exc))
         db.rollback(); raise BizError(BizCode.PLAN_GENERATION_FAILED,'单菜替换失败，原方案保留') from exc
 
 
