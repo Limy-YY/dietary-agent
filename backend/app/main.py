@@ -15,6 +15,7 @@ from app.routers import (
     calc,
     chat,
     conditions,
+    conversations,
     dishes,
     health,
     ingredients,
@@ -40,6 +41,7 @@ app.include_router(conditions.router, prefix="/api")
 app.include_router(conditions.catalog_router, prefix="/api")
 app.include_router(agent.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(conversations.router, prefix="/api")
 app.include_router(mealplan.router, prefix="/api")
 app.include_router(shopping.router, prefix="/api")
 
