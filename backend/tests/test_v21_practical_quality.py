@@ -12,13 +12,13 @@ class Quality(unittest.TestCase):
     def setUp(self):
         self.bf=N(meal_type='早',kcal=596.8)
         self.lunch=N(meal_type='午',kcal=954.8)
-        self.r=dish('061','白米饭',{'大米':50})
-        self.p=dish('110','白粥',{'大米':50})
+        self.r=dish('121','白米饭',{'大米':50})
+        self.p=dish('170','白粥',{'大米':50})
         self.v=dish('026','番茄黄瓜沙拉',{'番茄':200,'黄瓜':200})
-        self.ch=dish('079','卤鸡腿',{'鸡腿':100,'姜':5})
-        self.ch2=dish('080','白切鸡腿',{'鸡腿':100})
+        self.ch=dish('139','卤鸡腿',{'鸡腿':100,'姜':5})
+        self.ch2=dish('140','白切鸡腿',{'鸡腿':100})
         self.beef=dish('019','芹菜炒牛肉',{'牛肉':120,'芹菜':200})
-        self.egg=dish('067','水煮鸡蛋',{'鸡蛋':50})
+        self.egg=dish('127','水煮鸡蛋',{'鸡蛋':50})
     def test_practical_portions(self):
         self.assertNotIn(2.,meal_options(self.p,self.bf));self.assertIn(1.,meal_options(self.p,self.bf))
         self.assertEqual(meal_options(self.v,self.bf),(.5,));self.assertEqual(meal_options(self.egg,self.bf),(1.,2.))

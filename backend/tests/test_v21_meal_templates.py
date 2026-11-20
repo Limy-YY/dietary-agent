@@ -13,29 +13,29 @@ def combo(*keys): return [mock(k) for k in keys]
 
 class TemplateTests(unittest.TestCase):
     def test_catalog(self):
-        self.assertEqual(set(CATALOG),{f'DISH-{i:03}' for i in range(1,111)})
+        self.assertEqual(set(CATALOG),{f'DISH-{i:03}' for i in range(1,171)})
         for k,d in CATALOG.items(): self.assertTrue(profile(SimpleNamespace(dish_id=k,name=d.name)).reviewed)
         self.assertFalse(profile(SimpleNamespace(dish_id='DISH-001',name='changed')).reviewed)
-        self.assertEqual(profile(mock('061')).commonness,0)
-        self.assertEqual(profile(mock('067')).complexity,0)
+        self.assertEqual(profile(mock('121')).commonness,0)
+        self.assertEqual(profile(mock('127')).complexity,0)
     def test_only_practical_shape_is_hard(self):
         self.assertIsNone(template_for([], '早'))
-        self.assertIsNone(template_for(combo('061','061'), '早'))
-        self.assertIsNone(template_for(combo('061','067','069','071'), '早'))
-        self.assertIsNone(template_for(combo('061','067','086','069','071'), '午'))
+        self.assertIsNone(template_for(combo('121','121'), '早'))
+        self.assertIsNone(template_for(combo('121','127','129','131'), '早'))
+        self.assertIsNone(template_for(combo('121','127','146','129','131'), '午'))
         changed=SimpleNamespace(dish_id='DISH-001',name='changed')
         self.assertIsNone(template_for([changed], '早'))
     def test_valid(self):
-        for keys,mt in [(('030',),'早'),(('059','014'),'早'),(('049','014'),'早'),(('049','013'),'早'),(('062','067','069'),'早'),(('061','079','086'),'午'),(('058','019','023','045'),'午'),(('046','006','043'),'晚'),(('029','010'),'午'),(('055','005'),'午')]:
+        for keys,mt in [(('030',),'早'),(('059','014'),'早'),(('049','014'),'早'),(('049','013'),'早'),(('122','127','129'),'早'),(('121','139','146'),'午'),(('058','019','023','045'),'午'),(('046','006','043'),'晚'),(('029','010'),'午'),(('055','005'),'午')]:
             with self.subTest(keys=keys,mt=mt): self.assertIsNotNone(template_for(combo(*keys),mt))
-        for keys,mt in [(('030','056'),'早'),(('049','056','014'),'早'),(('061','069','088'),'午'),(('061','071','088'),'晚')]:
+        for keys,mt in [(('030','056'),'早'),(('049','056','014'),'早'),(('121','129','148'),'午'),(('121','131','148'),'晚')]:
             with self.subTest(keys=keys,mt=mt): self.assertIsNotNone(template_for(combo(*keys),mt))
 
     def test_full_rice_meals_are_not_breakfast_eligible(self):
-        rows=list(iter_template_combos([mock('061'),mock('067'),mock('078')],'早'))
+        rows=list(iter_template_combos([mock('121'),mock('127'),mock('138')],'早'))
         self.assertFalse(any('DISH-061' in {d.dish_id for d in row} for row in rows))
     def test_full_catalog_enumeration(self):
-        ds=[mock(f'{i:03}') for i in range(1,111)]
+        ds=[mock(f'{i:03}') for i in range(1,171)]
         for mt in ('早','午','晚'):
             rows=list(iter_template_combos(ds,mt)); keys=[tuple(sorted(d.dish_id for d in c)) for c in rows]
             self.assertGreater(len(rows),10); self.assertEqual(len(keys),len(set(keys)))
@@ -60,9 +60,9 @@ class TemplateTests(unittest.TestCase):
             return SimpleNamespace(dish_ids=ids,totals={'kcal':kcal},score=score,
                                    reason_codes=[],score_breakdown={})
         target=SimpleNamespace(kcal=700,meal_type='晚')
-        breakfast=c(['DISH-109','DISH-014'])
-        repeated=c(['DISH-062','DISH-014-LS'])
-        fresh=c(['DISH-062','DISH-107'])
+        breakfast=c(['DISH-169','DISH-014'])
+        repeated=c(['DISH-122','DISH-014-LS'])
+        fresh=c(['DISH-122','DISH-167'])
         self.assertEqual(non_staple_base_ids(breakfast),{'DISH-014'})
         self.assertLess(selection_key(fresh,target,[],0,same_day=[breakfast]),
                         selection_key(repeated,target,[],0,same_day=[breakfast]))
