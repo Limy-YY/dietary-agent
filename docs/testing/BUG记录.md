@@ -4,7 +4,7 @@
 > 状态取值：`未修` / `已修·待部署` / `已闭环` / `已闭环`。
 > 记录日期：2026-11-16 起。
 >
-> **2026-11-17 实机验证**：本地全栈（后端 8000 / Agent 8001 / 前端 5173，DeepSeek 接通）端到端跑通「建档→生成→换候选→确认→清单→当前规划→报告」，并补测周方案跨日差异化 / 解释 / 周报告 / RAG / 重复固定冲突。BUG-001~026 均已闭环；BUG-027 未修（P2，RAG 丢 source）。
+> **2026-11-17 实机验证**：本地全栈（后端 8000 / Agent 8001 / 前端 5173，DeepSeek 接通）端到端跑通「建档→生成→换候选→确认→清单→当前规划→报告」，并补测周方案跨日差异化 / 解释 / 周报告 / RAG / 重复固定冲突。BUG-001~028 均已闭环（BUG-027 于 11-19 修复并 LIVE 验收关闭，详见下方该条）。
 >
 > **2026-11-17 营养咨询复核**：补测「反向营养/症状咨询 + RAG 知识问答」链路，新增 BUG-026（症状咨询检索为空仍追加「由文献库提供参考」假出处）、BUG-027（RRF 混合检索丢 source/source_id）。
 
@@ -40,7 +40,7 @@
 | BUG-024 | Agent 生成方案后引导「去当前规划面板看餐卡」，但当前规划存的是已固定方案 | Agent 叙事引导文案 | 已闭环 |
 | BUG-025 | 点「换一换」右侧工具栏整体刷新（换候选只改草稿却触发四面板重载） | 前端面板刷新触发 | 已闭环 |
 | BUG-026 | 症状咨询检索为空仍追加「由文献库提供参考」假出处（违反可溯源铁律） | Agent 叙事 | 已闭环 |
-| BUG-027 | RRF 混合检索丢 source/source_id（接口返回 null，可溯源落空） | 后端检索 / DB 函数 | 未修 |
+| BUG-027 | RRF 混合检索丢 source/source_id（接口返回 null，可溯源落空） | 后端检索 / DB 函数 | 已闭环（4f6c937，issue #12） |
 
 ---
 
@@ -296,9 +296,9 @@
 - **现象**：`POST /api/agent/rag-query` 返回的每条 `RagItem` 的 `source`/`source_id` 均为 `null`，而库内 `knowledge.knowledge_doc` 43/43 都有 `source`（如 `营养素知识库/nutrients.json`）。知识问答拿不到出处，前端 / LLM 无法「标注来源」。
 - **层面**：后端检索 + DB 检索函数。
 - **根因**：[14_RAG向量化_v1.2r1.sql](github仓库/database/14_RAG向量化_v1.2r1.sql#L149-L158) 的 `knowledge.search_documents` 返回列只有 `knowledge_doc_id/title/category/content/score/vector_rank/text_rank/vector_similarity`，**不含 `source`/`source_id`**；[agent.py](github仓库/backend/app/routers/agent.py#L104-L150) `_search_hybrid` 构造 `RagItem` 时也未映射这两列。关键词兜底 `_search_knowledge` 有 source，但实际走的是混合路径，于是来源被丢。
-- **状态**：未修。
-- **修复**：`search_documents` 返回列补 `source`/`source_id`（或 `_search_hybrid` 命中后按 doc_id 二次补查），并映射进 `RagItem`。
-- **备注**：P2（答辩后）；与 BUG-026 无直接耦合，但同属「可溯源」铁律的实现缺口。
+- **状态**：已闭环（11-19 Anna 修复 `4f6c937`，测试 LIVE L-05 PASS 后关闭 issue #12）。
+- **修复**：采用应用层回查方案——`_search_hybrid` 拿到 `knowledge_doc_id` 列表后，一次 `SELECT source, source_id FROM knowledge.knowledge_doc WHERE knowledge_doc_id IN (...)` 补齐，不 DROP/CREATE 函数、不动权限、无需随部署批迁移；回查异常只置空 source 并打 warning，不拖挂检索主链路。keyword_fallback 分支本就带 source，两路行为一致。
+- **验收**：`4f6c937` 代码验收 PASS；新域名 `retail-sixth-beauty-illustration.trycloudflare.com` 上 `verify_gd3_live.py` 的 L-05（query 换「主食」、missing 按 `kind=="doc"` 过滤）doc=5、source 缺失 0；G-D3 LIVE 7/7、G-D 15/15、G-D2 4/4。
 
 ## BUG-028 · 过敏原「海鲜」「麸质」勾选后不拦截对应菜品（词表映射缺口）
 
