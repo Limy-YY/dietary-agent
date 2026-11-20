@@ -1,6 +1,6 @@
 {
-  "base": "https://retail-sixth-beauty-illustration.trycloudflare.com",
-  "at": "2026-11-19T18:37:44",
+  "base": "https://stamps-threshold-lbs-sims.trycloudflare.com",
+  "at": "2026-11-20T09:40:50",
   "results": [
     {
       "case": "PRE-01",
@@ -10,22 +10,22 @@
     {
       "case": "L-01",
       "verdict": "PASS",
-      "detail": "plan_id=44 区间 2026-11-21~2026-11-23 跨 3 天，实际槽位日期 3 个：['2026-11-21', '2026-11-22', '2026-11-23']"
+      "detail": "plan_id=49 区间 2026-11-22~2026-11-24 跨 3 天，实际槽位日期 3 个：['2026-11-22', '2026-11-23', '2026-11-24']"
     },
     {
       "case": "L-02",
       "verdict": "PASS",
-      "detail": "plan_id=45 槽位 1 个，餐次集合 {'午'}"
+      "detail": "plan_id=50 槽位 1 个，餐次集合 {'午'}"
     },
     {
       "case": "L-03",
       "verdict": "PASS",
-      "detail": "plan_id=46 含炸/红烧菜名命中 无（软偏好为降权非硬删，命中即记录不判 FAIL）；菜名样本：  "
+      "detail": "plan_id=51 含炸/红烧菜名命中 无（软偏好为降权非硬删，命中即记录不判 FAIL）；菜名样本：  "
     },
     {
       "case": "L-04",
       "verdict": "PASS",
-      "detail": "method=keyword_fallback（锁定 keyword_fallback：symptom_nutrient_map 16 条均未激活） items=0 note=未命中反向营养映射，回落知识库关键词兜底；结果仅作参考线索，不构成医学诊断。"
+      "detail": "method=symptom_map（41_v1.2r4 已入库）命中 乏力=True 掉发=True items=2 note=命中反向营养映射（symptom_nutrient_map）；结果仅作参考线索，不构成医学诊断。"
     },
     {
       "case": "L-05",
@@ -35,7 +35,7 @@
     {
       "case": "L-06",
       "verdict": "PASS",
-      "detail": "span=32（2026-11-20~2026-12-21）→ http=400 message=日期跨度上限 31 天，当前 32 天"
+      "detail": "span=32（2026-11-21~2026-12-22）→ http=400 message=日期跨度上限 31 天，当前 32 天"
     }
   ]
 }
