@@ -7,7 +7,9 @@
           {{ report.meta.range_text }}
           <span v-if="report.meta.valid_days">· 有效 {{ report.meta.valid_days }} 天</span>
           <span v-if="report.meta.total_meals"> · {{ report.meta.total_meals }} 餐</span>
-          <span class="rc-basis">日均口径</span>
+          <el-tooltip placement="top" effect="dark" :content="dailyBasisTip">
+            <span class="rc-basis">日均口径</span>
+          </el-tooltip>
         </div>
       </div>
       <button class="rc-toggle">{{ expanded ? '收起' : '展开查看' }}</button>
@@ -15,7 +17,12 @@
 
     <div v-if="expanded" class="rc-body">
       <div class="rp-section">
-        <div class="rp-section-title">🥗 宏量供能比（日均）</div>
+        <div class="rp-section-title">
+          🥗 宏量供能比（日均）
+          <el-tooltip placement="top" effect="dark" :content="dailyBasisTip">
+            <span class="rp-info-dot">ⓘ</span>
+          </el-tooltip>
+        </div>
         <div class="rp-donut-row">
           <div class="rp-donut">
             <div class="rp-donut-chart">
@@ -138,6 +145,9 @@ function ctrlText(s) {
   return CTRL_TEXT[s] || '—'
 }
 
+const dailyBasisTip =
+  '日均 = 总摄入 ÷ 天当量；天当量按每餐能量权重折算（早 25%／午 40%／晚 35%），没数据的日子不计入分母'
+
 const maxCalories = computed(() => {
   const list = report.value.daily_trend.map((d) => Number(d.calories) || 0)
   return Math.max(...list, 1)
@@ -150,6 +160,19 @@ function barHeight(d) {
 </script>
 
 <style scoped>
+.rp-info-dot {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--text-sub);
+  cursor: help;
+  vertical-align: middle;
+}
+
+.rp-info-dot:hover {
+  color: var(--brand-hover);
+}
+
 .rp-donut-chart {
   position: absolute;
   inset: 0;
