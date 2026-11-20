@@ -785,8 +785,8 @@ BEGIN
              GROUP BY name
             HAVING count(*) > 1) t;
 
-    IF m_dishes <> 84 THEN
-        RAISE EXCEPTION 'v21 合并段菜式应为84，实际为%', m_dishes;
+    IF m_dishes <> 93 THEN
+        RAISE EXCEPTION 'v21 合并段菜式应为93，实际为%', m_dishes;
     END IF;
     IF m_empty_ing <> 0 THEN
         RAISE EXCEPTION 'v21 合并段有%道菜配料为空', m_empty_ing;
@@ -801,7 +801,7 @@ BEGIN
         RAISE EXCEPTION 'v21 合并段存在%组重名', m_dup_name;
     END IF;
 
-    RAISE NOTICE 'v21 合并段验收通过：84 道，配料非空 / energy_kcal 非空 / 快照一致 / 菜名唯一 全部通过';
+    RAISE NOTICE 'v21 合并段验收通过：93 道，配料非空 / energy_kcal 非空 / 快照一致 / 菜名唯一 全部通过';
 END
 $$;
 
