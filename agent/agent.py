@@ -166,13 +166,21 @@ def _regex_intent(message: str) -> dict | None:
     has = lambda pat: re.search(pat, m) is not None  # noqa: E731
 
     if has(r"换一换|更换|换一餐|换个|换掉"):
-        label = next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")
+        meal_alias = {
+            "早餐": "早餐", "早饭": "早餐", "早上": "早餐",
+            "午餐": "午餐", "午饭": "午餐", "中午": "午餐",
+            "晚餐": "晚餐", "晚饭": "晚餐", "晚上": "晚餐",
+        }
+        label = next((v for k, v in meal_alias.items() if k in m), "午餐")
         return {"intent": "swap_candidate", "meal_type": label}
     if has(r"选用|就用|选这个|选方案"):
         label = next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")
         return {"intent": "choose_candidate", "meal_type": label, "name": m}
-    if has(r"确认|固定|就这个|就它|就选|就这么|定了|替换|覆盖|取代"):
-        return {"intent": "confirm", "replace": has(r"替换|覆盖|取代")}
+    if not has(r"(?:别|不要|不)固定") and (
+            has(r"确认|固定|就这个|就它|就选|就这么|定了")
+            or re.fullmatch(r"(?:替换|覆盖|取代)[。！!\s]*", m)
+    ):
+        return {"intent": "confirm", "replace": bool(re.fullmatch(r"(?:替换|覆盖|取代)[。！!\s]*", m))}
     if has(r"取消|算了|不用了|先不用"):
         return {"intent": "cancel"}
     if has(r"报告|复盘|回顾|总结|吃得(怎么样|如何|怎样|好不好)|饮食(情况|状况|回顾|复盘|怎么样)"):
@@ -737,8 +745,6 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
         return {"terminal": True, "reply": q, "blocks": []}
 
     if name == "swap_candidate":
-        if ctx.get("local_edit_only"):
-            return {"terminal":True,"reply":"请明确是重新生成一餐还是替换一道菜。"}
         try:plan=_operation_plan(st,ctx.get('message',''),ctx.get('context'))
         except ValueError as exc:return {"terminal":True,"reply":str(exc)}
         if not plan:
@@ -812,8 +818,10 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
     if client is None:
         return _no_llm_fallback(user_id, profile, message, state)
 
-    ctx = {"user_id": user_id, "profile": profile, "state": state, "message": message,"context":context or {},
-           "local_edit_only": bool(re.search(r"重新(?:安排|生成|排)|重排|换掉|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",message)) and bool(le.registry(state))}
+    ctx = {"user_id": user_id, "profile": profile, "state": state, "message": message, "context": context or {},
+           "local_edit_only": bool(
+               re.search(r"重新(?:安排|生成|排)|重排|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",
+                         message)) and bool(le.registry(state))}
     plan_list = [{"plan_index":i,"meal_plan_id":le.plan_id(p),"start_date":p.get("start_date"),"end_date":p.get("end_date"),
                   "slots":[{"date":s.get("slot_date"),"meal":s.get("meal_type"),"dishes":_slot_dish_text(s)} for s in _iter_slots(p)]}
                  for i,p in enumerate(le.registry(ctx["state"]),1)]
@@ -927,7 +935,9 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
     flow = None if fresh or structured else rf.handle(bc, st, message)
     if flow is not None:
         return {"text": flow["text"], "blocks": [blocks.meal_card_block(p) for p in flow["updated_plans"]]}
-    if not structured and re.search(r"重新(?:安排|生成|排)|重排|换掉|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",message) and re.search(r"方案|第.*天|早餐|午餐|晚餐|换掉|换成|只换|其他",message):
+    if not structured and re.search(r"重新(?:安排|生成|排)|重排|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",
+                                    message) and re.search(r"方案|第.*天|早餐|午餐|晚餐|早上|中午|晚上|换成|只换|其他",
+                                                           message):
         if not le.registry(st):
             return {"text":"当前对话没有可定位的待确认方案，请先生成方案或通过对应卡片选择。未进行修改。","blocks":[]}
         if _llm() is None:

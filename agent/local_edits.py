@@ -79,8 +79,14 @@ def explicit_target(message, args):
     elif '明天' in message: args['slot_date'] = (date.today()+timedelta(days=1)).isoformat()
     elif '今天' in message: args['slot_date'] = date.today().isoformat()
     # Month/day without year is not safe to infer across years; ask for exact date if needed.
-    m = re.search(r"(早餐|午餐|晚餐|早饭|午饭|晚饭)",message)
-    args['meal_type'] = {'早饭':'早餐','午饭':'午餐','晚饭':'晚餐'}.get(m.group(1),m.group(1)) if m else None
+    m = re.search(r"(早餐|早饭|早上|早晨|午餐|午饭|中午|午间|晚餐|晚饭|晚上|晚间)", message)
+    if m:
+        meal_map = {
+            '早饭': '早餐', '早上': '早餐', '早晨': '早餐',
+            '午饭': '午餐', '中午': '午餐', '午间': '午餐',
+            '晚饭': '晚餐', '晚上': '晚餐', '晚间': '晚餐',
+        }
+        args['meal_type'] = meal_map.get(m.group(1), m.group(1))
     return args
 
 
@@ -103,6 +109,7 @@ def execute(bc,state,name,args,message):
     else:
         payload['dish_id'] = resolve_dish(slot,args.get('old_dish_name'))
         payload['replacement_query'] = args.get('replacement_query') or ''
+        payload['allow_approximate'] = True
         # Do not auto-authorize nutrition relaxation.
         updated = bc.replace_dish(**payload)
     remember(state,updated)
