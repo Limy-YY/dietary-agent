@@ -452,7 +452,7 @@ from app.services.rule_engine.candidates import build_candidates, diversify
 from app.services.rule_engine.pipeline import _split_dishes
 from app.services.rule_engine.local_edit import evaluate_portions, replace_dish_candidates
 from app.services.rule_engine.quality import repetition_cost
-from app.services.rule_engine.meal_templates import selection_key, staple_key
+from app.services.rule_engine.meal_templates import selection_key, staple_key, profile
 
 
 class LocalEditRequest(BaseModel):
@@ -716,8 +716,23 @@ def replace_dish(req: DishReplaceRequest, user_id: str = CurrentUser, db: Sessio
         pool = replace_dish_candidates(portions,req.dish_id,catalog,target,targets,req.replacement_query,
                                        req.replacement_dish_id,context.soft_avoid,_previous_candidates(plan,slot,catalog))
         if not pool:
-            raise BizError(BizCode.PLAN_GENERATION_FAILED,'没有符合安全约束及本餐推荐结构的替代菜，原方案保留；可尝试重生成本餐')
+            raise BizError(BizCode.PLAN_GENERATION_FAILED,
+                           '没有符合安全约束及本餐推荐结构的替代菜，原方案保留；可尝试重生成本餐')
         best = pool[0]
+        # 硬拦截：禁止单餐出现两种主食（哪怕用户明确点名替换）
+        best_items = getattr(best, 'portions', None) or getattr(best, 'items', None) or getattr(best, 'dishes',
+                                                                                                None) or []
+        staple_count = 0
+        for p in best_items:
+            dish_obj = getattr(p, 'dish', None)
+            if dish_obj is None:
+                did = getattr(p, 'dish_id', p)
+                dish_obj = catalog.get(did) if isinstance(catalog, dict) else next(
+                    (d for d in catalog if getattr(d, 'dish_id', None) == did), None)
+            if dish_obj is not None and '主食' in profile(dish_obj).roles:
+                staple_count += 1
+        if staple_count > 1:
+            raise BizError(BizCode.PLAN_GENERATION_FAILED, '本餐已有主食，单餐不能同时搭配两种主食，原方案保留')
         if 'macro_range_relaxed' in best.reason_codes and not req.allow_approximate:
             raise BizError(BizCode.PLAN_GENERATION_FAILED,'仅换一道菜无法满足营养目标；可明确同意近似结果后再试，或选择重新生成本餐')
         # Other active alternatives must also obey newly-added hard exclusions; otherwise reject

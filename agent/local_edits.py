@@ -131,6 +131,6 @@ PROPERTIES = {'plan_index':{'type':'integer','description':'用户指定第几�
 TOOLS = [
     {'type':'function','function':{'name':'regenerate_slot','description':'重新生成指定一餐，其他餐位不变。只在用户明确要求局部修改时调用。',
      'parameters':{'type':'object','properties':{**PROPERTIES,'keep_dish_names':{'type':'array','items':{'type':'string'}}}}}},
-    {'type':'function','function':{'name':'replace_dish','description':'只替换当前选中候选内指定一道菜，其余菜及份量不变。',
-     'parameters':{'type':'object','properties':{**PROPERTIES,'old_dish_name':{'type':'string'},'replacement_query':{'type':'string','description':'指定替代食材或菜名；未要求时留空'}},'required':['old_dish_name']}}},
+    {'type':'function','function':{'name':'replace_dish',"description": "必须严格等于当前餐卡中已存在的具体菜名，未指明旧菜时禁止调用此工具。仅用于替换当前餐次中的「某一道具体菜品」（1换1原地替换）。若用户一次指定了「A + B / A配B」多道菜组合，或当前餐次只有1道菜却想改成多道菜，禁止调用此工具，必须改用 regenerate_slot 整餐重生成。",
+     'parameters':{'type':'object','properties':{**PROPERTIES,'old_dish_name':{'type':'string', "description": "必须严格等于当前餐卡中已存在的具体菜名，未指明旧菜时禁止调用此工具"},'replacement_query':{'type':'string','description':'指定替代食材或菜名；未要求时留空'}},'required':['old_dish_name']}}},
 ]

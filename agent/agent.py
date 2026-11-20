@@ -643,9 +643,10 @@ def _agent_system(profile: dict) -> str:
           "swap_candidate（仅切换已有候选）、regenerate_slot（重生成单餐）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
         + "局部修改必须使用对应工具，按用户明确指定的方案序号、日期和餐次定位，禁止擅自生成整份方案或确认；工具失败后停止，不得重试写操作或宣称成功。\n"
         + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
-          "② 用户说「不想吃重复的」「换一换」等泛化请求时，先对照已有方案检查菜品：若有跨餐重复菜优先用 replace_dish 替换其中一餐的重复菜，目标不明确时先调 ask_clarification 追问，不要擅自用 swap_candidate 换掉整餐；"
-          "③ 需要行动先调用工具，别凭空捏造方案内容；④ 数值只引用工具返回，绝不自行计算；"
-          "⑤ 最终回复面向用户、结论先行、简洁自然，不要出现「工具」「调用」等内部字眼。"
+          "② 用户说「不想吃重复的」「换一换」等泛化请求且未指明具体餐次时，先对照已有方案找出跨餐重复菜，必须先调用 ask_clarification 追问用户想调整哪一餐（例如「午餐和晚餐都有「山药米饭」，你想换掉午餐的还是晚餐的？如果主食单换受限，也可以直接整餐重新生成」），禁止不问用户就擅自挑选餐次修改，也禁止诱导用户说「都换/一起换」（单轮仅支持修改一处）；"
+          "③ 区分「局部替换」与「整餐重生成」：只有当用户明确指明要替换当前餐卡中【已有的某道旧菜】（如「把燕麦碗换成…」「不要西兰花蒸蛋」）时才调用 replace_dish；只要用户表达「某餐我想吃 X」「X 加/和/配 Y」想重新指定整顿内容，或当前餐卡只有 1 道菜却想改成多道菜时，一律调用 regenerate_slot 整餐重生成，禁止调用 replace_dish；"
+          "④ 需要行动先调用工具，别凭空捏造方案内容；⑤ 数值只引用工具返回，绝不自行计算；"
+          "⑥ 最终回复面向用户、结论先行、简洁自然，不要出现「工具」「调用」等内部字眼。"
     )
 
 
@@ -711,8 +712,18 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
             return {"terminal":True,"reply":"本轮已尝试局部修改，请检查结果后再提出下一项修改。"}
         ctx["local_edit_attempted"] = True
         try:
-            updated, reply = le.execute(bc,st,name,args,ctx.get("message", ""))
-            return {"terminal":True,"reply":reply,"blocks":[blocks.meal_card_block(updated)]}
+            updated, reply = le.execute(bc, st, name, args, ctx.get("message", ""))
+            narrate_ctx = (
+                f"{reply}\n"
+                "提示：请对照用户原话检查最终菜品。若因单餐主食上限、营养均衡或结构约束导致部分点名菜品被自动替换，"
+                "先用一句话向用户自然说明原因（例如「小米粥和蒸红薯都属于主食，单餐不建议双碳水搭配」），再告知实际调整结果；若完全符合则简洁确认即可。"
+            )
+            return {
+                "terminal": True,
+                "reply": reply,
+                "narration": _narrate(ctx.get("message", ""), narrate_ctx, reply, ctx.get("history")),
+                "blocks": [blocks.meal_card_block(updated)],
+            }
         except ValueError as exc:
             return {"terminal":True,"reply":str(exc),"blocks":[]}
         except Exception as exc:
@@ -827,7 +838,7 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
     if client is None:
         return _no_llm_fallback(user_id, profile, message, state)
 
-    ctx = {"user_id": user_id, "profile": profile, "state": state, "message": message, "context": context or {},
+    ctx = {"user_id": user_id, "profile": profile, "state": state, "message": message, "history": history,"context": context or {},
            "local_edit_only": bool(
                re.search(r"重新(?:安排|生成|排)|重排|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",
                          message)) and bool(le.registry(state))}
@@ -844,6 +855,7 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
     collected_blocks: list[dict] = []
     summaries: list[str] = []
     terminal_reply: str | None = None
+    terminal_narration: dict | None = None
     fallback_text = ""
 
     for _ in range(6):
@@ -883,6 +895,7 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
                 summaries.append(f"[{tc.function.name}] {result['summary']}")
             if result.get("terminal"):
                 terminal_reply = result.get("reply")
+                terminal_narration = result.get("narration")
                 stop = True
                 break
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result.get("summary", "")})
@@ -900,6 +913,8 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
         return {"text": generated_text, "blocks": collected_blocks}
 
     # 追问：直接把问题返回给用户
+    if terminal_narration is not None:
+        return {"narration": terminal_narration, "blocks": collected_blocks}
     if terminal_reply is not None:
         return {"text": terminal_reply, "blocks": collected_blocks}
 
@@ -1296,11 +1311,11 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         fallback = "这套方案是结合你的档案与目标排的：主食打底保证供能，配菜兼顾蛋白质与蔬菜，具体依据如下…"
         narration = _llm_reply(
             SYSTEM_INSTRUCTION
-            + "\n用下方方案数据解释「为什么这样搭」。先一句话给结论，再按骨架展开：\n"
-              "### 好在哪\n- 3~4 条要点说清核心思路（蛋白怎么分散到三餐、蔬菜怎么安排、油盐/做法怎么控），每条 1 行；\n"
+            + "\n用下方方案数据解释「为什么这样搭」或回应用户对当前搭配的质疑。先一句话给结论，再按骨架展开：\n"
+              "### 好在哪\n- 仅总结真正合理的餐次与做法亮点（1~3 条，每条 1 行）；若某餐已被改出双主食或缺蛋白等失衡搭配，严禁硬夸该餐；\n"
               "### 三餐怎么搭\n- 一张表格列三餐：餐次 | 能量 | 蛋白 | 核心菜；\n"
-              "### 要注意\n- 只写真正影响决策的 1~2 条口径或风险（如「成品口径、热量是量级参考」「部分微量待核查」），没有就省略这一节；\n"
-              "结尾一句自然的下一步引导。\n"
+              "### 要注意\n- 点出当前方案的实际失衡风险（如双主食叠加、蛋白主菜缺位）及口径提示（1~2 条）；\n"
+              "结尾一句下一步引导（只能引导系统实际支持的单步动作，如「把午餐的蒸红薯换回蛋白质主菜」或「重新生成午餐」，严禁编造加餐餐位或跨餐挪菜等不存在的功能）。\n"
               "禁止：逐字复述餐卡；出现「后端/依据码/筛选逻辑」等内部细节；把「该项未提供」当内容硬凑；下「达标」结论（null≠0，单餐微量是贡献值、不是全天达标）。\n"
             + _FMT,
             f"用户问：{message}\n方案数据：{json.dumps(material, ensure_ascii=False)}",
