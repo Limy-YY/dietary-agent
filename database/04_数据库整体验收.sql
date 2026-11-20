@@ -805,6 +805,119 @@ BEGIN
 END
 $$;
 
+-- v21 编号段（DISH-121..170 共 50 道）细断言：按编号区间独立核对，不依赖 source_id 分组
+DO $$
+DECLARE
+    r3_dishes      integer;
+    r3_empty_ing   integer;
+    r3_bad_amount  integer;
+    r3_bad_nutr    integer;
+    r3_bad_source  integer;
+    r3_dup_name    integer;
+    r3_orphan      integer;
+    r3_bad_snap    integer;
+BEGIN
+    SELECT count(*) INTO r3_dishes
+      FROM core.dish
+     WHERE dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+       AND dish_id NOT LIKE '%-LS'
+       AND NOT is_deleted;
+
+    SELECT count(*) INTO r3_empty_ing
+      FROM core.dish d
+     WHERE d.dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+       AND d.dish_id NOT LIKE '%-LS'
+       AND NOT d.is_deleted
+       AND NOT EXISTS (SELECT 1 FROM core.dish_ingredient di WHERE di.dish_id = d.dish_id);
+
+    SELECT count(*) INTO r3_bad_amount
+      FROM core.dish_ingredient
+     WHERE dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+       AND dish_id NOT LIKE '%-LS'
+       AND amount_g <= 0;
+
+    SELECT count(*) INTO r3_bad_nutr
+      FROM app.v_dish_live_nutrition
+     WHERE dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+       AND dish_id NOT LIKE '%-LS'
+       AND (
+           NOT energy_complete
+           OR NOT protein_complete
+           OR NOT sodium_complete
+           OR energy_kcal IS NULL
+           OR protein_g IS NULL
+           OR sodium_mg IS NULL
+       );
+
+    SELECT count(*) INTO r3_bad_source
+      FROM core.dish
+     WHERE dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+       AND dish_id NOT LIKE '%-LS'
+       AND (
+           source IS NULL
+           OR source_id IS NULL
+           OR source_row ->> 'standardization_note' IS NULL
+           OR source_row ->> 'data_quality' IS NULL
+           OR jsonb_array_length(COALESCE(source_row -> 'ingredients', '[]'::jsonb)) = 0
+       );
+
+    SELECT count(*) INTO r3_dup_name
+      FROM (
+          SELECT name
+            FROM core.dish
+           WHERE dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+             AND dish_id NOT LIKE '%-LS'
+             AND NOT is_deleted
+           GROUP BY name
+          HAVING count(*) > 1
+      ) t;
+
+    SELECT count(*) INTO r3_orphan
+      FROM core.dish_ingredient di
+      LEFT JOIN core.dish d USING (dish_id)
+      LEFT JOIN core.ingredient i USING (ingredient_id)
+     WHERE di.dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+       AND di.dish_id NOT LIKE '%-LS'
+       AND (d.dish_id IS NULL OR i.ingredient_id IS NULL);
+
+    SELECT count(*) INTO r3_bad_snap
+      FROM core.dish d
+      JOIN app.v_dish_live_nutrition v ON v.dish_id = d.dish_id
+     WHERE d.dish_id BETWEEN 'DISH-121' AND 'DISH-170'
+       AND d.dish_id NOT LIKE '%-LS'
+       AND NOT d.is_deleted
+       AND COALESCE(d.avoid_snapshot -> 'strict_allergens', '[]'::jsonb)
+           <> COALESCE(to_jsonb(v.strict_allergens), '[]'::jsonb);
+
+    IF r3_dishes <> 50 THEN
+        RAISE EXCEPTION 'DISH-121..170 应为50道（编号连续无缺号/无重号），实际为%', r3_dishes;
+    END IF;
+    IF r3_empty_ing <> 0 THEN
+        RAISE EXCEPTION 'DISH-121..170 有%道菜配料为空', r3_empty_ing;
+    END IF;
+    IF r3_bad_amount <> 0 THEN
+        RAISE EXCEPTION 'DISH-121..170 有%条配料 amount_g 非正', r3_bad_amount;
+    END IF;
+    IF r3_bad_nutr <> 0 THEN
+        RAISE EXCEPTION 'DISH-121..170 有%道菜营养三元组不完整', r3_bad_nutr;
+    END IF;
+    IF r3_bad_source <> 0 THEN
+        RAISE EXCEPTION 'DISH-121..170 有%道菜来源/标准化说明/源数据配料缺失', r3_bad_source;
+    END IF;
+    IF r3_dup_name <> 0 THEN
+        RAISE EXCEPTION 'DISH-121..170 存在%组重名', r3_dup_name;
+    END IF;
+    IF r3_orphan <> 0 THEN
+        RAISE EXCEPTION 'DISH-121..170 存在%条孤儿配料（菜或食材不存在）', r3_orphan;
+    END IF;
+    IF r3_bad_snap <> 0 THEN
+        RAISE EXCEPTION 'DISH-121..170 有%道菜 strict_allergens 快照与实时视图不一致', r3_bad_snap;
+    END IF;
+
+    RAISE NOTICE 'DISH-121..170 段验收通过：50 道，编号无缺号 / 配料非空且量正 / 营养完整 / 来源齐全 / 油盐一致 / 菜名唯一 / 无孤儿 / 快照一致';
+END
+$$;
+
 -- v1.2r4 过敏原复核：未核查清零；存储快照与实时视图一致；含已确认含配料的菜式不得 strict_allergens 为空
 DO $$
 DECLARE
