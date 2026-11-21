@@ -63,6 +63,8 @@
 | BUG-047 | 食材清单勾选状态跨方案串数据 | 前端 | 未修 |
 | BUG-048 | 档案编辑态可能回显默认值(load 未 await) | 前端 | 未修 |
 | BUG-049 | 应用库账号缺 DELETE 权限，整餐重生成/替换单菜/删会话运行时失败（换一换按钮不受影响） | 数据库权限/后端 | 已修·待部署 |
+| BUG-050 | 规则引擎用「添加盐 5g/日」卡「总钠(含天然钠)」且当单餐硬淘汰，普遍钠超标 | 规则引擎 | 未修 |
+| BUG-051 | 膳食报告钠参考值取 AI=1500mg 当上限，与候选 2000mg 口径冲突 + AI 语义用反 | 后端报告 | 已修（2026-11-21） |
 
 ---
 
@@ -530,3 +532,24 @@
 - **状态**：已修·待部署（2026-11-21：授权 SQL 已补 `DELETE`，运行库已手动 GRANT，`regenerate_slot` 不再报权限错误；SQL 文件改动待提交/部署）。
 - **修复**：`03_应用账号与权限.sql` 第 18 行与 `ALTER DEFAULT PRIVILEGES` 第 27 行补 `DELETE`，并对运行中的库 `docker exec` 执行 `GRANT DELETE ON ALL TABLES IN SCHEMA app TO diet_app;` + `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT DELETE ON TABLES TO diet_app;`（无需重启，见「数据库灌库坑」）。根因细节：`backend/scripts/grant_diet_app.sql` 本就含 `DELETE`，仅 docker 初始化用的 `03` 漏了，两份授权脚本不一致。
 - **验证**：`diet_backend` 对 `app.meal_candidate_dish / app.message / app.conversation` 的 DELETE 实测通过（`has_table_privilege`=t，且 `DELETE … WHERE false` 无权限报错）；`check_v21_local_edits_db.py` 已越过原权限错误，`regenerate_slot` 成功换出不同菜品（签名变化、其余餐位不变、2~3 候选均通过）。该脚本另有两处旧断言（第 42/43 行，期望旧候选被删除归档）与当前「复用候选行、原地更新」设计不符，属待更新的旧测试，与本 bug 无关。
+
+## BUG-050 · 规则引擎用「添加盐 5g/日」卡「总钠(含天然钠)」且当单餐硬淘汰，普遍钠超标
+
+- **现象**：生成的候选方案几乎每餐都提示「钠超标」/「总钠折算盐超过区间」，极端时正餐/晚餐出现大量合法组合被淘汰，候选池收窄，观感「随随便便一餐都钠超标」。
+- **层面**：规则引擎（候选生成 / 油盐限额）。
+- **根因**：`backend/app/services/rule_engine/models.py:30` 的 `DEFAULT_DAILY_LIMITS["salt_g"]=5.0` 取自《中国居民膳食指南 2022》「食盐<5g/日」——这是**添加盐（食盐）**口径；但 `backend/app/services/rule_engine/candidates.py:178-181` 把 `sodium_mg×2.54/1000` 折算成「总盐当量」（**全食物总钠**，含肉/菜/主食里的天然钠），`candidates.py:206-218` 又拿**同一个** `target.salt_limit_g` 去卡这个总钠，`candidates.py:449` `if hard: continue` 当**单餐硬淘汰**。总钠 = 添加盐 + 天然钠，恒 ≥ 添加盐，所以「总钠折算盐 > 5g×ratio」几乎必命中。数值上 5g 盐 ≈ 1965mg ≈ WHO 2000mg 总钠目标，但被按餐切成 1.5/2.0/1.5g 后做单餐硬淘汰：两道菜（各 1g 盐 ≈ 890mg 钠 ≈ 2.26g 盐当量）就超过晚餐 1.5g 上限。天然钠被当成"盐"多算了一层。
+- **状态**：未修（2026-11-21 代码审查发现）。
+- **修复建议**（需与数据/Agent 岗对齐口径，关联 CLAUDE.md §十 P2「油盐糖量级口径未定」与 `42_疾病规则口径审核_v1.2r4.sql`「2000mg 唯一生产默认钠目标」）：
+  - **方案 A（推荐）**：盐只卡「添加盐」一次——`default_salt_g` vs `5g×ratio`；总钠单独立「总钠 2000mg/日」参考，且降级为软扣分/提示，**不参与单餐硬淘汰**。
+  - **方案 B**：若产品坚持控总钠，给 `total_salt_equivalent_g` 单独立参考（daily 2000mg → 每餐 600/800/600mg），标签明确叫「总钠」而非「盐」，与添加盐不叠加、单餐不硬淘汰。
+
+## BUG-051 · 膳食报告钠参考值取 AI=1500mg 当上限，与候选 2000mg 口径冲突 + AI 语义用反
+
+- **现象**：膳食报告里钠的参考值显示「AI 1500mg」，用户实际摄入一旦 >1500mg 即被标「偏高」；而候选生成时钠的约束线是 2000mg（5g 盐），同一营养素在同一产品里两条不同的「超标」判定线，用户看到会困惑。
+- **层面**：后端（营养报告 `nutrition.py`）。
+- **根因**：`backend/app/routers/nutrition.py:422` `sodium_ref = _ref_val("sodium")` 取 DRIs 2023 钠的 **AI（适宜摄入量）= 1500mg**（18–64 岁；65+ 为 1400mg，见 `database/29_rni_reference说明_铁源单行修订.md`）；`nutrition.py:428-439` 的 `_ctrl` 对钠 `pct > 100 → "high"`，把 AI 当成「别超」上限用。两处错：
+  1. **参考类型用反**：AI = 适宜摄入量，是「够不够」的**下限**参考，不是「别超」上限；钠真正的「别超」参考是 **PI-NCD = 2000mg**（预防慢性病建议量）或《膳食指南》食盐<5g（≈2000mg 钠）。
+  2. **口径不一致**：报告用 1500mg，规则引擎/疾病规则默认 2000mg（WHO/NHC），系统内「钠」同时存在 1500 / 2000 / ~1965 三个阈值。
+- **状态**：已修（2026-11-21）。
+- **修复建议**：① 报告钠参考值改用 **PI-NCD 2000mg**（与规则引擎/疾病规则同一阈值），`sodium_status` 按 2000mg 判偏高；② 或保留 AI=1500 但明确其语义为「适宜摄入量、非上限」，不把 >100% AI 判为偏高，上限改由 2000mg 判；③ 1500 / 2000 / 5g 三处口径需统一落定一处，避免同一「钠」多个阈值（与 BUG-050 同根，可一并定调）。
+- **修复（2026-11-21）**：① `backend/app/routers/nutrition.py` 新增常量 `SODIUM_LIMIT_MG_DAILY=2000.0`，`_macro_summary` 的 `sodium_ref` 从 `_ref_val("sodium")`（AI=1500）改为该常量；② 前端 `frontend/src/utils/schema.js` 钠的 `ref_label` 由 `AI` 改为 `上限`（与烹调油一致）；③ 新增回归测试 `test_sodium_reference_uses_2000mg_ceiling_not_ai_1500`。`sodium_status` 随之只在 >2000mg 才判「偏高」。测试：`test_v22_rag_and_report.py` 3 passed；全量后端 5 failed 均为 `test_v21_culinary_first`/`test_v21_meal_templates` 的菜式目录脱节（IMP-045）遗留，与本 bug 无关。**口径就此定调**：钠的 1500mg 只作「适宜摄入量(AI)」参考、不参与超标判定；超标上限统一用 2000mg（与规则引擎/疾病规则一致，BUG-050 同源）。

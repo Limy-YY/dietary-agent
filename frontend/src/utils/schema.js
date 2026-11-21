@@ -525,7 +525,7 @@ export function normalizeReport(report) {
         status: str(pick(macro, 'oil_status'), 'unknown')
       },
       {
-        key: 'sodium', name: '钠', unit: 'mg', ref_label: 'AI',
+        key: 'sodium', name: '钠', unit: 'mg', ref_label: '上限',
         value: numOrNull(pick(macro, 'sodium_mg')),
         reference: numOrNull(pick(macro, 'sodium_reference')),
         pct: numOrNull(pick(macro, 'sodium_pct')),

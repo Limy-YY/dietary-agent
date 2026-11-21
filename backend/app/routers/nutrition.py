@@ -45,6 +45,12 @@ MICRO_IDS = (
     "vitamin_c",
 )
 
+# 钠「别超」参考：PI-NCD / WHO/NHC 建议上限 2000mg/日（总钠），与规则引擎
+# DEFAULT_DAILY_LIMITS["salt_g"]=5g（≈2000mg 钠）、疾病规则 HTN-SODIUM-WHO-NHC-2000
+# 同一口径。注意 DRIs 2023 的钠 AI=1500mg 是「适宜摄入量」（下限），不是上限，
+# 不得当作超标线使用（见 BUG-051）。
+SODIUM_LIMIT_MG_DAILY = 2000.0
+
 # 缺口时的补位建议（按 nutrient_id）
 _MICRO_ADVICE = {
     "calcium": "奶制品、豆制品、深色蔬菜",
@@ -416,9 +422,11 @@ def _macro_summary(agg: dict, refs: dict | None = None) -> dict:
     fiber_g = agg["fiber_g"]
     sodium_mg = agg["sodium_mg"]
     oil_g = agg["oil_g"]
-    # 膳食纤维 / 钠取数据字典参考值（AI）；烹调油字典无参考值，用规则引擎内部建议上限
+    # 膳食纤维取数据字典参考值（AI）；钠取 PI-NCD/WHO 建议上限 2000mg/日（总钠），
+    # 与规则引擎「盐 5g≈2000mg」同一口径，不再用 DRIs 的钠 AI=1500 当「别超」线；
+    # 烹调油字典无参考值，用规则引擎内部建议上限 25g。
     fiber_ref = _ref_val("dietary_fiber")
-    sodium_ref = _ref_val("sodium")
+    sodium_ref = SODIUM_LIMIT_MG_DAILY
     oil_ref = 25.0
 
     def _pct(v: float | None, ref: float | None) -> float | None:

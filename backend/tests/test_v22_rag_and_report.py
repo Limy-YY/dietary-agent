@@ -1,7 +1,7 @@
 import unittest
 
 from app.routers.agent import _search_knowledge
-from app.routers.nutrition import MICRO_IDS, _achievement
+from app.routers.nutrition import MICRO_IDS, _achievement, _macro_summary
 
 
 class _Rows:
@@ -66,6 +66,28 @@ class RagAndReportTests(unittest.TestCase):
         self.assertEqual(result["micro_overall_pct"], 100.0)
         self.assertEqual(result["micro_evaluable_count"], 1)
         self.assertEqual(result["micro_total_count"], len(MICRO_IDS))
+
+    def test_sodium_reference_uses_2000mg_ceiling_not_ai_1500(self):
+        agg = {
+            "energy_kcal": 1800.0,
+            "protein_g": 70.0,
+            "fat_g": 60.0,
+            "carb_g": 250.0,
+            "fiber_g": 20.0,
+            "oil_g": 10.0,
+            "salt_g": 3.0,
+            "sodium_mg": 1800.0,
+            "total_salt_equivalent_g": 4.5,
+        }
+        # 数据字典里钠的 AI=1500mg 是「适宜摄入量」，不应被当作超标上限
+        refs = {
+            "sodium": {"reference_value": 1500.0},
+            "dietary_fiber": {"reference_value": 25.0},
+        }
+        macro = _macro_summary(agg, refs)
+        self.assertEqual(macro["sodium_reference"], 2000.0)
+        self.assertEqual(macro["sodium_status"], "ok")  # 1800 < 2000，未超上限
+        self.assertAlmostEqual(macro["sodium_pct"], 90.0)
 
 
 if __name__ == "__main__":
