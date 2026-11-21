@@ -121,19 +121,26 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** 懒加载某会话的历史消息（文本）。已在加载 / 已加载 / 无后端 id 时跳过。 */
+  /** 懒加载某会话的历史消息（文本）。已在加载 / 已加载 / 无后端 id 时跳过。
+   *  返回在途的加载 Promise（已在加载时复用同一 Promise），供 send 等待——
+   *  避免历史加载回来时整组覆盖掉刚 push 的本轮消息（BUG-043）。 */
   async function hydrateSession(session) {
-    if (!session || session._hydrated || session._loading || session.conversationId == null) return
+    if (!session || session._hydrated || session.conversationId == null) return
+    if (session._loading) return session._hydratePromise
     session._loading = true
-    try {
-      const { items } = await listMessages(session.conversationId, { pageSize: 200 })
-      session.messages = items.map(toMessage)
-      session._hydrated = true
-    } catch (e) {
-      /* 历史消息加载失败不打断使用，下次切回可重试 */
-    } finally {
-      session._loading = false
-    }
+    session._hydratePromise = (async () => {
+      try {
+        const { items } = await listMessages(session.conversationId, { pageSize: 200 })
+        session.messages = items.map(toMessage)
+        session._hydrated = true
+      } catch (e) {
+        /* 历史消息加载失败不打断使用，下次切回可重试 */
+      } finally {
+        session._loading = false
+        session._hydratePromise = null
+      }
+    })()
+    return session._hydratePromise
   }
 
   /** 从后端拉取会话列表（初始化时调用一次）。 */
@@ -242,6 +249,12 @@ export const useChatStore = defineStore('chat', () => {
     const session = ensureSession()
     const panel = usePanelStore()
     showWelcome.value = false
+
+    // 先等历史懒加载完成再追加本轮消息：否则 hydrateSession 返回时会整组覆盖
+    // session.messages，把刚 push 的 user/ai 消息连同流式渲染一起冲掉（BUG-043）。
+    if (session.conversationId != null && !session._hydrated) {
+      await hydrateSession(session)
+    }
 
     const userMsg = {
       id: uid('msg'),
