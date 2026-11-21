@@ -82,6 +82,7 @@ async def _stream(req: AgentChatRequest):
         result = agent_task.result()
     except Exception as e:  # 生成中失败 → error 事件，前端可重试
         yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
+        yield _sse("done", {"conversation_id": conv_id, "finish_reason": "error"})
         return
 
     # Silent card actions must return an updated card for the requested plan.
