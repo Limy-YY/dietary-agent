@@ -341,7 +341,9 @@ export const useChatStore = defineStore('chat', () => {
           }
 
           if (evt.event === 'done') {
-            aiMsg.status = 'done'
+            // done 是「流结束」信号，不是「成功」信号；若前面已收到 error，保持 error 态，
+            // 避免错误被 done 覆盖成「成功」（BUG-044）。
+            if (aiMsg.status !== 'error') aiMsg.status = 'done'
             aiMsg.thinking = '' // 兜底：确保思考步骤条不残留
             if (payload.conversation_id) adoptConversation(session, payload.conversation_id)
             if (payload.meal_plan_id != null) aiMsg.meal_plan_id = payload.meal_plan_id
