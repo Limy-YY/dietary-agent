@@ -54,10 +54,10 @@
 | BUG-038 | 报告自定义日期区间字段名不匹配(start/end vs period) | Agent | 未修 |
 | BUG-039 | 单菜替换硬编码 allow_approximate=True，未经同意落库近似结果 | Agent | 未修 |
 | BUG-040 | swap_candidate 多日方案无法定位餐位（缺日期参数） | Agent | 未修 |
-| BUG-041 | Agent 直连 /chat 异常只发 error 不发 done | Agent | 未修 |
+| BUG-041 | Agent 直连 /chat 异常只发 error 不发 done | Agent | 已修（2026-11-21） |
 | BUG-042 | _parse_date_range 跨年日期区间解析错误 | Agent | 未修 |
 | BUG-043 | 发送与会话历史懒加载竞态，流式消息整组丢失 | 前端 | 未修 |
-| BUG-044 | done 事件无条件覆写 error 状态 | 前端 | 未修 |
+| BUG-044 | done 事件无条件覆写 error 状态 | 前端 | 已修（2026-11-21） |
 | BUG-045 | 结构化块 __key 从未赋值，就地替换组件实例复用串脏 | 前端 | 未修 |
 | BUG-046 | 「当前规划」面板确认方案未处理 2005 冲突 | 前端 | 未修 |
 | BUG-047 | 食材清单勾选状态跨方案串数据 | 前端 | 未修 |
@@ -459,8 +459,9 @@
 - **现象**：直接消费 Agent 8001 `/chat` 的客户端若依赖 `done` 结束流，会在异常后挂起。当前前端经后端 `chat.py` 代理时被后端的 `finally` 补发 `done` 掩盖，故只在直连 Agent 时暴露。
 - **层面**：Agent（SSE 协议）。
 - **根因**：`agent/main.py:83-85` 的 `agent_task.result()` 抛异常时只 `yield error` 后 `return`，没有终止性 `done`；而同文件静默动作失败路径（`main.py:113-115`）是 `error+done` 成对下发，两处不一致。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-21 代码审查发现并修复）。
 - **修复建议**：异常路径补发 `done`，保持「任何流都以 done 收尾」的契约。
+- **修复（2026-11-21）**：`agent/main.py` `_stream` 的 `agent_task.result()` 异常分支在 `yield error` 后补 `yield done({"finish_reason":"error"})`，与同文件静默失败路径（error+done 成对）对齐。至此 Agent 三条收尾路径（正常 / 静默失败 / 异常）均以 `done` 结束。
 
 ## BUG-042 · _parse_date_range 跨年日期区间解析错误
 
@@ -483,8 +484,9 @@
 - **现象**：任何业务错误（2002/2006/3001…）后消息最终 `status='done'`；若错误发生前已收到 `status` 思考步骤，`ChatMessage.vue` 的思考折叠记录（要求 `status==='done'`）会把「已生成方案…」显示在错误气泡旁，看起来像成功。
 - **层面**：前端（SSE 状态机）。
 - **根因**：后端 `chat.py:378-385` 在 `finally` 中总在 error 事件之后补发 `done`；`frontend/src/stores/chat.js:343-349` 的 done 分支无条件 `aiMsg.status='done'`，把刚设置的 `status='error'` 覆盖。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-21 代码审查发现并修复）。
 - **修复建议**：done 分支尊重已有 error 态（仅当非 error 时才置 done）。
+- **修复（2026-11-21）**：`frontend/src/stores/chat.js` done 分支改为 `if (aiMsg.status !== 'error') aiMsg.status = 'done'`，加注释说明「done 是流结束信号、不是成功信号」。**与 BUG-041 互补不冲突**：后端/Agent 永远发 done（流必须收尾），前端收到 done 时保留 error 态（错误不被伪装成成功）。
 
 ## BUG-045 · 结构化块 __key 从未赋值，就地替换组件实例复用串脏
 
