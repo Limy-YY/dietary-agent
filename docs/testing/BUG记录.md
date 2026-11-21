@@ -56,7 +56,7 @@
 | BUG-040 | swap_candidate 多日方案无法定位餐位（缺日期参数） | Agent | 未修 |
 | BUG-041 | Agent 直连 /chat 异常只发 error 不发 done | Agent | 已修（2026-11-21） |
 | BUG-042 | _parse_date_range 跨年日期区间解析错误 | Agent | 未修 |
-| BUG-043 | 发送与会话历史懒加载竞态，流式消息整组丢失 | 前端 | 未修 |
+| BUG-043 | 发送与会话历史懒加载竞态，流式消息整组丢失 | 前端 | 已修（2026-11-21） |
 | BUG-044 | done 事件无条件覆写 error 状态 | 前端 | 已修（2026-11-21） |
 | BUG-045 | 结构化块 __key 从未赋值，就地替换组件实例复用串脏 | 前端 | 未修 |
 | BUG-046 | 「当前规划」面板确认方案未处理 2005 冲突 | 前端 | 未修 |
@@ -476,8 +476,9 @@
 - **现象**：切到某个会话（触发历史懒加载）后立刻输入并发送 → 历史返回时整组覆盖 `session.messages`，刚 push 的用户消息连同正在流式渲染的 AI 消息一起脱离渲染树；且 `_hydrated` 已置 true 不再重拉，消息**永久丢失**，需整页刷新才能恢复。
 - **层面**：前端（chat store）。
 - **根因**：`frontend/src/stores/chat.js:125-137` 的 `hydrateSession` 异步返回后 `session.messages = items.map(toMessage)` **整数组覆盖**；`send` 既不 `await` 也完全不感知 `session._loading`。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-21 代码审查发现并修复）。
 - **修复建议**：`send` 前 `await hydrateSession`；或在 `hydrateSession` 覆盖时保留本地尚未落库的消息（按临时 id 过滤）。
+- **修复（2026-11-21）**：`hydrateSession` 改为「已在加载时返回在途 Promise」——`session._hydratePromise` 记录在途加载，`_loading=true` 时直接 `return session._hydratePromise`，保证调用方能等到同一趟加载而非立即返回；`send` 在 push 本轮 user/ai 消息前先 `if (conversationId != null && !_hydrated) await hydrateSession(session)`，历史先就位、再追加本轮消息，杜绝整组覆盖。三个场景走查：切会话立刻发（等待在途加载）、已加载会话（跳过）、新草稿 conversationId=null（跳过）均正确。
 
 ## BUG-044 · done 事件无条件覆写 error 状态
 
