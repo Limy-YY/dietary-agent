@@ -211,13 +211,12 @@ def hard_budget_failures(target: MealTarget, portions: Sequence[DishPortion]) ->
         if known > limit + 0.01:
             failures.append(f"{key}_over:{known:g}>{limit:g}")
     sodium_values = [p.facts.sodium_mg for p in portions]
-    if any(value is None for value in sodium_values):
-        failures.append("total_sodium_unknown")
-    else:
+    if all(value is not None for value in sodium_values):
         sodium_mg = sum(float(value) * p.servings for value, p in zip(sodium_values, portions))
         salt_equivalent = sodium_mg * 2.54 / 1000.0
         if salt_equivalent > target.salt_limit_g + 0.01:
             failures.append(f"total_salt_equivalent_over:{salt_equivalent:g}>{target.salt_limit_g:g}")
+    # 钠缺失(null)不产生硬失败：null≠0，未知≠可安全排除；交由 oil_salt_unknown 告警标记。
     return failures
 
 
@@ -249,9 +248,7 @@ def _within(target: MealTarget, totals: dict[str, float | None]) -> tuple[bool, 
     if salt is not None and salt > target.salt_limit_g + 0.01:
         failures.append(f"salt_over:{salt:g}>{target.salt_limit_g:g}")
     salt_equivalent = totals.get("total_salt_equivalent_g")
-    if salt_equivalent is None:
-        failures.append("total_sodium_unknown")
-    elif salt_equivalent > target.salt_limit_g + 0.01:
+    if salt_equivalent is not None and salt_equivalent > target.salt_limit_g + 0.01:
         failures.append(f"total_salt_equivalent_over:{salt_equivalent:g}>{target.salt_limit_g:g}")
 
     return (not failures, failures)

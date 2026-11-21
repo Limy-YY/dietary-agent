@@ -28,7 +28,7 @@ def evaluate_portions(portions, target, targets, soft_avoid=(), *, allow_approxi
     if totals.get('kcal') is None:
         raise InsufficientData('能量数据缺失')
     passed, failures = _within(target, totals)
-    if any(x.startswith(('oil_over:', 'salt_over:', 'total_salt_equivalent_over:', 'total_sodium_unknown')) for x in failures):
+    if any(x.startswith(('oil_over:', 'salt_over:', 'total_salt_equivalent_over:')) for x in failures):
         raise HardConstraintUnsatisfiable('；'.join(failures))
     if not passed and not allow_approximate:
         raise HardConstraintUnsatisfiable('营养目标不满足：' + '；'.join(failures))

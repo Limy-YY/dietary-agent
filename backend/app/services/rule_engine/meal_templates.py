@@ -538,7 +538,7 @@ def shortlist_combos(combos, target, relaxed, servings, diagnostics=None, option
         if any(sum((getattr(d,attr) or 0)*lo for d,lo in zip(combo,mins)) > limit+.01
                for attr,limit in [('default_oil_g',target.oil_limit_g),('default_salt_g',target.salt_limit_g)]):
             stats['added_oil_salt_bounds_rejected']+=1;continue
-        if any(getattr(d,'sodium_mg',None) is None for d in combo) or sum(d.sodium_mg*lo for d,lo in zip(combo,mins))*2.54/1000 > target.salt_limit_g+.01:
+        if all(getattr(d,'sodium_mg',None) is not None for d in combo) and sum(d.sodium_mg*lo for d,lo in zip(combo,mins))*2.54/1000 > target.salt_limit_g+.01:
             stats['sodium_bounds_rejected']+=1;continue
         distance = 0.0
         feasible = True
