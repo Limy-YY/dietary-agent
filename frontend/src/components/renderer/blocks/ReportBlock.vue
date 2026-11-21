@@ -93,11 +93,30 @@
         </div>
       </div>
 
-      <div v-if="report.insights.length" class="rp-insights">
+      <div v-if="hasInsights" class="rp-insights">
         <h5>关键结论</h5>
-        <ul>
-          <li v-for="(t, i) in report.insights" :key="i">{{ t }}</li>
-        </ul>
+        <p v-if="!report.insights.legacy && report.insights.verdict" class="rp-verdict">
+          {{ report.insights.verdict }}
+        </p>
+        <template v-if="report.insights.legacy">
+          <ul class="rp-insight-list">
+            <li v-for="(t, i) in report.insights.items" :key="i" class="rp-insight neutral">{{ t }}</li>
+          </ul>
+        </template>
+        <template v-else>
+          <div v-if="report.insights.plan.length" class="rp-insight-group">本方案</div>
+          <ul v-if="report.insights.plan.length" class="rp-insight-list">
+            <li v-for="(t, i) in report.insights.plan" :key="'p' + i" :class="['rp-insight', t.level]">{{ t.text }}</li>
+          </ul>
+          <div v-if="report.insights.advice.length" class="rp-insight-group">建议</div>
+          <ul v-if="report.insights.advice.length" class="rp-insight-list">
+            <li v-for="(t, i) in report.insights.advice" :key="'a' + i" class="rp-insight advice">{{ t.text }}</li>
+          </ul>
+          <div v-if="report.insights.trend.length" class="rp-insight-group">长期回看</div>
+          <ul v-if="report.insights.trend.length" class="rp-insight-list">
+            <li v-for="(t, i) in report.insights.trend" :key="'t' + i" class="rp-insight trend">{{ t.text }}</li>
+          </ul>
+        </template>
       </div>
     </div>
 
@@ -139,6 +158,12 @@ import { fmtNum, normalizeReport } from '@/utils/schema.js'
 const props = defineProps({ block: { type: Object, required: true } })
 const report = computed(() => (props.block?.meta ? props.block : normalizeReport(props.block)))
 const expanded = ref(Boolean(props.block.expanded))
+
+const hasInsights = computed(() => {
+  const ins = report.value.insights || {}
+  if (ins.legacy) return ins.items.length > 0
+  return Boolean(ins.verdict) || ins.plan.length > 0 || ins.advice.length > 0 || ins.trend.length > 0
+})
 
 const CTRL_TEXT = { ok: '合适', high: '偏高', low: '偏低', unknown: '数据不足' }
 function ctrlText(s) {

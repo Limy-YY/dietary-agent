@@ -424,6 +424,36 @@ function achievementView(achievement) {
   }
 }
 
+function normalizeInsights(v) {
+  // 新结构：{verdict, plan[{level,text}], advice[{text}], trend[{text}]}
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const mapText = (x) =>
+      (Array.isArray(x) ? x : [])
+        .map((it) => ({ text: str(it && it.text, '') }))
+        .filter((it) => it.text)
+    return {
+      legacy: false,
+      verdict: str(v.verdict, ''),
+      plan: (Array.isArray(v.plan) ? v.plan : [])
+        .map((it) => ({ level: str(it && it.level, 'warn'), text: str(it && it.text, '') }))
+        .filter((it) => it.text),
+      advice: mapText(v.advice),
+      trend: mapText(v.trend),
+      items: []
+    }
+  }
+  // 旧结构 string[]（历史落库报告）→ 降级平铺渲染，不丢内容
+  const legacy = Array.isArray(v) ? v.filter((t) => typeof t === 'string' && t) : []
+  return {
+    legacy: true,
+    verdict: '',
+    plan: [],
+    advice: [],
+    trend: [],
+    items: legacy
+  }
+}
+
 export function normalizeReport(report) {
   const r = report || {}
   const macro = r.macro_summary || {}
@@ -559,7 +589,7 @@ export function normalizeReport(report) {
     },
     achievement,
     sources: arr(pick(r, 'sources')),
-    insights: arr(pick(summary, 'insights')),
+    insights: normalizeInsights(pick(summary, 'insights')),
     daily_trend: normalizeDailyTrend(trendSource),
     expanded: false
   }

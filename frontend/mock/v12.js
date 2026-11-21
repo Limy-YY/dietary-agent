@@ -293,7 +293,12 @@ export function toNutritionReport(legacy, { planId, reportId, windowDays = 7 } =
       daily_trend: dailyTrend,
       achievement,
       reference_hints: ['铁按普通口径计算，未区分经期（本期口径）'],
-      insights: [...legacy.insights],
+      insights: {
+        verdict: '',
+        plan: [...(legacy.insights || [])].map((t) => ({ level: 'neutral', text: t })),
+        advice: [],
+        trend: []
+      },
       data_quality_notes: ['部分食材微量为近似值（approx/check），不作为官方实测结论']
     },
     completeness: {

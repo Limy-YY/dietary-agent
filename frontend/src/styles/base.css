@@ -1966,6 +1966,28 @@ button {
   font-weight: 700;
 }
 
+.rp-verdict {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main, #333);
+  line-height: 1.7;
+  margin-bottom: 6px;
+}
+
+.rp-insight-group {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-sub);
+  margin: 8px 0 2px;
+}
+
+.rp-insight.warn::before { color: var(--chart-warn); }
+.rp-insight.danger::before { color: var(--chart-danger); }
+.rp-insight.ok::before { color: var(--chart-protein); }
+.rp-insight.advice::before { color: var(--brand); }
+.rp-insight.trend::before { color: var(--text-sub); }
+.rp-insight.neutral::before { color: var(--text-sub); }
+
 /* ============ 来源 / 就医提示 / 跳转锚点 ============ */
 .sources-block {
   margin-top: 12px;

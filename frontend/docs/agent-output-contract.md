@@ -169,7 +169,7 @@
 | `summary.achievement` | object / null | 达标率；含 `micro_overall_pct`、`macro`、`micro` 三段口径 |
 | `summary.daily_trend[]` | object[] | 每日摄入序列；每项含 `date / label / calories / protein_g / fat_g / carb_g / fiber_g / oil_g / salt_g / micro / meal_count / known_meal_count / status` |
 | `summary.reference_hints` | string[] | 参考口径说明（如「本期铁按普通口径，未区分经期」） |
-| `summary.insights` | string[] | 结论/洞察（缺口、超标、回溯补位、达标率、达标天数偏少），前端「关键结论」区渲染 |
+| `summary.insights` | object | 结构化「关键结论」：`verdict`（一句话总评）+ `plan[{level,text}]`（本方案结论，level=warn/danger/ok）+ `advice[{text}]`（补位建议）+ `trend[{text}]`（长期回看）。历史旧报告可能为 `string[]`，前端降级平铺渲染 |
 | `summary.data_quality_notes` | string[] | 数据质量说明 |
 | `completeness.meal_count / known_meal_count / missing_meal_count` | integer / null | 「共 N 餐 · 已知 N 餐 · 缺失 N 餐」 |
 | `sources` | object[] | 参考值来源 |

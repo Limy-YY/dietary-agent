@@ -12,7 +12,8 @@
   宏量按供能比是否落在合理区间判；有效天数为 0 时百分比为 `null`（不按 0% 论）；
 - 铁按普通口径（未区分经期），需在 `reference_hints` 注明；
 - `summary.reference_hints` 只放「口径/溯源说明」，`summary.insights` 放「结论/洞察」
-  （缺口、超标、回溯补位、达标天数偏少），前端分两处渲染避免重复；
+  （结构化：verdict 总评 / plan 本方案结论 / advice 补位建议 / trend 长期回看，
+  缺口、超标、回溯补位、达标天数偏少按营养素去重），前端分两处渲染避免重复；
   达标率数值改由 `summary.achievement.micro_overall_pct` 在报告微区块头部呈现；
 - 同时调 `app.recent_micro_balance(user_id, start, end)` 取窗口内已固定方案的累计值做回溯判断；
   落库固定 `report_type='plan'`，并写 `app.nutrition_report_plan` 关联表。
@@ -652,8 +653,11 @@ def _rebuild_hints(
     window_days: int,
     micro: dict,
     meals_per_day: float,
-) -> list[str]:
+) -> list[dict]:
     """回溯判断：窗口内已固定方案的累计摄入（`app.recent_micro_balance`）。
+
+    返回结构化结果（nutrient_id / name_zh / unit / daily / remain / covered_meals），
+    供 `_build_insights` 组装「长期回看」文案。
 
     窗口里只有部分日期有已固定方案，直接按 `window_days` 折算会低估日均，
     因此按「覆盖餐数 ÷ 每日餐数」折算成实际有数据的天数。
@@ -668,7 +672,7 @@ def _rebuild_hints(
         {"uid": user_id, "ws": window_start, "we": plan["end_date"]},
     ).mappings().all()
 
-    hints: list[str] = []
+    hints: list[dict] = []
     for r in rows:
         if int(r["selected_meal_count"] or 0) == 0:
             continue
@@ -684,11 +688,98 @@ def _rebuild_hints(
         remain = round(target - daily, 2)
         if remain > 0:
             hints.append(
-                f"近 {window_days} 天窗口内已固定方案对{item.get('name_zh') or r['nutrient_name']}"
-                f"日均约 {round(daily, 1)}{item.get('unit') or ''}（覆盖 "
-                f"{int(r['selected_meal_count'])} 餐），距每日目标仍差 {remain}{item.get('unit') or ''}"
+                {
+                    "nutrient_id": r["nutrient_id"],
+                    "name_zh": item.get("name_zh") or r["nutrient_name"],
+                    "unit": item.get("unit") or "",
+                    "daily": round(daily, 1),
+                    "remain": remain,
+                    "covered_meals": int(r["selected_meal_count"]),
+                }
             )
     return hints
+
+
+def _build_insights(
+    shortfall: list[str],
+    over: list[str],
+    micro: dict,
+    achievement: dict,
+    rebuild_rows: list[dict],
+) -> dict:
+    """组装面向用户的「关键结论」，分 verdict / plan / advice / trend 四块。
+
+    - plan：本方案「摄入偏低 / 偏高」结论；
+    - advice：可执行补位建议（逐项营养素，只说吃什么、去术语）；
+    - trend：近窗口回溯 + 达标天数偏少（按营养素去重，不与 plan 重复）；
+    - verdict：一句话总评。数值不下沉到结论、保留在微量区/数据明细。
+    """
+    plan_items: list[dict] = []
+    advice_items: list[dict] = []
+    trend_items: list[dict] = []
+
+    if shortfall:
+        names = "、".join(micro[k]["name_zh"] for k in shortfall)
+        plan_items.append({"level": "warn", "text": f"{names} 摄入偏低"})
+    if over:
+        names = "、".join(micro[k]["name_zh"] for k in over)
+        plan_items.append({"level": "warn", "text": f"{names} 摄入偏高，长期超量需留意"})
+
+    for k in shortfall:
+        advice_items.append(
+            {"text": f"想补{micro[k]['name_zh']}，可多安排：{_MICRO_ADVICE.get(k, '相关食材')}"}
+        )
+
+    # 长期回看：回溯（窗口内累计缺口）与达标天数偏少，按营养素合并去重
+    rebuild_by_nutrient = {r["nutrient_id"]: r for r in rebuild_rows}
+    weak = [k for k, v in achievement["micro"].items() if v["level"] in ("warn", "danger")]
+    for k in MICRO_IDS:
+        rb = rebuild_by_nutrient.get(k)
+        is_weak = k in weak
+        if rb is None and not is_weak:
+            continue
+        name = micro[k]["name_zh"]
+        if rb is not None and is_weak:
+            trend_items.append({"text": f"这段时间里 {name} 偏低、达标天数也偏少"})
+        elif rb is not None:
+            trend_items.append({"text": f"这段时间里 {name} 也略低于参考值"})
+        else:
+            trend_items.append({"text": f"这段时间里 {name} 的达标天数偏少"})
+
+    # 一句话总评：宏量结构 + 微量结论，各自只在可评估时才下结论（避免「整体达标」误导）
+    macro_items = achievement.get("macro") or {}
+    macro_levels = [v.get("level") for v in macro_items.values() if isinstance(v, dict)]
+    macro_ok = "ok" in macro_levels and "warn" not in macro_levels
+    macro_warn = "warn" in macro_levels
+
+    micro_clauses = []
+    if shortfall:
+        micro_clauses.append("、".join(micro[k]["name_zh"] for k in shortfall) + " 摄入偏低")
+    if over:
+        micro_clauses.append("、".join(micro[k]["name_zh"] for k in over) + " 摄入偏高")
+    micro_ok = (
+        not shortfall
+        and not over
+        and any(micro[k].get("status") == "达标" for k in MICRO_IDS)
+    )
+
+    verdict_parts = []
+    if macro_warn:
+        verdict_parts.append("宏量结构可再优化")
+    elif macro_ok:
+        verdict_parts.append("宏量结构合理")
+    if micro_clauses:
+        verdict_parts.append("、".join(micro_clauses))
+    elif micro_ok:
+        verdict_parts.append("关键微量整体达标")
+    verdict = "，".join(verdict_parts)
+
+    return {
+        "verdict": verdict,
+        "plan": plan_items,
+        "advice": advice_items,
+        "trend": trend_items,
+    }
 
 
 def _serialize_report(row) -> dict:
@@ -748,21 +839,9 @@ def analyze_plan(
             "部分微量存在数据缺口或不宜硬性补足，按参考提示处理，不作达标结论"
         )
 
-    insights: list[str] = []
-    if shortfall:
-        names = "、".join(micro[k]["name_zh"] for k in shortfall)
-        advices = "，".join(
-            f"{micro[k]['name_zh']}补{_MICRO_ADVICE.get(k, '相关食材')}" for k in shortfall
-        )
-        insights.append(f"{names}距每日目标仍有缺口，建议下一次方案增加：{advices}")
     over = [k for k in MICRO_IDS if micro[k].get("status") == "超标"]
-    if over:
-        names = "、".join(micro[k]["name_zh"] for k in over)
-        insights.append(f"{names}已超过每日参考值，长期超量需关注")
-    insights.extend(
-        _rebuild_hints(
-            db, user_id, plan, req.window_days, micro, agg["meal_count"] / max(days, 1)
-        )
+    rebuild_rows = _rebuild_hints(
+        db, user_id, plan, req.window_days, micro, agg["meal_count"] / max(days, 1)
     )
 
     approx, total = _data_quality_check(db, req.meal_plan_id)
@@ -780,13 +859,7 @@ def analyze_plan(
 
     trend = _daily_trend(agg, plan["goal_energy_kcal"])
     achievement = _achievement(agg, refs, macro)
-    weak = [
-        f"{v['name_zh']}（{v['achieved_pct']}%）"
-        for v in achievement["micro"].values()
-        if v["level"] in ("warn", "danger")
-    ]
-    if weak:
-        insights.append("达标天数偏少：" + "、".join(weak))
+    insights = _build_insights(shortfall, over, micro, achievement, rebuild_rows)
 
     summary = {
         "reference_hints": reference_hints,
@@ -913,17 +986,7 @@ def analyze_period(
             "部分微量存在数据缺口或不宜硬性补足，按参考提示处理，不作达标结论"
         )
 
-    insights: list[str] = []
-    if shortfall:
-        names = "、".join(micro[k]["name_zh"] for k in shortfall)
-        advices = "，".join(
-            f"{micro[k]['name_zh']}补{_MICRO_ADVICE.get(k, '相关食材')}" for k in shortfall
-        )
-        insights.append(f"{names}距每日目标仍有缺口，建议下一次方案增加：{advices}")
     over = [k for k in MICRO_IDS if micro[k].get("status") == "超标"]
-    if over:
-        names = "、".join(micro[k]["name_zh"] for k in over)
-        insights.append(f"{names}已超过每日参考值，长期超量需关注")
 
     approx, total = _data_quality_check_window(db, user_id, window_start, window_end)
     quality_notes = []
@@ -940,13 +1003,7 @@ def analyze_period(
 
     trend = _daily_trend(agg, _load_target_kcal(db, user_id))
     achievement = _achievement(agg, refs, macro)
-    weak = [
-        f"{v['name_zh']}（{v['achieved_pct']}%）"
-        for v in achievement["micro"].values()
-        if v["level"] in ("warn", "danger")
-    ]
-    if weak:
-        insights.append("达标天数偏少：" + "、".join(weak))
+    insights = _build_insights(shortfall, over, micro, achievement, [])
 
     summary = {
         "reference_hints": reference_hints,
