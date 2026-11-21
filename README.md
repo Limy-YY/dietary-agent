@@ -84,10 +84,12 @@ cd github仓库/frontend && npm run dev
 
 接口无登录端点，JWT 由 `backend/.env` 的 `JWT_SECRET` 离线签发。离线签发 token：
 
-```bash
+```cmd
 cd backend
-.venv/Scripts/python -c "from app.core.security import create_access_token; print(create_access_token('demo-user', 1440))"
+..\.venv\Scripts\python.exe -c "from app.core.security import create_access_token; print(create_access_token('demo-user', 1440))"
 ```
+
+> 注意：venv 在**仓库根目录** `github仓库\.venv`（后端与 Agent 共用），不在 `backend` 下，所以从 `backend` 目录执行时要写成 `..\.venv\Scripts\python.exe`（Windows 用反斜杠）。
 
 浏览器控制台注入后刷新即可：
 
