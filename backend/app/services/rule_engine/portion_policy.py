@@ -42,6 +42,41 @@ def ingredient_weights(d):
     return cached
 
 
+#: 非主料角色（§5.4）：按 dish_ingredient.role 剔除，取代 name 写死名单。
+_NON_MAIN_ROLES = frozenset({'调味辅料', '调味料', '烹调油', '食盐'})
+
+
+def main_ingredient_weights(d):
+    """主料克数（§5.4）：按 dish_ingredient.role 剔除调味/油/盐。
+
+    有 role 数据（连库）时按 role 过滤，保留主料/配料/配菜；无 role（离线源）回退
+    ingredient_weights（全量）。返回只读 Mapping。
+    """
+    roles = getattr(d, 'ingredient_roles', None)
+    if not roles:
+        return ingredient_weights(d)
+    cached = getattr(d, '_main_ingredient_weights', None)
+    if cached is not None:
+        return cached
+    out = {}
+    for name, amount, role in roles:
+        if role in _NON_MAIN_ROLES:
+            continue
+        try:
+            a = float(amount)
+        except (TypeError, ValueError):
+            continue
+        if not isfinite(a) or a <= 0:
+            continue
+        out[str(name)] = out.get(str(name), 0) + a
+    cached = MappingProxyType(out)
+    try:
+        d._main_ingredient_weights = cached
+    except AttributeError:
+        pass
+    return cached
+
+
 def egg_count(d):
     grams=ingredient_weights(d).get('鸡蛋')
     if d.name.removesuffix("（少盐）") in COUNT_EGGS and grams in (50,100): return int(grams/50)
@@ -120,9 +155,10 @@ def portion_cost(combo,amounts,meal_type,target=None,limits=None):
 
 def practical_text(d,amount):
     w=ingredient_weights(d)
+    main_w=main_ingredient_weights(d)
     if not w:return None
     # Ingredient weights represent recipe inputs, never claim cooked portion.
-    main=[(n,g) for n,g in w.items() if n not in SEASON and not any(n==x for x in ('精盐','橄榄油','食用油','生抽','老抽'))]
+    main=list(main_w.items())
     if not main:return None
     grams='、'.join(f'{n}{g*amount:g}g' for n,g in main)
     n=egg_count(d)

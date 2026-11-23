@@ -184,6 +184,12 @@ class DishFacts:
     ingredient_names: list[str] = field(default_factory=list)
     source: str | None = None
     ingredient_amounts: list = field(default_factory=list)
+    #: [(食材名, 克数, role)] —— §5.4 主料口径：按 role 区分主料/烹调油/食盐，取代写死名单。
+    ingredient_roles: list = field(default_factory=list)
+    #: core.dish.dish_meta jsonb（角色单一来源 §5.1）；少盐变体在 get_dish_facts 回填基础菜 meta。
+    dish_meta: dict | None = None
+    #: A 裁剪开关（is_generation_enabled）；校验旧方案用全量时仍会读到被关的菜。
+    is_generation_enabled: bool = True
     #: 预计算的 {食材名: 克数}（只读 Mapping，防调用方误改共享缓存）；
     #: 由 portion_policy.ingredient_weights 首次访问时缓存到本对象。
     #: None = 尚未计算（用 None 而非 {} 作哨兵，避免「无可用配方数据」的菜被反复重算）。
@@ -191,6 +197,9 @@ class DishFacts:
     #: init=False 关键：dataclasses.replace() 只拷 init 字段，缓存字段不随之拷贝，
     #: 否则「改 name/ingredient_names 的新菜」会继承旧菜画像（陈旧缓存）。
     ingredient_weights: Mapping[str, float] | None = field(default=None, init=False, repr=False, compare=False)
+    #: 预计算的主料克数（按 dish_ingredient.role 剔除调味/油/盐）；由 portion_policy.main_ingredient_weights 首次访问时缓存。
+    #: 须声明为字段：@dataclass(slots=True) 无 __dict__，未声明字段赋值会静默失败导致每次重算。
+    _main_ingredient_weights: Any = field(default=None, init=False, repr=False, compare=False)
     #: 预计算的烹饪画像（meal_templates.DishProfile）；由 meal_templates.profile 首次访问时缓存。
     #: None = 尚未计算。请求内 dish 不可变，缓存整次请求内不失效。init=False 同上，防 replace() 带陈旧画像。
     dish_profile: Any = field(default=None, init=False, repr=False, compare=False)

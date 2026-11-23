@@ -242,6 +242,27 @@ def profile(dish):
     cached = getattr(dish, 'dish_profile', None)
     if cached is not None:
         return cached
+    # §5.1 角色单一来源：dish_meta 已迁库，优先读 DB；_ROWS/CATALOG 仅作无库离线兜底。
+    meta = getattr(dish, 'dish_meta', None)
+    if meta:
+        roles = {ROLE[c] for c in meta.get('roles', []) if c in ROLE}
+        if len(roles - {'汤羹'}) > 1:
+            roles.add('复合菜')
+        result = DishProfile(
+            name=dish.name,
+            roles=frozenset(roles),
+            breakfast=meta.get('breakfast') or '-',
+            staple=meta.get('staple') or '-',
+            family=meta.get('family') or '',
+            commonness=int(meta.get('commonness', 1)),
+            complexity=int(meta.get('complexity', 1)),
+            reviewed=bool(meta.get('reviewed', True)),
+        )
+        try:
+            dish.dish_profile = result
+        except AttributeError:
+            pass
+        return result
     base=base_dish_id(dish.dish_id)
     known = CATALOG.get(base)
     expected=known.name+('（少盐）' if base!=dish.dish_id else '') if known else None

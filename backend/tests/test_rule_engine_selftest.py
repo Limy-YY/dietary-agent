@@ -164,7 +164,7 @@ class FakeDataSource:
     def get_micro_reference_rows(self, profile):
         return MICRO_REFS
 
-    def get_dish_facts(self):
+    def get_dish_facts(self, generation_only: bool = False):
         return self.dishes
 
     def get_micro_window(self, user_id, window_start, window_end):

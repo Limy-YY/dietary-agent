@@ -226,8 +226,8 @@ def generate_plan(
     micro_rows = data_source.get_micro_reference_rows(profile)
     targets = compute_targets(profile, goal_row, micro_rows, request, baseline_row)
 
-    # 2) 构造候选（按餐次建池）
-    dishes = data_source.get_dish_facts()
+    # 2) 构造候选（按餐次建池）；生成只用生成池（A 裁剪），校验旧方案在 mealplan._edit_context 用全量。
+    dishes = data_source.get_dish_facts(generation_only=True)
     if not dishes:
         raise InsufficientData("菜式事实表为空，无法生成候选")
     staples, sides = _split_dishes(dishes)

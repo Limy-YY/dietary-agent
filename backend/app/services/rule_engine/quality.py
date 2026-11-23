@@ -7,8 +7,9 @@ SEASONING = ('油','盐','糖','醋','酱','胡椒','葱','蒜','姜','料酒','
 
 
 def main_ingredients(dish):
-    return {str(n).strip() for n in dish.ingredient_names or []
-            if str(n).strip() and not any(w in str(n) for w in SEASONING)}
+    # §5.4 主料口径：按 dish_ingredient.role 取主料，取代 name 写死名单。
+    from .portion_policy import main_ingredient_weights
+    return set(main_ingredient_weights(dish).keys())
 
 
 def similarity(a,b):

@@ -55,7 +55,7 @@ class RuleEngineDataSource(Protocol):
 
     def get_micro_reference_rows(self, profile: Profile) -> list[dict[str, Any]]: ...
 
-    def get_dish_facts(self) -> list[DishFacts]: ...
+    def get_dish_facts(self, generation_only: bool = False) -> list[DishFacts]: ...
 
     def get_micro_window(
         self, user_id: str, window_start: str, window_end: str
@@ -71,6 +71,7 @@ WITH base AS (
         d.dish_id, d.name, d.category, d.tags, d.method_text, d.cooking_rule_id,
         d.servings, d.default_oil_g, d.default_salt_g, d.cook_time_min, d.source,
         di.amount_g,
+        di.role AS ingredient_role,
         i.name AS ingredient_name,
         i.food_id,
         i.energy_kcal, i.protein_g, i.fat_g, i.carbohydrate_g, i.fiber_g,
@@ -116,7 +117,8 @@ WITH base AS (
         CASE WHEN count(*) FILTER (WHERE vitamin_c_mg IS NULL OR amount_g IS NULL) > 0
              THEN NULL ELSE round(sum(amount_g * vitamin_c_mg / 100.0), 2) END AS vitamin_c,
         COALESCE(array_agg(DISTINCT ingredient_name ORDER BY ingredient_name), ARRAY[]::text[]) AS ingredient_names,
-        jsonb_agg(jsonb_build_array(ingredient_name, amount_g) ORDER BY ingredient_name) AS ingredient_amounts
+        jsonb_agg(jsonb_build_array(ingredient_name, amount_g) ORDER BY ingredient_name) AS ingredient_amounts,
+        jsonb_agg(jsonb_build_array(ingredient_name, amount_g, ingredient_role) ORDER BY ingredient_name) AS ingredient_roles
     FROM base
     GROUP BY dish_id
 ), allergy_agg AS (
@@ -138,9 +140,10 @@ WITH base AS (
 SELECT
     d.dish_id, d.name, d.category, d.tags, d.method_text, d.cooking_rule_id,
     d.servings, d.default_oil_g, d.default_salt_g, d.cook_time_min, d.source,
+    d.dish_meta, d.is_generation_enabled,
     a.energy_kcal, a.protein_g, a.fat_g, a.carb_g, a.fiber_g, a.sodium_mg, a.calcium_mg,
     a.iron, a.zinc, a.vitamin_a, a.vitamin_b1, a.vitamin_b2, a.vitamin_c,
-    a.ingredient_names, a.ingredient_amounts, al.strict_allergens, al.unverified_food_ids
+    a.ingredient_names, a.ingredient_amounts, a.ingredient_roles, al.strict_allergens, al.unverified_food_ids
 FROM core.dish d
 JOIN agg a ON a.dish_id = d.dish_id
 JOIN allergy_agg al ON al.dish_id = d.dish_id
@@ -172,11 +175,31 @@ ORDER BY nr.nutrient_id, nr.reference_type
 """
 
 
+#: 进程内 dish facts 缓存（B1）。指纹 = core.dish/ingredient/dish_ingredient 的 max(updated_at)，
+#: 数据迁移使 updated_at 变化即失效。DishFacts 为纯数据、请求内不可变，跨请求共享安全。
+_dish_facts_cache: dict[str, list[DishFacts]] = {}
+_dish_facts_gen_cache: dict[str, list[DishFacts]] = {}
+_CACHE_MAX_ENTRIES = 8
+
+
 class SqlDataSource:
     """从 diet_agent 库读取事实数据（同步 Session）。"""
 
     def __init__(self, session: Any) -> None:
         self.session = session
+
+    def _data_fingerprint(self) -> str:
+        from sqlalchemy import text
+
+        # dish_ingredient 无 updated_at 列，用行数参与指纹（配料增删改即失效）。
+        row = self.session.execute(
+            text(
+                "SELECT (SELECT max(updated_at) FROM core.dish), "
+                "(SELECT max(updated_at) FROM core.ingredient), "
+                "(SELECT count(*) FROM core.dish_ingredient)"
+            )
+        ).one()
+        return "|".join(str(x) for x in row)
 
     def get_goal_row(self, goal_code: str) -> dict[str, Any] | None:
         from sqlalchemy import text
@@ -217,7 +240,19 @@ class SqlDataSource:
         )
         return [dict(r) for r in rows]
 
-    def get_dish_facts(self) -> list[DishFacts]:
+    def get_dish_facts(self, generation_only: bool = False) -> list[DishFacts]:
+        """读取全部菜式事实。
+
+        generation_only=True 只返回生成池（is_generation_enabled=true，A 裁剪）；
+        校验已生成方案时传 False（全量），否则旧方案里被关开关的菜会报「不可用」（🔴 见耗时优化 §六）。
+        结果按数据指纹进程内缓存（B1）。
+        """
+        fp = self._data_fingerprint()
+        cache = _dish_facts_gen_cache if generation_only else _dish_facts_cache
+        cached = cache.get(fp)
+        if cached is not None:
+            return cached
+
         from sqlalchemy import text
 
         rows = self.session.execute(text(_DISH_SQL)).mappings().all()
@@ -256,10 +291,26 @@ class SqlDataSource:
                     unverified_food_ids=list(data.get("unverified_food_ids") or []),
                     ingredient_names=list(data.get("ingredient_names") or []),
                     ingredient_amounts=list(data.get("ingredient_amounts") or []),
+                    ingredient_roles=list(data.get("ingredient_roles") or []),
+                    dish_meta=data.get("dish_meta"),
+                    is_generation_enabled=bool(data.get("is_generation_enabled", True)),
                     source=data.get("source"),
                 )
             )
-        return out
+
+        # 少盐变体 dish_meta 为 NULL：回填基础菜的 meta（base_dish_id 去 -LS 后缀回查）。
+        base_meta = {d.dish_id: d.dish_meta for d in out if not d.dish_id.endswith("-LS") and d.dish_meta}
+        for d in out:
+            if d.dish_id.endswith("-LS") and not d.dish_meta:
+                d.dish_meta = base_meta.get(d.dish_id[:-3])
+
+        if len(_dish_facts_cache) >= _CACHE_MAX_ENTRIES:
+            _dish_facts_cache.clear()
+            _dish_facts_gen_cache.clear()
+        _dish_facts_cache[fp] = out
+        gen = [d for d in out if d.is_generation_enabled]
+        _dish_facts_gen_cache[fp] = gen
+        return gen if generation_only else out
 
     def get_micro_window(
         self, user_id: str, window_start: str, window_end: str

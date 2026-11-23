@@ -160,8 +160,9 @@ def purchases(c):
     cached = getattr(c, '_purchases', _UNSET)
     if cached is not _UNSET:
         return cached
-    result = frozenset(n for p in getattr(c,'portions',()) for n,g in weights(p.facts).items()
-                       if n not in CONDIMENT and g*p.servings>=15)
+    from .portion_policy import main_ingredient_weights
+    result = frozenset(n for p in getattr(c,'portions',()) for n,g in main_ingredient_weights(p.facts).items()
+                       if g*p.servings>=15)
     try:
         c._purchases = result
     except AttributeError:
