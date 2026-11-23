@@ -12,6 +12,21 @@ python tests/test_contract_v12.py -v
 - `test_contract_v12.py`：9 条断言，覆盖三组——SSE 三类事件、统一包裹解包、字段命名（`plan_id` / `is_staple` / `kcal_per_100g`）；
 - 退出码 0 = 通过，可直接挂 CI。**当前 `backend/app/routers/chat.py` 为占位实现（仅 session/message/done），artifact 与 clarify 接线后重跑本脚本即可判定契约回归。**
 
+## 窗口⑤ 回归三件套（α 冲刺收口）
+
+```bash
+pytest tests/test_intent_regression.py tests/test_hard_constraint_profiles.py -q   # 离线，可进 CI
+python tests/check_data_consistency.py                                              # 需本地 DB 已起
+```
+
+| 文件 | 覆盖 | 依赖 |
+| --- | --- | --- |
+| `test_intent_regression.py` | 意图回归表：`agent._regex_intent` 的 canonical 话术命中 + 语义灰区返 None（「推荐补钙食物 / 贫血吃什么」等营养问答不得误判成配餐）；确定性偏好抽取 | 无（离线） |
+| `test_hard_constraint_profiles.py` | 硬约束画像回归：素食 / 清真 / 海鲜过敏 三画像跑完整 `generate_plan`，每餐 ≥2 候选且禁用菜零出现、安全菜不过滤 | 无（离线，`FakeDataSource`） |
+| `check_data_consistency.py` | 数据对照回归：dish_meta 同步、菜式 221 / 生成池 98、食材 132、纤维归零、孤儿/死食材/少盐回查（窗口③交付基线） | 本地 DB |
+
+> `conftest.py` 把 `agent/`、`backend/` 挂到 `sys.path`，使意图回归与硬约束画像回归只读依赖纯计算 / 确定性路由，不碰 DB/LLM/网络。
+
 ## 与其他测试资产的关系
 
 | 资产 | 位置 | 说明 |
