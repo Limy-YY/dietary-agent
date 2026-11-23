@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { streamChat } from '@/api/agent.js'
 import { listConversations, listMessages, renameConversation, deleteConversation } from '@/api/conversation.js'
+import { fetchPlanById } from '@/api/mealPlan.js'
 import { getToken } from '@/api/http.js'
 import { normalizeArtifact } from '@/utils/schema.js'
 import { groupOf, uid } from '@/utils/format.js'
@@ -12,6 +13,7 @@ import { usePanelStore } from './panel.js'
  * localStorage 只留 token 与 UI 偏好，不再存业务数据。
  * 结构化块（餐卡/清单/报告）随 assistant 消息以「快照」落 app.message.structured_output，
  * 历史回看时前端用 normalizeArtifact 原样还原（方案 A）；current_plan/quick_actions 瞬时块不落。
+ * 其中餐卡回看时会被 refreshHistoryPlanCards 升级为「当前库态」（快照留作可溯源对比）。
  */
 
 /** 后端会话摘要 → 前端 session 对象 */
@@ -77,6 +79,60 @@ function replaceMealCardInPlace(session, block, excludeMsg = null) {
   return false
 }
 
+function todayIso() {
+  const d = new Date()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+/**
+ * 历史会话回看时升级餐卡：
+ * - 覆盖今天或未来且未被取代的方案 → 视为「活的」，渲染当前库态且可换一换/确认；
+ * - 纯过去 / 已取代的方案 → 保留冻结快照（只读「历史快照」）。
+ * 方案已删除 / 拉取失败时保留原快照原样，不阻断回看。
+ */
+async function refreshHistoryPlanCards(messages) {
+  const keys = new Set()
+  for (const m of messages) {
+    for (const b of m.blocks || []) {
+      if (b && b.type === 'meal_card' && b.raw_id) keys.add(String(b.raw_id))
+    }
+  }
+  if (!keys.size) return
+
+  const today = todayIso()
+  const liveByKey = new Map()
+  await Promise.all(
+    [...keys].map(async (k) => {
+      let raw = null
+      try {
+        raw = await fetchPlanById(k)
+      } catch (e) {
+        raw = null
+      }
+      if (!raw) {
+        liveByKey.set(k, null)
+        return
+      }
+      const live = normalizeArtifact('meal_card', raw)
+      const active = !!(live.end_date && live.end_date >= today) && live.status !== 'superseded'
+      liveByKey.set(k, active ? live : null)
+    })
+  )
+
+  for (const m of messages) {
+    const blocks = m.blocks || []
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]
+      if (!b || b.type !== 'meal_card' || !b.raw_id) continue
+      const live = liveByKey.get(String(b.raw_id))
+      if (!live) continue
+      blocks.splice(i, 1, { ...live, readonly: false, __key: live.__key })
+    }
+  }
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref([])
   const activeId = ref('')
@@ -132,6 +188,8 @@ export const useChatStore = defineStore('chat', () => {
         const { items } = await listMessages(session.conversationId, { pageSize: 200 })
         session.messages = items.map(toMessage)
         session._hydrated = true
+        // 文本先渲染，餐卡异步升级为「当前库态」（方案已删/拉取失败则保留快照原样）
+        await refreshHistoryPlanCards(session.messages)
       } catch (e) {
         /* 历史消息加载失败不打断使用，下次切回可重试 */
       } finally {
