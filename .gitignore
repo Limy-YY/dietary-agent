@@ -37,3 +37,11 @@ Desktop.ini
 # ---- 本地测试产物 ----
 frontend/vite.config.js.timestamp-*.mjs
 frontend/docs/screenshots/99-failure.png
+
+# ---- 本地调试/基准脚本（不入库）----
+_timeit.py
+backend/tests/bench_*.py
+backend/tests/demo_plan.py
+backend/tests/fp_check.py
+backend/tests/profile_engine_phases.py
+backend/tests/_demo_output.txt
