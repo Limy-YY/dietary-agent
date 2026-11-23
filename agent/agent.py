@@ -15,7 +15,6 @@ from datetime import date, timedelta
 import backend_client as bc
 import blocks
 import config
-import rule_engine_bridge as reb
 import local_edits as le
 import regenerate_flow as rf
 import conversation_state as cs
@@ -162,6 +161,12 @@ def _is_custom_span(m: str) -> bool:
 
 
 def _regex_intent(message: str) -> dict | None:
+    """正则快路径：只认 canonical 话术（换/选/确认/固定/取消 + 明确范围词），其余交 LLM。
+
+    收敛原则（P0）：正则当「高精度」分类器，不当「高召回」分类器——语义灰区一律返回 None 交 LLM。
+    灰区例子（必须 None）：「推荐补钙食物」「贫血吃什么」「高血压食谱」「这周清淡点」「出差三天」。
+    新增意图只加「明确动作词 / 明确范围词」，别加泛化词、别叠负向补丁。
+    """
     m = message.strip()
     has = lambda pat: re.search(pat, m) is not None  # noqa: E731
 
@@ -171,11 +176,11 @@ def _regex_intent(message: str) -> dict | None:
         "晚餐": "晚餐", "晚饭": "晚餐", "晚上": "晚餐",
     }
 
+    # ── 卡片按钮话术（换 / 选 / 确认·固定 / 取消）──
     if has(r"换一换|换一餐|换个候选|换个方案"):
-
         label = next((v for k, v in meal_alias.items() if k in m), None)
-        # 只有明确指定了餐次、且不带“来点新鲜的/局部替换”意图时，才走快捷切候选；否则交给 LLM 结合上下文判断
-        if label and not has(r"新鲜|重生成|重新|替换|换成|不想吃|不要"):
+        # 只有「换一换 + 明确餐次」且不带局部替换/调整意图才走快捷；否则交 LLM 结合上下文
+        if label and not has(r"换成|不要|不想吃|新鲜|重生成|重新|替换"):
             return {"intent": "swap_candidate", "meal_type": label}
         return None
     if has(r"选用|就用|选这个|选方案"):
@@ -190,6 +195,8 @@ def _regex_intent(message: str) -> dict | None:
         return {"intent": "confirm", "replace": bool(re.fullmatch(r"(?:替换|覆盖|取代)[。！!\s]*", m))}
     if has(r"取消|算了|不用了|先不用"):
         return {"intent": "cancel"}
+
+    # ── 结构化卡片动作（明确动作词）──
     if has(r"报告|复盘|回顾|总结|吃得(怎么样|如何|怎样|好不好)|饮食(情况|状况|回顾|复盘|怎么样)"):
         rng = _parse_date_range(m)
         if rng:
@@ -213,14 +220,15 @@ def _regex_intent(message: str) -> dict | None:
     # 解释「为什么这样搭」：只认明确追问依据的话术，避免「怎么搭配饮食」这类营养咨询被误判成解释
     if has(r"为什么.*(这样|这么|如此).*(搭|配)|搭配(理由|依据)|配餐(理由|依据)"):
         return {"intent": "explain"}
-    # 自定义范围（N 天 / 日期区间 / 周末 / 下周 / 指定餐次子集）交给 LLM 抽参数，正则不抢先
+
+    # ── 明确范围词 → 配餐粒度（canonical 范围词；自定义/模糊范围先 defer）──
     if _is_custom_span(m):
         return None
     if has(r"一周|七天|7天|整周|一周食谱"):
         return {"intent": "plan_week"}
-    # 配餐类意图必须带「生成/排/推荐菜单」这类明确动作，不能只靠「推荐/吃什么/食谱/搭配」几个词，
-    # 否则「推荐补钙食物」「贫血吃什么」「高血压食谱」这类营养咨询会被误判成配餐、跳出方案。
-    if has(r"推荐(一餐|午餐|晚餐|早餐)|来一餐|(午餐|晚餐|早餐)(吃什么|怎么配|推荐)"):
+    # 配餐意图必须带「推荐/来」这类明确动作 + 餐次目标，不能只靠「吃什么/怎么配」这类词，
+    # 否则「推荐补钙食物」「贫血吃什么」会被误判成配餐、跳出方案。
+    if has(r"推荐(一餐|午餐|晚餐|早餐)|来一餐"):
         label = next((l for l in ("早餐", "午餐", "晚餐") if l in m), "午餐")
         return {"intent": "plan_meal", "meal_type": label}
     if has(r"三餐|一日三餐|今天吃|明天吃|生成(食谱|菜单|三餐)|排(食谱|菜单|三餐)"):
@@ -317,12 +325,6 @@ def _load_profile(user_id: str) -> dict | None:
 
 
 # ---------------------------------------------------------------- 方案动作
-
-def _gen(user_id: str, params: dict, profile: dict, state: dict) -> dict:
-    plan = reb.generate_plan_dict(user_id, profile, params)
-    le.remember(state, plan)
-    return plan
-
 
 # 餐次口径归一：中文全称 / 英文 / 单字 → 统一单字（早/午/晚）。
 # 用于把「更换早餐候选」里的「早餐」与后端 slot.meal_type 的「早」对上。
@@ -518,6 +520,33 @@ def _plan_brief(plan: dict, limit: int = 6) -> str:
     return "\n".join(lines)
 
 
+def _plan_label_line(plan: dict) -> str:
+    """方案定位行：带显示序号与日期/餐数（供叙事引用「方案 N」）。"""
+    idx = plan.get("display_index")
+    if idx:
+        return rf.plan_label(plan, idx)
+    slots = list(_iter_slots(plan))
+    return f"已生成方案（{len(slots)} 餐）"
+
+
+def _plan_coverage_feedback(plan: dict) -> str:
+    """从方案抽取「覆盖度反馈」（reference_hints / data_quality_notes / why_summary），喂给审查闭环。
+
+    只读后端已给的字段，不自行计算；覆盖度反馈是 §3.4 审查闭环的输入。
+    """
+    parts: list[str] = []
+    why = plan.get("why_summary")
+    hints = plan.get("reference_hints") or []
+    notes = plan.get("data_quality_notes") or []
+    if why:
+        parts.append(f"搭配依据：{why}")
+    if hints:
+        parts.append("覆盖度提示：" + "；".join(str(h) for h in hints))
+    if notes:
+        parts.append("数据质量提示：" + "；".join(str(n) for n in notes))
+    return "\n".join(parts)
+
+
 def _norm_date(s: str) -> str | None:
     """把 LLM 可能返回的日期串统一成 ISO（YYYY-MM-DD / YYYY年M月D日 / YYYY/M/D），失败返回 None。"""
     s = str(s).strip().replace("/", "-")
@@ -676,6 +705,239 @@ def _extract_preferences(message: str) -> dict:
             if k not in soft_avoid:
                 soft_avoid.append(k)
     return {"exclude": exclude, "soft_avoid": soft_avoid}
+
+
+# ================================================================ 规划意图（§3.3 富意图）
+
+_PLAN_INTENT_SYSTEM = (
+    "你是「膳宝」的配餐需求理解器。把用户的配餐诉求解析成结构化意图 JSON，只返回 JSON，不要多余文字。\n"
+    "字段：\n"
+    '  scope: {"start_date":"YYYY-MM-DD|null","end_date":"...","meal_types":["早","午","晚"]}；日期抽不出留 null，绝不能编造。\n'
+    '  goal: 用户临时目标覆盖（maintain/fat_loss/muscle_gain/glucose_control/digestive_health），未提留 null。\n'
+    '  hard_constraints: {"exclude_ingredients":[]} 硬排除食材（过敏/疾病忌口/「不要X」）。\n'
+    '  soft_preferences: {"theme":"清淡中式","soft_avoid":["油炸"],"priority":["控糖 > 少油"]}。\n'
+    '  day_overrides: [{"date":"YYYY-MM-DD","meal_types":["晚"],"hint":"晚餐从简（有应酬）"}] 单日特例。\n'
+    '  user_explicits: {"want":["清蒸鱼"],"avoid":["香菜"]}。\n'
+    '  needs_clarification: true/false；需求含糊或缺必要信息时 true，并给 clarify_question。\n'
+    "规则：只做理解，不计算数值、不生成菜名；「不要/忌X」进 hard_constraints.exclude_ingredients 或 user_explicits.avoid；"
+    "「清淡/少油/低盐」进 soft_preferences；「某天某餐」特例（如周三晚有应酬）进 day_overrides；"
+    "「今天」=今天、「明天」=明天、「三天/接下来三天」=今天起连续 3 天、「下周」=下周一到周日。"
+)
+
+
+def _fallback_plan_intent(message: str) -> dict:
+    """无 LLM / 解析失败时的确定性富意图兜底：scope 从消息抽，硬/软偏好走确定性抽取。"""
+    scope: dict = {}
+    explicit = tr.generation_scope(message)
+    if explicit:
+        scope["start_date"], scope["end_date"] = explicit
+    meals: list[str] = []
+    for zh, en in (("早餐", "早"), ("午餐", "午"), ("晚餐", "晚")):
+        if zh in message or en in message:
+            meals.append(en)
+    if "三餐" in message or not meals:
+        meals = ["早", "午", "晚"]
+    scope["meal_types"] = list(dict.fromkeys(meals))
+    pref = _extract_preferences(message)
+    return {
+        "scope": scope,
+        "goal": None,
+        "hard_constraints": {"exclude_ingredients": pref["exclude"]},
+        "soft_preferences": {"soft_avoid": pref["soft_avoid"]},
+        "day_overrides": [],
+        "user_explicits": {},
+        "needs_clarification": False,
+    }
+
+
+def _extract_plan_intent(message: str, profile: dict, history: list | None) -> dict:
+    """LLM 产出规划意图 JSON（§3.3 富意图）。无 LLM / 出错回退确定性兜底。"""
+    client = _llm()
+    if client is None:
+        return _fallback_plan_intent(message)
+    system = _PLAN_INTENT_SYSTEM + f"\n今天是 {date.today().isoformat()}。\n用户档案：{_profile_brief(profile)}"
+    messages: list[dict] = [{"role": "system", "content": system}]
+    for h in history or []:
+        role, content = h.get("role"), h.get("content")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)})
+    messages.append({"role": "user", "content": message})
+    try:
+        resp = client.chat.completions.create(
+            model=config.DEEPSEEK_MODEL,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        raw = resp.choices[0].message.content
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return _fallback_plan_intent(message)
+        return data
+    except Exception:
+        return _fallback_plan_intent(message)
+
+
+def _default_scope(kind: str | None) -> tuple[str, str]:
+    """富意图没抽到日期时，用 classify 的 kind 兜底范围（plan_week=7 天，其余=今天单日）。"""
+    today = date.today()
+    if kind == "plan_week":
+        return today.isoformat(), (today + timedelta(days=6)).isoformat()
+    return today.isoformat(), today.isoformat()
+
+
+def _map_plan_intent(rich: dict, message: str, kind: str | None = None) -> dict:
+    """富意图 → 引擎参数（后端 GenerateRequest 当前支持的字段）。
+
+    theme/priority/day_overrides 后端暂不支持、不强塞，仅映射 exclude/soft_avoid/日期餐次，
+    其余富字段原样保留在返回里供审查闭环引用。日期抽不到时回退 kind 兜底范围。
+    """
+    today_iso = date.today().isoformat()
+    mt_map = {"早": "breakfast", "午": "lunch", "晚": "dinner",
+              "早餐": "breakfast", "午餐": "lunch", "晚餐": "dinner"}
+    all_meals = ["breakfast", "lunch", "dinner"]
+
+    scope = rich.get("scope") or {}
+    start = _norm_date(scope.get("start_date") or "")
+    end = _norm_date(scope.get("end_date") or "")
+    if not start:
+        start, end = _default_scope(kind)
+    elif not end:
+        end = start
+    if end < start:
+        start, end = end, start
+    meals = [mt_map.get(str(x), x) for x in (scope.get("meal_types") or [])]
+    meals = [x for x in meals if x in all_meals] or all_meals
+
+    # 硬排除：hard_constraints.exclude_ingredients + user_explicits.avoid + 确定性「不要X」
+    exclude = list((rich.get("hard_constraints") or {}).get("exclude_ingredients") or [])
+    avoid = (rich.get("user_explicits") or {}).get("avoid") or []
+    exclude += [x for x in avoid if x not in exclude]
+    pref = _extract_preferences(message)
+    exclude += [x for x in pref["exclude"] if x not in exclude]
+
+    # 软偏好：soft_preferences.soft_avoid + theme 映射（清淡/少油 → 高油做法关键词）+ 确定性抽取
+    soft = list((rich.get("soft_preferences") or {}).get("soft_avoid") or [])
+    theme = str((rich.get("soft_preferences") or {}).get("theme") or "")
+    if re.search(r"清淡|少油|低油", theme):
+        for k in _PREF_SOFT_AVOID:
+            if k not in soft:
+                soft.append(k)
+    soft += [x for x in pref["soft_avoid"] if x not in soft]
+
+    return {
+        "start_date": start,
+        "end_date": end,
+        "meal_types": meals,
+        "exclude_ingredients": exclude,
+        "soft_avoid": soft,
+        # 富字段（后端暂不收，供审查闭环引用）
+        "goal": rich.get("goal"),
+        "theme": theme,
+        "priority": (rich.get("soft_preferences") or {}).get("priority") or [],
+        "day_overrides": rich.get("day_overrides") or [],
+        "user_explicits": rich.get("user_explicits") or {},
+    }
+
+
+def _slim_intent(rich: dict) -> dict:
+    """审查闭环用：只留「用户自己的约束」这类决策相关富字段，不 dump 内部 null。"""
+    out: dict = {}
+    for k in ("theme", "priority"):
+        v = (rich.get("soft_preferences") or {}).get(k)
+        if v:
+            out[k] = v
+    if rich.get("day_overrides"):
+        out["day_overrides"] = rich["day_overrides"]
+    if rich.get("user_explicits"):
+        out["user_explicits"] = rich["user_explicits"]
+    return out
+
+
+def _wants_extra_tool(message: str) -> bool:
+    """配餐消息里是否同时要清单/报告等额外动作（「排三天午餐顺便列清单」）。
+    命中则交 _agent_loop 走多工具循环，不在快路径/富路径里丢掉附加动作。"""
+    return bool(re.search(r"清单|买菜|采购|报告|复盘|食材", message))
+
+
+# ================================================================ 配餐执行（C 快路径 + 富意图 + 审查闭环）
+
+def _fast_generate(user_id, profile, message, kind, intent, history, on_status, st, context):
+    """C 跳 LLM：canonical 范围词直连生成 + 一次叙事，跳过 _agent_loop 的 LLM 工具循环。
+
+    仅当正则确定性命中 plan_day/week/meal 且已有档案时调用；软偏好用确定性 _extract_preferences 兜底。
+    """
+    gp = _resolve_gen_params(kind, intent)
+    pref = _extract_preferences(message)
+    if on_status:
+        on_status("正在生成配餐方案")
+    try:
+        plan = bc.generate_meal_plan(
+            user_id=user_id, start_date=gp["start_date"], end_date=gp["end_date"],
+            meal_types=gp["meal_types"],
+            exclude_ingredients=pref["exclude"] or None,
+            soft_avoid=pref["soft_avoid"] or None,
+        )
+    except Exception as e:
+        return {"text": f"方案没排出来：{e}", "blocks": []}
+    st.pop(rf.KEY, None)
+    le.remember(st, plan)
+    fallback = _plan_label_line(plan)
+    narration = _narrate(message, _plan_label_line(plan) + "\n" + _plan_brief(plan), fallback, history)
+    return {"narration": narration, "blocks": [blocks.meal_card_block(plan)]}
+
+
+_REVIEW_SYSTEM = (
+    _NARRATE_SYSTEM
+    + "\n你要对刚生成的方案做一次审查再回复：\n"
+    "- 只能引用下方「方案数据」里的数值与提示，不得自行计算或编造；\n"
+    "- 先一句话给结论（这餐/这周怎么搭、热量量级），再自然点出关键信息并引导下一步；\n"
+    "- 有数据质量提示（data_quality_notes）或覆盖度提示（reference_hints）时，"
+      "用用户能懂的话转述（如「你上周蔬菜偏低，这周多加了绿叶菜」），不要念原始字段名；\n"
+    "- 用户提过的偏好（清淡/少油/不要X/单日特例）要体现进解释，引用用户自己的约束；\n"
+    "- 若存在无法满足的硬约束（过敏/疾病/宗教忌口），明确说出来并建议调整，不得装作已满足。"
+)
+
+
+def _review_plan(message: str, rich: dict, plan: dict, history: list | None) -> dict:
+    """审查闭环（§3.4）：把完整覆盖度反馈 + 用户约束喂给 LLM 做一次审查，产出个性化正文（真流式）。"""
+    slim = _slim_intent(rich)
+    context = _plan_label_line(plan) + "\n" + _plan_brief(plan) + "\n" + _plan_coverage_feedback(plan)
+    fallback = _plan_label_line(plan)
+    prompt = (
+        f"用户消息：{message}\n\n"
+        + (f"用户约束：{json.dumps(slim, ensure_ascii=False)}\n\n" if slim else "")
+        + f"方案数据：\n{context}"
+    )
+    return _llm_reply(_REVIEW_SYSTEM, prompt, fallback, history, temperature=0.6)
+
+
+def _rich_generate(user_id, profile, message, kind, intent, history, on_status, st, context):
+    """富意图配餐：LLM 出规划意图 → 映射引擎参数生成 → 审查覆盖度反馈出正文（§3.4）。"""
+    if on_status:
+        on_status("正在理解你的配餐需求")
+    rich = _extract_plan_intent(message, profile, history)
+    if rich.get("needs_clarification"):
+        q = str(rich.get("clarify_question") or "").strip() or "能再说具体一点吗？"
+        return {"text": q, "blocks": []}
+    params = _map_plan_intent(rich, message, kind)
+    if on_status:
+        on_status("正在生成配餐方案")
+    try:
+        plan = bc.generate_meal_plan(
+            user_id=user_id, start_date=params["start_date"], end_date=params["end_date"],
+            meal_types=params["meal_types"],
+            exclude_ingredients=params["exclude_ingredients"] or None,
+            soft_avoid=params["soft_avoid"] or None,
+        )
+    except Exception as e:
+        return {"text": f"方案没排出来：{e}", "blocks": []}
+    st.pop(rf.KEY, None)
+    le.remember(st, plan)
+    if on_status:
+        on_status("正在审查方案")
+    return {"narration": _review_plan(message, rich, plan, history),
+            "blocks": [blocks.meal_card_block(plan)]}
 
 
 def _pick_swap_candidate(slot: dict, prefer: str) -> str | None:
@@ -962,6 +1224,25 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
     return {"text": fallback_text or "这个我暂时答不好。可以让我排今天的三餐、换候选、或生成膳食报告。", "blocks": []}
 
 
+def _run_plan(user_id, profile, message, kind, intent, history, on_status, st, context):
+    """配餐统一入口：canonical 范围词走快路径（C），其余走富意图 + 审查闭环（§3.3/3.4）。
+
+    多工具请求（「排三天午餐顺便列清单」）仍交 _agent_loop 走工具循环，避免丢掉附加动作。
+    """
+    if _wants_extra_tool(message):
+        return _agent_loop(user_id, profile, message, history, on_status, st, context)
+    if _llm() is None:
+        return _no_llm_fallback(user_id, profile, message, st)
+    if profile is None:
+        return _agent_loop(user_id, profile, message, history, on_status, st, context)
+    # C 跳 LLM：正则确定性命中标准配餐（plan_day/week/meal）→ 直连生成 + 一次叙事
+    reg = _regex_intent(message)
+    if reg is not None and reg.get("intent") == kind:
+        return _fast_generate(user_id, profile, message, kind, intent, history, on_status, st, context)
+    # 富意图 + 审查闭环
+    return _rich_generate(user_id, profile, message, kind, intent, history, on_status, st, context)
+
+
 def _run(user_id: str, message: str, history: list | None = None, on_status=None,
          *, state: dict, context: dict | None = None) -> dict:
     """执行一条用户消息，返回 {text|narration, blocks, ...}。
@@ -1006,10 +1287,12 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
     _st("正在读取档案")
     profile = _load_profile(user_id)
 
-    # ③ tool-calling 编排：配餐/调整/清单/闲聊/复合请求交给 LLM 工具循环；
-    # 换/选/确认/取消等按钮短语 + 报告/问答/解释仍走下方既有分支。
-    if kind in ("plan_day", "plan_week", "plan_meal", "plan_custom", "shopping_list", "chat"):
-        return _agent_loop(user_id, profile, message, history, on_status,st,context)
+    # ③ tool-calling 编排：配餐走 _run_plan（快路径 / 富意图 + 审查闭环）；
+    # 清单 / 闲聊 / 复合请求仍走 _agent_loop 工具循环；换/选/确认/取消等按钮短语 + 报告/问答/解释走下方既有分支。
+    if kind in ("plan_day", "plan_week", "plan_meal", "plan_custom"):
+        return _run_plan(user_id, profile, message, kind, intent, history, on_status, st, context)
+    if kind in ("shopping_list", "chat"):
+        return _agent_loop(user_id, profile, message, history, on_status, st, context)
 
     # 建档：用户描述自身指标
     if kind == "profile_build":

@@ -41,7 +41,7 @@ def _slot_view(slot: dict) -> dict:
     ]
 
     # 后端 _serialize_slot 直接给 selected_candidate（含 macro_estimate / oil_salt_estimate / dishes）；
-    # 老格式（rule_engine_bridge 的 slot 只有 candidates）回退到第一个候选。
+    # 老格式（只有 candidates、无 selected_candidate）回退到第一个候选。
     picked = slot.get("selected_candidate") or (candidates[0] if candidates else None)
     picked_dishes = picked.get("dishes", []) if picked else slot.get("dishes", [])
     picked_oil = (picked.get("oil_salt_estimate") or {}) if picked else {}

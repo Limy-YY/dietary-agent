@@ -16,7 +16,7 @@ class ConversationTests(unittest.TestCase):
         with cs.locked('u','B') as b:b[rf.KEY]={'meal':'早'}
         with patch.object(agent,'classify',return_value={'intent':'plan_custom'}), \
              patch.object(agent,'_load_profile',return_value={'user_id':'u'}), \
-             patch.object(agent,'_agent_loop',return_value={'text':'generated','blocks':[]}) as loop:
+             patch.object(agent,'_run_plan',return_value={'text':'generated','blocks':[]}) as loop:
             result=agent.run('u','帮我安排11月20日至22日三餐',conversation_id='A')
         self.assertEqual(result['text'],'generated');self.assertEqual(loop.call_count,1)
         with cs.locked('u','A') as a:self.assertNotIn(rf.KEY,a)

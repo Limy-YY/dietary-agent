@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """后端 REST 封装：统一解包 {code, message, data}。
 
-Agent 的「非生成」工具（档案 / 食材 / 菜式 / 核算 / RAG / 反向营养 / 疾病规则 / 周报）
-都走后端 HTTP；「生成方案」走 rule_engine（见 rule_engine_bridge.py，进程内直调）。
+Agent 的全部业务工具（档案 / 食材 / 菜式 / 核算 / RAG / 反向营养 / 疾病规则 / 周报 / 生成方案）
+一律走后端 HTTP。规则引擎只跑在后端：Agent 不进程内直调、不直连库，所有写库动作（生成/换候选/调整/落库）
+都必须经这里封装的 REST 接口执行。
+
+生成方案的**唯一入口**是 generate_meal_plan()（POST /api/meal-plan/week/generate）——
+不要再引入第二套生成路径（如进程内 import rule_engine）。
 """
 import contextvars
 
@@ -167,10 +171,11 @@ def reverse_nutrition(symptoms: str, top_k: int = 5):
 def generate_meal_plan(user_id: str, start_date: str, end_date: str, meal_types: list,
                        exclude_ingredients: list[str] | None = None,
                        soft_avoid: list[str] | None = None):
-    """调用后端真实接口生成方案并落库。
+    """【唯一生成入口】调用后端真实接口生成方案并落库。
 
     后端 /meal-plan/week/generate 已是「用户自定范围」：直接透传任意 start_date/end_date/meal_types，
     去掉 scope 三档硬编码（后端 GenerateRequest 本就没有 scope 字段，此前被 pydantic 静默忽略）。
+    全库只有这一处生成入口；rule_engine_bridge 已删除，禁止再恢复进程内直调。
     """
     payload = {
         "user_id": user_id,
