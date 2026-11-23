@@ -600,11 +600,36 @@ export function normalizeReport(report) {
 
 /* ---------- artifact 分发 ---------- */
 
+/** 结构化块的稳定唯一 key。
+ *  有 raw_id 的块（餐卡/清单）用 `type:raw_id` 作为稳定身份：换一换/选用/确认都是同一方案的
+ *  就地更新，key 不变 → Vue 不重建组件 → 不重放 card-fade-in 淡入（避免每次换菜闪一下）。
+ *  残留 ref 的清理由 MealCardBlock 的 watch 显式复位（原 BUG-045 靠「内容变化换 key 重建」实现，
+ *  会连带重放淡入动画，故改为稳定 key + 显式复位）。
+ */
+function _hashStr(s) {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
+  return String(h >>> 0)
+}
+
+function _blockKey(block) {
+  if (block && block.raw_id) return `${block.type}:${block.raw_id}`
+  // 无 raw_id 的瞬时块（quick_actions / unknown / report）：内容指纹兜底保证稳定唯一。
+  let content = ''
+  try {
+    content = JSON.stringify(block)
+  } catch (e) {
+    content = String(block && block.type) || ''
+  }
+  return `${block.type}:${_hashStr(content)}`
+}
+
 export function normalizeArtifact(type, payload) {
-  if (type === 'meal_card') return normalizeMealCard(payload)
-  if (type === 'current_plan') return normalizeCurrentPlan(payload)
-  if (type === 'shopping_list') {
-    return {
+  let block
+  if (type === 'meal_card') block = normalizeMealCard(payload)
+  else if (type === 'current_plan') block = normalizeCurrentPlan(payload)
+  else if (type === 'shopping_list') {
+    block = {
       type: 'shopping_list',
       raw_id: str(pick(payload, 'shopping_list_id'), ''),
       meal_plan_id: str(pick(payload, 'meal_plan_id'), ''),
@@ -612,15 +637,17 @@ export function normalizeArtifact(type, payload) {
       generated_at: str(pick(payload, 'generated_at'), ''),
       groups: normalizeGroups(pick(payload, 'groups'))
     }
-  }
-  if (type === 'nutrition_report') return { type: 'nutrition_report', ...normalizeReport(payload) }
-  if (type === 'quick_actions') {
-    return {
+  } else if (type === 'nutrition_report') block = { type: 'nutrition_report', ...normalizeReport(payload) }
+  else if (type === 'quick_actions') {
+    block = {
       type: 'quick_actions',
       actions: Array.isArray(payload.actions)
         ? payload.actions.map((a) => ({ label: str(pick(a, 'label'), ''), phrase: str(pick(a, 'phrase'), '') }))
         : []
     }
+  } else {
+    block = { type: 'unknown', raw_type: str(type, ''), payload }
   }
-  return { type: 'unknown', raw_type: str(type, ''), payload }
+  if (block && typeof block === 'object') block.__key = _blockKey(block)
+  return block
 }

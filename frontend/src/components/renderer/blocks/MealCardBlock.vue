@@ -95,31 +95,23 @@
     </div>
 
     <div class="card-foot">
-      <button class="card-foot-left" @click="onReason">💡 为什么这样搭？</button>
+      <button
+        class="card-foot-left"
+        :disabled="readonly || chat.sending"
+        :title="readonly ? '历史快照，请到当前规划查看搭配依据' : '让膳宝解释为什么这样搭'"
+        @click="onReason"
+      >💡 为什么这样搭？</button>
       <div class="action-col">
         <button class="fix-btn" :disabled="readonly || isFixed || confirming || chat.sending" @click="onConfirm">
           {{ isFixed ? '已确认' : confirming ? '确认中…' : '确认方案' }}
         </button>
       </div>
     </div>
-
-    <el-dialog v-model="reasonOpen" title="这套方案是怎么搭出来的" width="560px" append-to-body>
-      <p v-if="reasonSummary" style="font-size: 13.5px; color: var(--text-sub); margin-bottom: 12px">
-        {{ reasonSummary }}
-      </p>
-      <div class="rp-insights" style="margin-top: 0">
-        <h5>营养结构</h5>
-        <ul>
-          <li v-for="(p, i) in reasonPoints" :key="i">{{ p }}</li>
-        </ul>
-      </div>
-      <div class="modal-note">份量按身高体重估算，只作参考；身体有特殊情况请先问医生。</div>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { MEAL_LABELS, PHRASE } from '@/constants/actions.js'
 import { arr, fmtKcal } from '@/utils/schema.js'
 import { useUi } from '@/composables/useUi.js'
@@ -129,7 +121,6 @@ const props = defineProps({ block: { type: Object, required: true } })
 const ui = useUi()
 const chat = useChatStore()
 
-const reasonOpen = ref(false)
 // 默认展开「今天」；方案内没有今天时展开第一天。支持同时展开多天。
 const openDays = ref(defaultOpenDays())
 
@@ -207,16 +198,15 @@ const statusText = computed(() =>
 )
 const statusClass = computed(() => (readonly.value ? 'readonly' : isFixed.value ? 'fixed' : 'draft'))
 
-const reasonSummary = computed(() => {
-  const r = props.block.reason
-  if (typeof r === 'string') return r
-  return (r && r.summary) || ''
-})
-const reasonPoints = computed(() => {
-  const hints = arr(props.block.reference_hints)
-  const notes = arr(props.block.data_quality_notes)
-  return [...hints, ...notes]
-})
+// 就地更新（换一换/选用/确认）不再重建组件（__key 已改为稳定身份），这里显式复位局部状态，
+// 清掉选中候选高亮 / 展开天数等残留（原 BUG-045 靠「换 key 重建」实现，改为 watch 复位，避免重放淡入动画）。
+watch(
+  () => props.block,
+  () => {
+    pickedId.value = ''
+    openDays.value = defaultOpenDays()
+  }
+)
 
 function isSwapping(slot) {
   return !!swapping.value && swapping.value === slot.slot_id
@@ -280,8 +270,7 @@ async function onConfirm() {
 }
 
 function onReason() {
-  if (reasonPoints.value.length) reasonOpen.value = true
-  else chat.send(PHRASE.reason, actionContext('explain'))
+  chat.send(PHRASE.reason, actionContext('explain'))
 }
 
 function openSlotRecipe(slot) {
