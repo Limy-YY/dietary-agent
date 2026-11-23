@@ -7,6 +7,8 @@
 > **2026-11-17 实机验证**：本地全栈（后端 8000 / Agent 8001 / 前端 5173，DeepSeek 接通）端到端跑通「建档→生成→换候选→确认→清单→当前规划→报告」，并补测周方案跨日差异化 / 解释 / 周报告 / RAG / 重复固定冲突。BUG-001~028 均已闭环（BUG-027 于 11-19 修复并 LIVE 验收关闭，详见下方该条）。
 >
 > **2026-11-17 营养咨询复核**：补测「反向营养/症状咨询 + RAG 知识问答」链路，新增 BUG-026（症状咨询检索为空仍追加「由文献库提供参考」假出处）、BUG-027（RRF 混合检索丢 source/source_id）。
+>
+> **2026-11-23 代码审查修复**：BUG-031/033/034/036/037/038/039/040/042/045/046/047/048/050 已修复；BUG-002 正解已落（`user_id` 改可选）；BUG-049 SQL 已含 DELETE 且运行库已 GRANT（闭环）。BUG-035（已确诊疾病硬过滤）数据侧规则多为 pattern_preference/review_gate、无量化的疾病→食材排除映射，待数据/PM 定口径后再接线，暂未修。
 
 ---
 
@@ -15,7 +17,7 @@
 | # | 标题 | 层面 | 状态 |
 |---|---|---|---|
 | BUG-001 | 浏览器跨域被 CORS 拦截 | 前端 | 已闭环 |
-| BUG-002 | `/api/agent/chat` 请求体缺 `user_id` 报 400 | 后端 schema | 前端兜底已修；正解待后端 |
+| BUG-002 | `/api/agent/chat` 请求体缺 `user_id` 报 400 | 后端 schema | 已闭环（user_id 改可选） |
 | BUG-003 | `conversation_id` 字符串导致 int 校验失败 | Mock/真后端契约 | 前端兜底已修；正解待 Mock 对齐 |
 | BUG-004 | `meal_card` 的 `total_kcal` / 候选 `kcal` 恒为 0 | 后端/Agent 契约 | 已闭环 |
 | BUG-005 | 餐卡菜名全部显示「未命名菜品」 | 后端序列化 | 已闭环 |
@@ -44,26 +46,26 @@
 | BUG-028 | 过敏原「海鲜」「麸质」勾选后不拦截对应菜品（词表映射缺口） | 规则引擎硬过滤（后端） | 已闭环 |
 | BUG-029 | 停止生成后消息上方残留「正在生成配餐方案」状态 | 前端 | 已修 |
 | BUG-030 | 确认方案遇同期固定方案冲突只弹裸警告、无「替换/取消」 | Agent/前端 | 已修 |
-| BUG-031 | 早/晚能量占比 25/35 与规范 30/30 不符 | 规则引擎 | 未修 |
+| BUG-031 | 早/晚能量占比 25/35 与规范 30/30 不符 | 规则引擎 | 已修（2026-11-23） |
 | BUG-032 | 缺钠(null)被当硬排除，候选被静默丢弃（违反 null≠0） | 规则引擎 | 已修（2026-11-21） |
-| BUG-033 | 跨日微量平衡查错时间窗口（查自身未来日期） | 规则引擎 | 未修 |
-| BUG-034 | 清真/伊斯兰忌口漏排除猪肉「里脊/肉片/肉末」菜 | 规则引擎 | 未修 |
-| BUG-035 | 已确诊疾病(confirmed_conditions)未参与候选硬过滤 | 规则引擎 | 未修 |
-| BUG-036 | 对话建档几乎必然 422 静默失败，宗教忌口/厨具从不落库 | Agent | 未修 |
-| BUG-037 | local_edit_only 误拦截「整份重新生成」请求 | Agent | 未修 |
-| BUG-038 | 报告自定义日期区间字段名不匹配(start/end vs period) | Agent | 未修 |
-| BUG-039 | 单菜替换硬编码 allow_approximate=True，未经同意落库近似结果 | Agent | 未修 |
-| BUG-040 | swap_candidate 多日方案无法定位餐位（缺日期参数） | Agent | 未修 |
+| BUG-033 | 跨日微量平衡查错时间窗口（查自身未来日期） | 规则引擎 | 已修（2026-11-23） |
+| BUG-034 | 清真/伊斯兰忌口漏排除猪肉「里脊/肉片/肉末」菜 | 规则引擎 | 已修（2026-11-23） |
+| BUG-035 | 已确诊疾病(confirmed_conditions)未参与候选硬过滤 | 规则引擎 | 部分已修（痛风 L0 已落地，其余待口径） |
+| BUG-036 | 对话建档几乎必然 422 静默失败，宗教忌口/厨具从不落库 | Agent | 已修（2026-11-23） |
+| BUG-037 | local_edit_only 误拦截「整份重新生成」请求 | Agent | 已修（2026-11-23） |
+| BUG-038 | 报告自定义日期区间字段名不匹配(start/end vs period) | Agent | 已修（2026-11-23） |
+| BUG-039 | 单菜替换硬编码 allow_approximate=True，未经同意落库近似结果 | Agent | 已修（2026-11-23，默认不再自动授权近似） |
+| BUG-040 | swap_candidate 多日方案无法定位餐位（缺日期参数） | Agent | 已修（2026-11-23） |
 | BUG-041 | Agent 直连 /chat 异常只发 error 不发 done | Agent | 已修（2026-11-21） |
-| BUG-042 | _parse_date_range 跨年日期区间解析错误 | Agent | 未修 |
+| BUG-042 | _parse_date_range 跨年日期区间解析错误 | Agent | 已修（2026-11-23） |
 | BUG-043 | 发送与会话历史懒加载竞态，流式消息整组丢失 | 前端 | 已修（2026-11-21） |
 | BUG-044 | done 事件无条件覆写 error 状态 | 前端 | 已修（2026-11-21） |
-| BUG-045 | 结构化块 __key 从未赋值，就地替换组件实例复用串脏 | 前端 | 未修 |
-| BUG-046 | 「当前规划」面板确认方案未处理 2005 冲突 | 前端 | 未修 |
-| BUG-047 | 食材清单勾选状态跨方案串数据 | 前端 | 未修 |
-| BUG-048 | 档案编辑态可能回显默认值(load 未 await) | 前端 | 未修 |
-| BUG-049 | 应用库账号缺 DELETE 权限，整餐重生成/替换单菜/删会话运行时失败（换一换按钮不受影响） | 数据库权限/后端 | 已修·待部署 |
-| BUG-050 | 规则引擎用「添加盐 5g/日」卡「总钠(含天然钠)」且当单餐硬淘汰，普遍钠超标 | 规则引擎 | 未修 |
+| BUG-045 | 结构化块 __key 从未赋值，就地替换组件实例复用串脏 | 前端 | 已修（2026-11-23） |
+| BUG-046 | 「当前规划」面板确认方案未处理 2005 冲突 | 前端 | 已修（2026-11-23） |
+| BUG-047 | 食材清单勾选状态跨方案串数据 | 前端 | 已修（2026-11-23） |
+| BUG-048 | 档案编辑态可能回显默认值(load 未 await) | 前端 | 已修（2026-11-23） |
+| BUG-049 | 应用库账号缺 DELETE 权限，整餐重生成/替换单菜/删会话运行时失败（换一换按钮不受影响） | 数据库权限/后端 | 已闭环（SQL 已含 DELETE + 运行库已 GRANT） |
+| BUG-050 | 规则引擎用「添加盐 5g/日」卡「总钠(含天然钠)」且当单餐硬淘汰，普遍钠超标 | 规则引擎 | 已修（2026-11-23，总钠降级软扣分） |
 | BUG-051 | 膳食报告钠参考值取 AI=1500mg 当上限，与候选 2000mg 口径冲突 + AI 语义用反 | 后端报告 | 已修（2026-11-21） |
 
 ---
@@ -82,7 +84,7 @@
 - **现象**：`参数校验失败: [{'type':'missing','loc':('body','user_id'),'msg':'Field required'}]`。
 - **层面**：后端 schema。
 - **根因**：[backend/app/schemas/chat.py](github仓库/backend/app/schemas/chat.py) 的 `ChatRequest.user_id` 是**必填**，但身份本应从 token 取（[chat.py](github仓库/backend/app/routers/chat.py) 里已有 `req.user_id = decode_token(token)` 覆盖逻辑）；前端契约从没发过 `user_id`。
-- **状态**：前端兜底已修（发空串过校验）；**正解待后端**改 `user_id: str | None = None`。
+- **状态**：已闭环（2026-11-23，`user_id` 改 `str | None = None`，身份以 token 为准）。
 - **修复**：前端 [agent.js](github仓库/frontend/src/api/agent.js) 补 `user_id: ''`；正解见 `backend/app/schemas/chat.py`。
 
 ## BUG-003 · `conversation_id` 字符串导致 int 校验失败
@@ -375,7 +377,7 @@
 - **现象**：默认三餐方案的早餐能量按日能量 25% 算、晚餐按 35%，而规范口径是「早 30% / 午 40% / 晚 30%」。早餐整体低估、晚餐高估 5 个百分点日能量。
 - **层面**：规则引擎。
 - **根因**：`backend/app/services/rule_engine/models.py:23` 写死 `DEFAULT_MEAL_RATIOS = {"早": 0.25, "午": 0.4, "晚": 0.35}`，与 `backend/app/services/rule_engine/targets.py:6` 的 docstring 及 CLAUDE.md §5「早 30%/午 40%/晚 30%」矛盾；`targets.py` 用该 ratio 推导各餐 kcal/蛋白/脂肪/碳水/油盐上限。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：改为 `{"早": 0.30, "午": 0.40, "晚": 0.30}`；确认 `targets.py` 与 `nutrition.py` 引用的是同一常量，避免再出现「注释一个口径、常量另一个口径」。
 
 ## BUG-032 · 缺钠(null)被当硬排除，候选被静默丢弃（违反 null≠0）
@@ -397,7 +399,7 @@
 - **现象**：生成未来 1~7 天的方案时，`recent_micro_balance` 在新方案自身的（未来）日期上基本没有已固定餐 → 窗口总量≈0 → 7 种关键微量全被误判「不足」，并按 `window_days`（默认 7 天）目标放大缺口，触发无谓「补位」与误导性「低补」提示。
 - **层面**：规则引擎（跨日微量平衡）。
 - **根因**：`backend/app/services/rule_engine/pipeline.py:332-340` 把 `request.start_date / end_date` 直接当回溯窗口查；正确口径见 `backend/app/routers/nutrition.py:653`：`window_start = plan["start_date"] - timedelta(days=window_days - 1)`，即**往前回溯**而非查方案自身区间。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：`pipeline.py` 改按 `start_date - (window_days - 1)` 到 `end_date` 的回溯窗口查询；并核对 `window_days` 默认值与 `compute_balance` 的日目标乘数一致。
 
 ## BUG-034 · 清真/伊斯兰忌口漏排除猪肉「里脊/肉片/肉末」菜
@@ -405,7 +407,7 @@
 - **现象**：宗教忌口含「清真/伊斯兰」的用户，仍会被推荐「彩椒里脊丝」「木耳炒肉片」「肉末豆腐」等以猪肉为原料的菜。
 - **层面**：规则引擎（硬约束过滤）。
 - **根因**：`backend/app/services/rule_engine/models.py:56-61` 的清真/伊斯兰关键词为 `("猪","五花","培根","火腿","香肠","腊肉","排骨","肉肠")`，刻意不含「肉」以免误伤牛羊，但因此漏掉以「里脊/肉片/肉末」命名的猪肉菜；`backend/app/services/rule_engine/candidates.py:109-114` 的 `hard_filter_reasons` 只对 `name_blob`（菜名+食材名）做子串命中，完全不看 DB 侧结构化的 `family` 字段。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：宗教过滤增加结构化兜底——优先用 DB 的 `family`/猪肉标签判断，或对「里脊/肉片/肉末」这类词结合食材成分做更细判定，避免「宁可漏杀猪肉、不可误杀牛羊」的现状反过来漏掉猪肉菜。
 
 ## BUG-035 · 已确诊疾病(confirmed_conditions)未参与候选硬过滤
@@ -413,15 +415,16 @@
 - **现象**：档案 `conditions` 里有已确诊疾病（如糖尿病/痛风，status=confirmed）时，候选生成不受任何影响——疾病这条「硬排除」铁律在确定性层没有落地。
 - **层面**：规则引擎（硬约束）。
 - **根因**：`backend/app/services/rule_engine/targets.py:370/390` 只把 `confirmed_conditions` 写进 `Targets` 与 `condition_note`（文案），`candidates.py:92-135` 的 `hard_filter_reasons` 从未引用它；`repository.py` 也未加载 `v_production_condition_rules`（`routers/conditions.py` 暴露的疾病→营养素/食材规则）。
-- **状态**：未修（2026-11-21 代码审查发现；**可能属 CLAUDE.md P1/P4 已知未实现口径，建议先定口径再修**）。
+- **状态**：部分已修（2026-11-23：**痛风 L0 硬排除已落地**——`repository._DISH_SQL` 聚合 `ingredient.purine_level` 到 `DishFacts`，`candidates.CONDITION_HARD_FILTER` 对「gout + 高嘌呤」硬排除；其余病种仍走软约束/闸门待词表与拍板）。口径提案见 [疾病硬过滤口径提案.md](疾病硬过滤口径提案.md)（2026-11-23）。
 - **修复建议**：确认「疾病规则」是否在本轮范围；若是，接入疾病→营养素/食材排除规则到候选硬过滤。
+- **数据口径提醒（待数据岗复核）**：现库 `purine_level=高` 的食材含 `鸡胸肉`（8 道生成池菜被其驱动排除，占生成池 15/100 道）。鸡胸肉嘌呤约 140mg/100g 属「较高」而非「高」，若数据岗下调为「较高」，痛风 L0 排除会从 15 道降到约 8 道、且不误杀鸡胸肉这类优质蛋白；请数据岗定夺。
 
 ## BUG-036 · 对话建档几乎必然 422 静默失败，宗教忌口/厨具从不落库
 
 - **现象**：无档案用户说「我是男的，想减脂」这类不全信息 → LLM 对缺失字段填 0 → 后端 422 → `except: pass` 静默吞掉 → 用户只得到笼统追问「我还不太了解你的身体情况…」，而非按铁律 7 追问具体缺项；即使用户在对话里说了清真忌口/厨具，也不会入库。
 - **层面**：Agent（对话建档）。
 - **根因**：`agent/agent.py:1015-1038` 的 `_INTENT_SYSTEM` 让 LLM 对未提供字段填 `{"age":0,"height_cm":0,"weight_kg":0}`；`backend/app/schemas/profile.py:13-34` 的 `ProfileUpsertRequest` 要求 `gender(男/女)、age(10~100)、height_cm(120~220)、weight_kg(30~200)、goal_code` 全必填合法，填 0 必 422。同时 `upsert_profile` 从不传 `religious_ethical / cooking_equipment`，且 `_INTENT_SYSTEM` 的 profile 结构里根本没有这两项 → 硬约束信息丢失。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：① 建档缺项走 `needs_clarification` 追问具体缺项（铁律 7），不要静默吞 422；② `_INTENT_SYSTEM` 的 profile 结构补 `religious_ethical / cooking_equipment` 并透传后端；③ 后端 `except Exception: pass` 至少打日志、不吞错。
 
 ## BUG-037 · local_edit_only 误拦截「整份重新生成」请求
@@ -429,7 +432,7 @@
 - **现象**：用户已有方案时说「重新生成一周食谱」或「重新安排今天三餐」→ 被错误拒绝为「你指定的是局部修改…我不会重新生成整份方案」。
 - **层面**：Agent（意图路由）。
 - **根因**：`agent/agent.py:876-878` 的 `local_edit_only` 只要消息含「重新(安排|生成|排)|重排|换成…」且对话里已有方案（`le.registry(state)`）就置 True，未排除「整份重新生成」这类全新方案请求；`regenerate_flow.py` 的 `is_new_plan_request` 已正确识别 `fresh=True`，但 `_tool_exec` 用的是重算的 `local_edit_only`，仍拦截。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：`local_edit_only` 排除 `is_new_plan_request`（fresh）的情况；或先判 fresh 再判 local_edit_only。
 
 ## BUG-038 · 报告自定义日期区间字段名不匹配（start/end vs period）
@@ -437,7 +440,7 @@
 - **现象**：消息未命中正则报告关键词、由 LLM 归类 `report` 且 `scope="custom"` 时，`period_start=None` → 后端抛「custom 报告需提供 period_start 与 period_end」→ 用户看到「膳食报告生成失败」。
 - **层面**：Agent（报告链路）。
 - **根因**：`agent/agent.py:66-67` 的 `_INTENT_SYSTEM` 规定报告日期用 `start_date/end_date`，但 `agent.py:1241-1245` 的 report 分支读的是 `intent.get("period_start")/("period_end")`。正则路径返回 `period_start/period_end`，LLM 路径返回 `start_date/end_date`，两路径字段名不一致。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：统一字段名（正则路径与 LLM 路径对齐后再进 `period_analysis`）。
 
 ## BUG-039 · 单菜替换硬编码 allow_approximate=True，未经同意落库近似结果
@@ -445,7 +448,7 @@
 - **现象**：用户点名换一道菜、唯一可行解是「营养近似」结果时，Agent 不经追问直接落库，违反「可明确同意近似结果后再试」与 data_quality 三态语义。
 - **层面**：Agent（局部修改）。
 - **根因**：`agent/local_edits.py:112-114` 无条件 `payload['allow_approximate'] = True`，与紧邻注释「Do not auto-authorize nutrition relaxation」矛盾；后端 `replace_dish` 只有在 `allow_approximate=True` 时才放过 `macro_range_relaxed` 近似候选。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：近似结果需先追问用户同意再落库（与 `regenerate_slot` 的「近似需同意」口径一致）。
 
 ## BUG-040 · swap_candidate 多日方案无法定位餐位（缺日期参数）
@@ -453,7 +456,7 @@
 - **现象**：一周方案下用户说「把早餐换成清淡的」，LLM 调 `swap_candidate(meal_type=早餐)`，`_find_slot` 命中 7 个早餐 → 返回 None → 「没找到对应的餐位」。
 - **层面**：Agent（槽位定位）。
 - **根因**：`agent/agent.py:807-809` 的 `swap_candidate` 工具只带 `meal_type/prefer`，无日期或「第几天」参数；`agent.py:351-354` 的 `_find_slot` 在 `matches` 数 ≠1 时返回 None。同意图下 `regenerate_slot` 有 `day_index/slot_date` 定位，`swap_candidate` 缺失，定位能力不一致。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：`swap_candidate` 增加 `day_index/slot_date` 定位，与 `regenerate_slot` 对齐。
 
 ## BUG-041 · Agent 直连 /chat 异常只发 error 不发 done
@@ -470,7 +473,7 @@
 - **现象**：「复盘 12月30日 到 1月2日」被解析成同年 1月2日~12月30日（跨整年），报告窗口完全错误。
 - **层面**：Agent（日期解析）。
 - **根因**：`agent/agent.py:127-141` 的 `_parse_date_range` 一律用 `date.today().year`，且 `end < start` 时直接交换（把「12-30 → 次年 1-2」当成「1-2 → 12-30」）。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：当 `end` 月 < `start` 月时视为次年；跨年区间不要简单交换。
 
 ## BUG-043 · 发送与会话历史懒加载竞态，流式消息整组丢失
@@ -496,7 +499,7 @@
 - **现象**：「换一换/选用候选/确认方案」就地替换餐卡后，`MealCardBlock` 的选中候选高亮、展开天数、`swapping/confirming` 等局部 `ref` 全部残留：新卡候选集变了但选中 id 指向旧 candidate_id → 无候选高亮；天数变少时旧展开下标失效。
 - **层面**：前端（渲染 key）。
 - **根因**：`frontend/src/components/chat/ChatMessage.vue:29` 使用 `:key="block.__key"`，但全仓库 grep 确认 `__key` **从未被赋值**（仅此一处引用）→ `v-for` 退化为按下标 patch；`chat.js` 的 `replaceMealCardInPlace` 用 `splice` 在原下标就地替换新块对象，Vue 复用同一组件实例，setup 内 `ref`（非 props）不重建。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：给每个结构化块生成稳定唯一 `__key`（如 `type + raw_id + 版本`），替换时换 key 强制重建组件。
 
 ## BUG-046 · 「当前规划」面板确认方案未处理 2005 冲突
@@ -504,7 +507,7 @@
 - **现象**：用户已有固定方案，再从右侧「当前规划」面板点「确认方案」→ 只弹一句「已有覆盖同期的已固定方案…」，没有「替换/取消」的继续路径。
 - **层面**：前端（面板交互）。
 - **根因**：`frontend/src/components/tools/panels/CurrentPlanPanel.vue:235-246` 的 `confirmPlan` 遇到 2005 只 `ElMessage(e.message)`；而 `MealCardBlock.vue:264-281` 的 `onConfirm` 捕获 2005 后会退回对话路径 `chat.send(...)` 让 Agent 走「替换/取消」追问，两处降级不一致。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：`confirmPlan` 复用 MealCardBlock 的 2005 降级（退回对话发起「替换/取消」）。
 
 ## BUG-047 · 食材清单勾选状态跨方案串数据
@@ -512,7 +515,7 @@
 - **现象**：在方案 A 里勾掉「番茄@2026-11-20」，随后（面板仍挂载时）切到方案 B，B 同一天也有番茄 → 该条目进来就是已勾选，「已买 N 项」统计错误。
 - **层面**：前端（清单面板）。
 - **根因**：`frontend/src/components/tools/panels/GroceryPanel.vue:99` 的 `checkedMap` 以 `ingredient_id@day_date` 为键，`load()` 换方案时只替换 `groups`、不清空 `checkedMap`。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：`load()` 时重置 `checkedMap`，或按方案 id 隔离勾选态。
 
 ## BUG-048 · 档案编辑态可能回显默认值（load 未 await）
@@ -520,7 +523,7 @@
 - **现象**：应用刚启动（`profile.load()` 未完成）就打开「个人档案」并点「编辑档案」→ 表单显示默认的 26 岁/158cm/58kg 等，而非用户真实档案；此时直接保存会把默认值写回。
 - **层面**：前端（档案弹窗）。
 - **根因**：`frontend/src/components/profile/ProfileModal.vue:351-355` 的 `onOpen` 里 `if (!profile.profile) profile.load()` **未 await**，随后 `fillForm`（`:313-338`）读 `profile.profile || {}` 用空对象填充全默认值；档案加载完成后也无 watcher 重新回填。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**：`await profile.load()` 后再 `fillForm`，或加 watcher 在档案就绪后重填表单。
 
 ## BUG-049 · 应用库账号缺 DELETE 权限，整餐重生成/替换单菜/删会话运行时失败
@@ -529,7 +532,7 @@
 - **层面**：数据库权限 + 后端写路径。
 - **根因**：[03_应用账号与权限.sql](github仓库/database/03_应用账号与权限.sql#L18) 给 `app` schema 只授 `SELECT, INSERT, UPDATE`（第 18 行，`ALTER DEFAULT PRIVILEGES` 第 27 行同），**漏了 `DELETE`**；但业务代码需要硬删——[mealplan.py:593](github仓库/backend/app/routers/mealplan.py#L593) 的 `row.dishes.clear()` 配 [meal_plan.py:193](github仓库/backend/app/models/meal_plan.py#L193) 的 `cascade="all, delete-orphan"` 会对 `meal_candidate_dish` 发 DELETE；[conversations.py:181-182](github仓库/backend/app/routers/conversations.py#L181-L182) 删会话也显式 `DELETE FROM app.message / app.conversation`。库里已为 `meal_candidate_dish` 建 `trg_guard_fixed_plan_candidate_dish`（BEFORE DELETE 保护固定方案子行），说明「允许 DELETE、但受触发器保护」才是设计意图——是授权 SQL 漏了 DELETE，而非代码不该删。
 - **为何「换一换」按钮不受影响**：前端卡片上的「换一换」按钮走的是 `candidate/swap`（[mealplan.py:854](github仓库/backend/app/routers/mealplan.py#L854) 的 `swap_candidate`），它只 `UPDATE slot.selected_candidate_id` + `INSERT plan_adjustment`，**全程无 DELETE**，故能正常切换已有备选候选。受影响的是需要「清空旧菜行再插新菜行」的 `regenerate_slot`（整餐重生成）与 `replace_dish`（替换单菜）两条路径。
-- **状态**：已修·待部署（2026-11-21：授权 SQL 已补 `DELETE`，运行库已手动 GRANT，`regenerate_slot` 不再报权限错误；SQL 文件改动待提交/部署）。
+- **状态**：已闭环（2026-11-23 复核：`03_应用账号与权限.sql` 已含 `DELETE`，运行库已 GRANT）。
 - **修复**：`03_应用账号与权限.sql` 第 18 行与 `ALTER DEFAULT PRIVILEGES` 第 27 行补 `DELETE`，并对运行中的库 `docker exec` 执行 `GRANT DELETE ON ALL TABLES IN SCHEMA app TO diet_app;` + `ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT DELETE ON TABLES TO diet_app;`（无需重启，见「数据库灌库坑」）。根因细节：`backend/scripts/grant_diet_app.sql` 本就含 `DELETE`，仅 docker 初始化用的 `03` 漏了，两份授权脚本不一致。
 - **验证**：`diet_backend` 对 `app.meal_candidate_dish / app.message / app.conversation` 的 DELETE 实测通过（`has_table_privilege`=t，且 `DELETE … WHERE false` 无权限报错）；`check_v21_local_edits_db.py` 已越过原权限错误，`regenerate_slot` 成功换出不同菜品（签名变化、其余餐位不变、2~3 候选均通过）。该脚本另有两处旧断言（第 42/43 行，期望旧候选被删除归档）与当前「复用候选行、原地更新」设计不符，属待更新的旧测试，与本 bug 无关。
 
@@ -538,7 +541,7 @@
 - **现象**：生成的候选方案几乎每餐都提示「钠超标」/「总钠折算盐超过区间」，极端时正餐/晚餐出现大量合法组合被淘汰，候选池收窄，观感「随随便便一餐都钠超标」。
 - **层面**：规则引擎（候选生成 / 油盐限额）。
 - **根因**：`backend/app/services/rule_engine/models.py:30` 的 `DEFAULT_DAILY_LIMITS["salt_g"]=5.0` 取自《中国居民膳食指南 2022》「食盐<5g/日」——这是**添加盐（食盐）**口径；但 `backend/app/services/rule_engine/candidates.py:178-181` 把 `sodium_mg×2.54/1000` 折算成「总盐当量」（**全食物总钠**，含肉/菜/主食里的天然钠），`candidates.py:206-218` 又拿**同一个** `target.salt_limit_g` 去卡这个总钠，`candidates.py:449` `if hard: continue` 当**单餐硬淘汰**。总钠 = 添加盐 + 天然钠，恒 ≥ 添加盐，所以「总钠折算盐 > 5g×ratio」几乎必命中。数值上 5g 盐 ≈ 1965mg ≈ WHO 2000mg 总钠目标，但被按餐切成 1.5/2.0/1.5g 后做单餐硬淘汰：两道菜（各 1g 盐 ≈ 890mg 钠 ≈ 2.26g 盐当量）就超过晚餐 1.5g 上限。天然钠被当成"盐"多算了一层。
-- **状态**：未修（2026-11-21 代码审查发现）。
+- **状态**：已修（2026-11-23，代码审查修复）。
 - **修复建议**（需与数据/Agent 岗对齐口径，关联 CLAUDE.md §十 P2「油盐糖量级口径未定」与 `42_疾病规则口径审核_v1.2r4.sql`「2000mg 唯一生产默认钠目标」）：
   - **方案 A（推荐）**：盐只卡「添加盐」一次——`default_salt_g` vs `5g×ratio`；总钠单独立「总钠 2000mg/日」参考，且降级为软扣分/提示，**不参与单餐硬淘汰**。
   - **方案 B**：若产品坚持控总钠，给 `total_salt_equivalent_g` 单独立参考（daily 2000mg → 每餐 600/800/600mg），标签明确叫「总钠」而非「盐」，与添加盐不叠加、单餐不硬淘汰。
