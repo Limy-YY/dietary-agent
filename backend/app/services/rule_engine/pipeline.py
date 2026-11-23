@@ -329,15 +329,26 @@ def generate_plan(
     balance = None
     hints: list[str] = []
     if not skip_balance and request.user_id:
+        # 回溯窗口：应回看「过去 window_days 天」的已固定方案，而非本方案自身（未来）日期区间——
+        # 否则窗口总量≈0，7 种关键微量全被误判「不足」并触发无谓补位（BUG-033）。
+        # 口径与 nutrition.py _rebuild_hints 一致：window_start = start_date - (window_days - 1)。
+        window_end = request.end_date
+        try:
+            window_start = (
+                date.fromisoformat(request.start_date)
+                - timedelta(days=max(int(request.window_days), 1) - 1)
+            ).isoformat()
+        except ValueError:
+            window_start = request.start_date
         window_rows = data_source.get_micro_window(
-            request.user_id, request.start_date, request.end_date
+            request.user_id, window_start, window_end
         )
         balance = compute_balance(
             targets,
             window_rows,
             window_days=request.window_days,
-            window_start=request.start_date,
-            window_end=request.end_date,
+            window_start=window_start,
+            window_end=window_end,
         )
         improvements = apply_balance(slots, balance)
         balance.improvements.extend(improvements)

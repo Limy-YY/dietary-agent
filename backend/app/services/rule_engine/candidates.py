@@ -26,6 +26,8 @@ from .models import (
     METHOD_EQUIPMENT,
     MICRO_IDS,
     RELIGIOUS_KEYWORDS,
+    RELIGIOUS_FAMILY_FORBIDDEN,
+    SODIUM_LIMIT_MG_DAILY,
     Candidate,
     DishFacts,
     DishPortion,
@@ -77,6 +79,13 @@ ALLERGEN_ALIASES: dict[str, set[str]] = {
     "花生": {"花生"},
 }
 
+#: 已确诊疾病 → 硬排除（L0）：仅「痛风 → 高嘌呤食材」落地（core.ingredient.purine_level=高 已就绪，
+#: 整道菜经 repository 聚合为最高已知嘌呤等级）。其余病种（糖尿病/高血脂/高血压）走 L1 软约束 / L2 闸门，
+#: 口径见 docs/testing/疾病硬过滤口径提案.md，待「食物大类↔category」词表与 PM 拍板后再接。
+CONDITION_HARD_FILTER: dict[str, frozenset[str]] = {
+    "gout": frozenset({"高"}),
+}
+
 
 def sum_or_none(values: Iterable[float | None]) -> float | None:
     """求和；任一为 None 则整体为 None（避免把缺失当 0）。"""
@@ -107,10 +116,17 @@ def hard_filter_reasons(
     # 2) 宗教 / 伦理忌口
     for taboo in targets.hard_religious:
         keywords = _match_religious_keywords(taboo)
-        if not keywords:
-            continue
-        if any(kw in name_blob for kw in keywords):
+        forbidden_families = _match_religious_families(taboo)
+        family = _dish_family(facts)
+        if any(kw in name_blob for kw in keywords) or family in forbidden_families:
             reasons.append(f"religious:{taboo}")
+
+    # 2.5) 已确诊疾病硬排除（L0）：仅痛风 → 高嘌呤菜（purine_level=高）。
+    # 其余病种走软约束/闸门，见 CONDITION_HARD_FILTER 与疾病硬过滤口径提案。
+    for condition_id in targets.confirmed_conditions:
+        levels = CONDITION_HARD_FILTER.get(condition_id)
+        if levels and facts.purine_level in levels:
+            reasons.append(f"condition:{condition_id}")
 
     # 3) 本次显式排除的食材
     for excluded in targets.excluded_ingredients:
@@ -142,6 +158,23 @@ def _match_religious_keywords(taboo: str) -> tuple[str, ...]:
         if key in taboo_text:
             return keywords
     return ()
+
+
+def _match_religious_families(taboo: str) -> set[str]:
+    """按禁忌键取「主食材族」硬排除集合（结构化兜底，见 RELIGIOUS_FAMILY_FORBIDDEN）。"""
+    taboo_text = str(taboo or "").strip()
+    if not taboo_text:
+        return set()
+    for key, families in RELIGIOUS_FAMILY_FORBIDDEN.items():
+        if key in taboo_text:
+            return families
+    return set()
+
+
+def _dish_family(facts: DishFacts) -> str:
+    """从 dish_meta 读主食材族（§5.1 角色单一来源）；缺失返回空串。"""
+    meta = getattr(facts, "dish_meta", None) or {}
+    return str(meta.get("family") or "").strip()
 
 
 def _required_equipment(method_text: str | None) -> tuple[str, ...]:
@@ -199,6 +232,9 @@ def hard_budget_failures(target: MealTarget, portions: Sequence[DishPortion]) ->
 
     Missing values stay unknown. Reject even an incomplete total if its known
     non-negative contributions already exceed the limit.
+
+    「盐」上限是「添加盐」口径（default_salt_g），总钠（含天然钠）不在此做单餐硬淘汰——
+    天然钠被误当「盐」多算一层会导致普遍误判「钠超标」（BUG-050）；总钠走 _score 的软扣分 + 提示。
     """
     failures = []
     for key, attr, limit in (
@@ -209,13 +245,6 @@ def hard_budget_failures(target: MealTarget, portions: Sequence[DishPortion]) ->
                     if (value := getattr(p.facts, attr)) is not None)
         if known > limit + 0.01:
             failures.append(f"{key}_over:{known:g}>{limit:g}")
-    sodium_values = [p.facts.sodium_mg for p in portions]
-    if all(value is not None for value in sodium_values):
-        sodium_mg = sum(float(value) * p.servings for value, p in zip(sodium_values, portions))
-        salt_equivalent = sodium_mg * 2.54 / 1000.0
-        if salt_equivalent > target.salt_limit_g + 0.01:
-            failures.append(f"total_salt_equivalent_over:{salt_equivalent:g}>{target.salt_limit_g:g}")
-    # 钠缺失(null)不产生硬失败：null≠0，未知≠可安全排除；交由 oil_salt_unknown 告警标记。
     return failures
 
 
@@ -246,9 +275,6 @@ def _within(target: MealTarget, totals: dict[str, float | None]) -> tuple[bool, 
     salt = totals.get("salt_g")
     if salt is not None and salt > target.salt_limit_g + 0.01:
         failures.append(f"salt_over:{salt:g}>{target.salt_limit_g:g}")
-    salt_equivalent = totals.get("total_salt_equivalent_g")
-    if salt_equivalent is not None and salt_equivalent > target.salt_limit_g + 0.01:
-        failures.append(f"total_salt_equivalent_over:{salt_equivalent:g}>{target.salt_limit_g:g}")
 
     return (not failures, failures)
 
@@ -299,6 +325,16 @@ def _score(
     salt = totals.get("salt_g")
     if salt is not None and target.salt_limit_g > 0:
         penalty += max(0.0, (salt - target.salt_limit_g) / target.salt_limit_g) * strict_weight
+    # 总钠（含天然钠）软约束：日参考 2000mg（≈5.08g 盐当量），按餐占比折算后只扣分 + 提示，
+    # 不做单餐硬淘汰——天然钠不应被当作「添加盐」多算一层（BUG-050）。
+    salt_equivalent = totals.get("total_salt_equivalent_g")
+    ratio = getattr(target, "ratio", None)
+    if salt_equivalent is not None and ratio:
+        per_meal_sodium_line = SODIUM_LIMIT_MG_DAILY * 2.54 / 1000.0 * float(ratio)
+        if per_meal_sodium_line > 0 and salt_equivalent > per_meal_sodium_line:
+            penalty += max(0.0, (salt_equivalent - per_meal_sodium_line) / per_meal_sodium_line) * strict_weight
+            reason_codes.append("sodium_high")
+            notes.append("总钠（含天然钠）偏高，建议后续减少高钠食材")
     if targets.oil_salt_strict and oil is not None and target.oil_limit_g > 0:
         # 收紧目标下，用油越接近上限扣分越明显（只影响排序，不判淘汰）
         penalty += _W_OIL_TIGHTENED * (oil / target.oil_limit_g)

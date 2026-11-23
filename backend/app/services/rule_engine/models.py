@@ -19,8 +19,8 @@ KCAL_PER_G = {"protein_g": 4.0, "fat_g": 9.0, "carb_g": 4.0}
 #: 活动系数固定值（口径：BMR × 1.4，不再读 activity_level）
 DEFAULT_ACTIVITY_FACTOR = 1.4
 
-#: 默认每餐能量占比（早 25% / 午 40% / 晚 35%）
-DEFAULT_MEAL_RATIOS: dict[str, float] = {"早": 0.25, "午": 0.4, "晚": 0.35}
+#: 默认每餐能量占比（早 30% / 午 40% / 晚 30%，与 CLAUDE.md §5 及 targets.py docstring 一致）
+DEFAULT_MEAL_RATIOS: dict[str, float] = {"早": 0.30, "午": 0.40, "晚": 0.30}
 
 #: 宏量区间容忍度（目标值 ±15%）
 DEFAULT_MACRO_TOLERANCE = 0.15
@@ -28,6 +28,11 @@ DEFAULT_MACRO_TOLERANCE = 0.15
 #: 每日油盐糖上限（《中国居民膳食指南 2022》：油 25~30 g、盐 <5 g、添加糖 <25 g）
 #: 数据库 goal_structure_map.oil_salt_sugar_policy 若给出更严值，以库值为准。
 DEFAULT_DAILY_LIMITS = {"oil_g": 25.0, "salt_g": 5.0, "added_sugar_g": 25.0}
+
+#: 总钠（含天然钠）的每日参考上限（mg，WHO/NHC 2000mg）。与营养报告 nutrition.py 的
+#: SODIUM_LIMIT_MG_DAILY 同口径。注意：DEFAULT_DAILY_LIMITS["salt_g"] 是「添加盐」口径，
+#: 总钠 = 添加盐 + 天然钠，恒 ≥ 添加盐，不得用同一上限去卡（见 candidates.py 的软约束处理）。
+SODIUM_LIMIT_MG_DAILY = 2000.0
 
 #: 7 种关键微量（与 app.v_key_micronutrient 的 nutrient_id / display_order 一致）
 KEY_MICRONUTRIENTS: tuple[tuple[str, str, str], ...] = (
@@ -58,6 +63,18 @@ RELIGIOUS_KEYWORDS: dict[str, tuple[str, ...]] = {
     "伊斯兰": ("猪", "五花", "培根", "火腿", "香肠", "腊肉", "排骨", "肉肠"),
     "素食": ("鸡", "鸭", "猪", "牛", "羊", "鱼", "虾", "蟹", "蛤", "贝", "肉", "排骨", "培根", "火腿", "香肠"),
     "佛教": ("鸡", "鸭", "猪", "牛", "羊", "鱼", "虾", "蟹", "蛤", "贝", "肉", "排骨", "葱", "蒜", "韭"),
+}
+
+#: 宗教/伦理忌口的「主食材族」结构化兜底（dish_meta.family，一对多）。
+#: 菜名/食材名的子串命中救不了「彩椒里脊丝 / 木耳炒肉片 / 肉末豆腐」这类菜名不含「猪」的猪肉菜，
+#: 但 DB 侧 dish_meta.family 已标注为「猪肉」，据此硬排除（BUG-034）。
+#: - 清真/伊斯兰 只禁「猪肉」族（「内脏」现库为猪肝、菜名含「猪」已被关键词命中；且未来可能纳入禽内脏，故不按族排除）。
+#: - 素食/佛教 禁所有动物性主食材族；「鸡蛋」不在此列（对应蛋奶素口径，与关键词不含「蛋」一致）。
+RELIGIOUS_FAMILY_FORBIDDEN: dict[str, set[str]] = {
+    "清真": {"猪肉"},
+    "伊斯兰": {"猪肉"},
+    "素食": {"猪肉", "鸡肉", "牛肉", "羊肉", "鸭肉", "鱼", "虾", "水产", "贝类", "内脏"},
+    "佛教": {"猪肉", "鸡肉", "牛肉", "羊肉", "鸭肉", "鱼", "虾", "水产", "贝类", "内脏"},
 }
 
 #: 做法所需的厨具（method_text 命中键 → 需要 cooking_equipment 含任一值）
@@ -178,6 +195,9 @@ class DishFacts:
     fiber_g: float | None = None
     sodium_mg: float | None = None
     calcium_mg: float | None = None
+    #: 整道菜的嘌呤等级（由食材 purine_level 聚合，最高已知等级：高 > 较高 > 较低 > 低；None=未知）。
+    #: 痛风 L0 硬排除据此排除「高」嘌呤菜（见 candidates.CONDITION_HARD_FILTER）。
+    purine_level: str | None = None
     micro: dict[str, float | None] = field(default_factory=dict)
     strict_allergens: list[str] = field(default_factory=list)
     unverified_food_ids: list[str] = field(default_factory=list)

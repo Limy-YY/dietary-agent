@@ -16,7 +16,7 @@ class FoundationTests(unittest.TestCase):
         return compute_targets(self.profile, GOAL_ROW, MICRO_REFS, replace(self.request, meal_types=meals))
 
     def test_partial_targets(self):
-        for meals, ratio in ((["午"], .4), (["早", "晚"], .6), (["早", "午"], .65), (["早", "午", "晚"], 1.0)):
+        for meals, ratio in ((["午"], .4), (["早", "晚"], .6), (["早", "午"], .7), (["早", "午", "晚"], 1.0)):
             with self.subTest(meals=meals):
                 t = self.targets(meals)
                 self.assertEqual(set(t.meal_targets), set(meals))

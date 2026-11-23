@@ -169,13 +169,13 @@ def test_energy_equals_bmr_times_1_4():
     assert t.energy_kcal == pytest.approx(1314.0 * 1.4)
 
 
-def test_meal_ratios_split_25_40_35():
-    """V2.1（fa7a4fe）：默认三餐比例 30/40/30 → 25/40/35。"""
+def test_meal_ratios_split_30_40_30():
+    """默认三餐比例 30/40/30（与 CLAUDE.md §5 及 targets.py docstring 一致，BUG-031）。"""
     t = compute_targets(make_profile(), None, None, make_request())
     energy = t.energy_kcal
-    assert t.meal_targets["早"].kcal == pytest.approx(energy * 0.25, rel=1e-6)
+    assert t.meal_targets["早"].kcal == pytest.approx(energy * 0.30, rel=1e-6)
     assert t.meal_targets["午"].kcal == pytest.approx(energy * 0.40, rel=1e-6)
-    assert t.meal_targets["晚"].kcal == pytest.approx(energy * 0.35, rel=1e-6)
+    assert t.meal_targets["晚"].kcal == pytest.approx(energy * 0.30, rel=1e-6)
 
 
 def test_single_meal_request_gets_only_its_share():
@@ -192,12 +192,12 @@ def test_single_meal_request_gets_only_its_share():
 def test_custom_meal_ratios_partial_normalized_with_defaults():
     """V2.1 语义：自定义只覆盖给出的餐次，剩余餐次沿用默认值一并归一。
 
-    早 0.5 / 午 0.5（晚缺省 0.35）→ sum=1.35 → 早占 0.5/1.35。
+    早 0.5 / 午 0.5（晚缺省 0.30）→ sum=1.30 → 早占 0.5/1.30。
     """
     t = compute_targets(make_profile(), None, None,
                         make_request(meal_types=["早", "午"], meal_ratios={"早": 0.5, "午": 0.5}))
-    assert t.meal_targets["早"].ratio == pytest.approx(0.5 / 1.35, rel=1e-6)
-    assert t.meal_targets["午"].ratio == pytest.approx(0.5 / 1.35, rel=1e-6)
+    assert t.meal_targets["早"].ratio == pytest.approx(0.5 / 1.30, rel=1e-6)
+    assert t.meal_targets["午"].ratio == pytest.approx(0.5 / 1.30, rel=1e-6)
 
 
 def test_custom_meal_ratios_full_day_exact():
@@ -294,6 +294,24 @@ def test_vegetarian_blocks_meat_but_not_tofu():
     tofu = make_dish(name="家常豆腐", ingredient_names=["豆腐"], method_text="红烧")
     assert hard_filter_reasons(meat, tastes)
     assert hard_filter_reasons(tofu, tastes) == []
+
+
+def test_gout_blocks_high_purine_dish():
+    """痛风 L0 硬排除：已确诊痛风 → 高嘌呤菜（purine_level=高）硬排除；低/未知不排（null≠0）。"""
+    gout = _targets(conditions={"gout": {"status": "confirmed"}})
+    high = make_dish(name="猪肝汤", ingredient_names=["猪肝"], purine_level="高")
+    low = make_dish(name="清炒白菜", ingredient_names=["白菜"], purine_level="低")
+    unknown = make_dish(name="家常豆腐", ingredient_names=["豆腐"])  # purine_level=None
+    assert "condition:gout" in hard_filter_reasons(high, gout)
+    assert hard_filter_reasons(low, gout) == []
+    assert hard_filter_reasons(unknown, gout) == []
+
+
+def test_gout_not_confirmed_does_not_block():
+    """仅 confirmed 疾病参与硬排除；suspected/unknown 不排（铁律：硬约束以确诊为准）。"""
+    suspected = _targets(conditions={"gout": {"status": "suspected"}})
+    high = make_dish(name="猪肝汤", ingredient_names=["猪肝"], purine_level="高")
+    assert hard_filter_reasons(high, suspected) == []
 
 
 def test_exclude_ingredient_blocks_by_name_or_ingredient():

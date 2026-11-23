@@ -76,6 +76,7 @@ WITH base AS (
         i.food_id,
         i.energy_kcal, i.protein_g, i.fat_g, i.carbohydrate_g, i.fiber_g,
         i.sodium_mg, i.calcium_mg, i.allergens, i.allergen_status,
+        i.purine_level,
         (i.micro_nutrients->>'iron_mg')::numeric      AS iron_mg,
         (i.micro_nutrients->>'zinc_mg')::numeric      AS zinc_mg,
         (i.micro_nutrients->>'vitamin_a_ug')::numeric AS vitamin_a_ug,
@@ -116,6 +117,12 @@ WITH base AS (
              THEN NULL ELSE round(sum(amount_g * vitamin_b2_mg / 100.0), 3) END AS vitamin_b2,
         CASE WHEN count(*) FILTER (WHERE vitamin_c_mg IS NULL OR amount_g IS NULL) > 0
              THEN NULL ELSE round(sum(amount_g * vitamin_c_mg / 100.0), 2) END AS vitamin_c,
+        CASE WHEN count(*) FILTER (WHERE purine_level = '高') > 0 THEN '高'
+             WHEN count(*) FILTER (WHERE purine_level = '较高') > 0 THEN '较高'
+             WHEN count(*) FILTER (WHERE purine_level = '较低') > 0 THEN '较低'
+             WHEN count(*) FILTER (WHERE purine_level IS NULL) > 0 THEN NULL
+             WHEN count(*) FILTER (WHERE purine_level = '低') > 0 THEN '低'
+             ELSE NULL END AS purine_level,
         COALESCE(array_agg(DISTINCT ingredient_name ORDER BY ingredient_name), ARRAY[]::text[]) AS ingredient_names,
         jsonb_agg(jsonb_build_array(ingredient_name, amount_g) ORDER BY ingredient_name) AS ingredient_amounts,
         jsonb_agg(jsonb_build_array(ingredient_name, amount_g, ingredient_role) ORDER BY ingredient_name) AS ingredient_roles
@@ -143,6 +150,7 @@ SELECT
     d.dish_meta, d.is_generation_enabled,
     a.energy_kcal, a.protein_g, a.fat_g, a.carb_g, a.fiber_g, a.sodium_mg, a.calcium_mg,
     a.iron, a.zinc, a.vitamin_a, a.vitamin_b1, a.vitamin_b2, a.vitamin_c,
+    a.purine_level,
     a.ingredient_names, a.ingredient_amounts, a.ingredient_roles, al.strict_allergens, al.unverified_food_ids
 FROM core.dish d
 JOIN agg a ON a.dish_id = d.dish_id
@@ -278,6 +286,7 @@ class SqlDataSource:
                     fiber_g=_to_float(data.get("fiber_g")),
                     sodium_mg=_to_float(data.get("sodium_mg")),
                     calcium_mg=_to_float(data.get("calcium_mg")),
+                    purine_level=data.get("purine_level"),
                     micro={
                         "calcium": _to_float(data.get("calcium_mg")),
                         "iron": _to_float(data.get("iron")),
