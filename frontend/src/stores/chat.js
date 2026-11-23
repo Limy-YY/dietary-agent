@@ -1,6 +1,5 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import { streamChat } from '@/api/agent.js'
 import { listConversations, listMessages, renameConversation, deleteConversation } from '@/api/conversation.js'
 import { getToken } from '@/api/http.js'
@@ -360,6 +359,12 @@ export const useChatStore = defineStore('chat', () => {
             aiMsg.thinking = '' // 兜底：确保思考步骤条不残留
             if (payload.conversation_id) adoptConversation(session, payload.conversation_id)
             if (payload.meal_plan_id != null) aiMsg.meal_plan_id = payload.meal_plan_id
+            // IMP-027：Agent 下发的快捷追问建议，气泡下方渲染成 chip（后端透传 suggestions 时生效）
+            if (Array.isArray(payload.suggestions)) {
+              aiMsg.suggestions = payload.suggestions
+                .map((s) => (typeof s === 'string' ? s : s && (s.text || s.label)))
+                .filter((s) => typeof s === 'string' && s)
+            }
             session.updatedAt = new Date().toISOString()
           }
 

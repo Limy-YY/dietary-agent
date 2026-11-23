@@ -59,7 +59,6 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { useChatStore } from '@/stores/chat.js'
 import { useProfileStore } from '@/stores/profile.js'
 import { useUi } from '@/composables/useUi.js'

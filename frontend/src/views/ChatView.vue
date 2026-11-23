@@ -24,7 +24,6 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import SessionSidebar from '@/components/sidebar/SessionSidebar.vue'
 import ChatPane from '@/components/chat/ChatPane.vue'
 import ToolRail from '@/components/tools/ToolRail.vue'

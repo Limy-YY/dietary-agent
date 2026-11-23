@@ -196,7 +196,6 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import PillGroup from './PillGroup.vue'
 import { useProfileStore } from '@/stores/profile.js'
 import { useUi } from '@/composables/useUi.js'

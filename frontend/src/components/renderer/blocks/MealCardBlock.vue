@@ -120,7 +120,6 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import { MEAL_LABELS, PHRASE } from '@/constants/actions.js'
 import { arr, fmtKcal } from '@/utils/schema.js'
 import { useUi } from '@/composables/useUi.js'

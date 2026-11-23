@@ -27,6 +27,18 @@
         <div class="po-cal-sub">目标为份量量级参考，不做热量缺口/盈余</div>
       </div>
 
+      <div
+        v-if="plan.why_summary || plan.reference_hints.length || plan.data_quality_notes.length"
+        class="plan-why"
+      >
+        <div class="plan-why-title">💡 为什么这样搭</div>
+        <p v-if="plan.why_summary" class="plan-why-summary">{{ plan.why_summary }}</p>
+        <ul v-if="plan.reference_hints.length || plan.data_quality_notes.length" class="plan-why-list">
+          <li v-for="(h, i) in plan.reference_hints" :key="'h' + i">{{ h }}</li>
+          <li v-for="(n, i) in plan.data_quality_notes" :key="'n' + i">{{ n }}</li>
+        </ul>
+      </div>
+
       <div class="section-head-row">
         <div class="section-head-title">🍽️ 食谱概览</div>
         <button class="expand-all-btn" @click="toggleAllDays">{{ allOpen ? '全部收起' : '全部展开' }}</button>
@@ -94,7 +106,6 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { fetchCurrentPlan } from '@/api/mealPlan.js'
 import { fetchReport } from '@/api/nutrition.js'
 import { fmtKcal, normalizeCurrentPlan } from '@/utils/schema.js'
@@ -316,5 +327,39 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
 .cp-report-link:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* IMP-014：方案级「为什么这样搭」依据 */
+.plan-why {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  background: var(--bg-soft, #fafafa);
+  border-radius: 10px;
+}
+
+.plan-why-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-main, #333);
+  margin-bottom: 6px;
+}
+
+.plan-why-summary {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-sub, #7a7a7a);
+}
+
+.plan-why-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-sub, #7a7a7a);
+}
+
+.plan-why-list li {
+  margin: 2px 0;
 }
 </style>

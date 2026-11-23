@@ -31,6 +31,15 @@
         @phrase="(p) => $emit('phrase', p)"
       />
 
+      <div v-if="showSuggestions" class="suggest-row">
+        <button
+          v-for="(s, i) in message.suggestions"
+          :key="'sg' + i"
+          class="suggest-chip"
+          @click="$emit('phrase', s)"
+        >{{ s }}</button>
+      </div>
+
       <div v-if="message.status === 'stopped'" class="bubble" style="color: var(--text-sub); font-size: 13px">
         已停止生成，可以继续追问或重新发送。
       </div>
@@ -58,6 +67,11 @@ const thinkingRecord = computed(() => {
   const actions = (props.message.thinkingSteps || []).filter((s) => !META_STEPS.includes(s))
   return actions.length ? actions.map((s) => '已' + s.replace(/^正在/, '')).join(' · ') : ''
 })
+
+// 快捷追问 chip：只在回复完成后、且有建议时展示（IMP-027）
+const showSuggestions = computed(
+  () => props.message.status === 'done' && (props.message.suggestions || []).length > 0
+)
 </script>
 
 <style scoped>
@@ -136,4 +150,28 @@ const thinkingRecord = computed(() => {
 .md :deep(pre code) { background: none; padding: 0; }
 .md :deep(blockquote) { border-left: 3px solid #4a7c59; margin: 8px 0 0; padding: 2px 0 2px 10px; color: #9a9a9a; font-size: 12.5px; }
 .md :deep(a) { color: #4a7c59; }
+
+/* 快捷追问 chip（IMP-027）：回复完成后气泡下方一排可点追问 */
+.suggest-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.suggest-chip {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--brand-hover, #3d6a4b);
+  background: var(--brand-light, #eef3ee);
+  border: 1px solid var(--brand-medium, #dce8df);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.suggest-chip:hover {
+  background: var(--brand-medium, #dce8df);
+}
 </style>

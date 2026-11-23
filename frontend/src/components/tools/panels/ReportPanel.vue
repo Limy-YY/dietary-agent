@@ -42,7 +42,6 @@
 
 <script setup>
 import { onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { fetchReportList, fetchReportById } from '@/api/nutrition.js'
 import { fmtDateTime } from '@/utils/format.js'
 import { usePanelStore } from '@/stores/panel.js'

@@ -48,7 +48,6 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
 import { fetchPlanList, fetchPlanById, setPlanExecuted } from '@/api/mealPlan.js'
 import { normalizeMealCard, goalLabel, planTypeTitle } from '@/utils/schema.js'
 import { fmtDate } from '@/utils/format.js'
@@ -164,6 +163,7 @@ async function view(p) {
       title: p.title,
       range_text: p.range_text,
       goal_label: goalLabel(raw.goal_code || p.goal_code),
+      goal_energy_kcal: plan.goal_energy_kcal,
       is_executed: Boolean(raw.is_executed),
       days: plan.days
     }

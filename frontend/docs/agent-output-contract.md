@@ -28,6 +28,8 @@
 | `error` | `{"code":2001,"message":"…"}` | 气泡内提示错误码语义；`2001~2004` 可重试，其余不自动重试 |
 | `done` | `{"conversation_id":"…","meal_plan_id":101,"finish_reason":"stop"}` | 记录会话与方案 id，刷新右侧面板，结束当前流 |
 
+> `done` 可带 `suggestions: string[]`（快捷追问，可选）。前端把每条渲染成气泡下方可点的追问 chip（IMP-027）；后端/Agent 未透传时前端不展示，属兼容字段。
+
 约束：
 
 - 一次对话可下发多个 `artifact`；`done` 必发且只发一次。
@@ -142,6 +144,9 @@
 | `start_date` / `end_date` | string / null | 日期范围 |
 | `fixed_at` | string / null | 固定时间；`candidates` 时为空 |
 | `goal_energy_kcal` | number / null | 「N kcal 目标」 |
+| `why_summary` | string / null | 方案级「为什么这样搭」依据；面板总览区只读渲染（IMP-014） |
+| `reference_hints` | string[] / null | 参考口径提示条，中性色 |
+| `data_quality_notes` | string[] / null | 数据质量说明 |
 | `slots[]` | array | 与 MealCard 槽位同构（嵌套 `candidates[]`，非平铺）；真后端 `_serialize_plan` 直接复用 `_serialize_slot` 结构 |
 | `slots[].meal_slot_id` / `slot_date` / `meal_type` / `display_order` | — | 按天分组展示 |
 | `slots[].selected_candidate_id` | integer / null | 透传 |

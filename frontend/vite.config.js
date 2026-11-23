@@ -1,6 +1,9 @@
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
+import AutoImport from 'unplugin-auto-import/vite'
+import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import mockPlugin from './mock/index.js'
 
 export default defineConfig(({ mode }) => {
@@ -9,7 +12,14 @@ export default defineConfig(({ mode }) => {
   const apiBase = env.VITE_API_BASE || 'http://127.0.0.1:8000'
 
   return {
-    plugins: [vue(), ...(useMock ? [mockPlugin()] : [])],
+    plugins: [
+      vue(),
+      // Element Plus 按需引入（IMP-005）：模板组件与 ElMessage/ElMessageBox 的样式
+      // 由两个 unplugin 解析器按需注入，不再整包引入 element-plus/dist/index.css。
+      AutoImport({ resolvers: [ElementPlusResolver()], dts: false }),
+      Components({ resolvers: [ElementPlusResolver()], dts: false }),
+      ...(useMock ? [mockPlugin()] : [])
+    ],
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url))

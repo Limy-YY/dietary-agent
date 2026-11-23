@@ -12,6 +12,7 @@
         <div class="hd-kv">
           <div class="kv-row"><span class="kv-k">周期</span><span class="kv-v">{{ payload.range_text }}</span></div>
           <div class="kv-row"><span class="kv-k">健康目标</span><span class="kv-v">{{ payload.goal_label || '—' }}</span></div>
+          <div class="kv-row"><span class="kv-k">目标热量</span><span class="kv-v">{{ payload.goal_energy_kcal != null ? fmtKcal(payload.goal_energy_kcal) + ' kcal' : '—' }}</span></div>
           <div class="kv-row"><span class="kv-k">状态</span><span class="kv-v">{{ payload.is_executed ? '已执行' : '未执行' }}</span></div>
         </div>
       </div>
@@ -61,7 +62,14 @@
       <div class="hd-section-title">📊 营养复盘</div>
       <div v-if="reportLoading" class="hd-note">正在加载营养复盘…</div>
       <div v-else-if="report"><ReportBlock :block="reportBlock" /></div>
-      <div v-else class="hd-note">这份方案还没有营养复盘，可在对话里让我「复盘这份方案的营养」。</div>
+      <div v-else class="hd-note">
+        这份方案还没有营养复盘。
+        <div class="hd-report-actions">
+          <el-button size="small" type="primary" :loading="generatingReport" @click="generateReport">
+            {{ generatingReport ? '正在生成…' : '生成这份方案复盘' }}
+          </el-button>
+        </div>
+      </div>
     </div>
 
     <template #footer>
@@ -72,8 +80,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { fetchReport } from '@/api/nutrition.js'
+import { fetchReport, analyzeNutrition } from '@/api/nutrition.js'
 import { regeneratePlan } from '@/api/mealPlan.js'
 import { fmtKcal } from '@/utils/schema.js'
 import { useUi } from '@/composables/useUi.js'
@@ -93,6 +100,7 @@ const payload = computed(() => ui.historyPayload)
 const report = ref(null)
 const reportLoading = ref(false)
 const regenerating = ref(false)
+const generatingReport = ref(false)
 const showDetail = ref(false)
 
 const reportBlock = computed(() => (report.value ? { ...report.value, expanded: true } : null))
@@ -118,6 +126,23 @@ async function loadReport() {
     report.value = null
   } finally {
     reportLoading.value = false
+  }
+}
+
+/** IMP-018：无复盘的历史方案可一键生成方案级营养复盘（POST /nutrition/analysis） */
+async function generateReport() {
+  const id = payload.value?.plan_id
+  if (!id || generatingReport.value) return
+  generatingReport.value = true
+  try {
+    const r = await analyzeNutrition({ mealPlanId: id })
+    report.value = r
+    if (r) panel.bump()
+  } catch (e) {
+    // 拦截器已对业务/网络错误统一 toast，这里只复位状态，避免重复提示
+    report.value = null
+  } finally {
+    generatingReport.value = false
   }
 }
 
@@ -311,5 +336,9 @@ watch(visible, (v) => {
   padding: 10px 12px;
   background: var(--bg-soft, #fafafa);
   border-radius: 8px;
+}
+
+.hd-report-actions {
+  margin-top: 10px;
 }
 </style>

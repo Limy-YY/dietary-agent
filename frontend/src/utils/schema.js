@@ -317,8 +317,11 @@ export function normalizeCurrentPlan(payload) {
       fixed_at: str(pick(p, 'fixed_at'), ''),
       days,
       slots,
-      reason_points: [],
-      sources: []
+      // IMP-014：方案级「为什么这样搭」依据（后端 _serialize_plan 已吐 why_summary /
+      // reference_hints / data_quality_notes），面板只读渲染，不补算。
+      why_summary: str(pick(p, 'why_summary'), ''),
+      reference_hints: arr(pick(p, 'reference_hints')),
+      data_quality_notes: arr(pick(p, 'data_quality_notes'))
     }
   }
 }

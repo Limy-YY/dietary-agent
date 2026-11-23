@@ -1,11 +1,11 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import ChatView from '@/views/ChatView.vue'
 
 const routes = [
   {
     path: '/',
     name: 'chat',
-    component: ChatView,
+    // 路由懒加载（IMP-005）：按需拉取页面 chunk，减小首屏主包
+    component: () => import('@/views/ChatView.vue'),
     meta: { title: '膳宝 · 膳食搭配智能体' }
   },
   { path: '/:pathMatch(.*)*', redirect: '/' }
