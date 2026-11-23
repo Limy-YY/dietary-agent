@@ -252,7 +252,13 @@ async function confirmPlan() {
     })
     await load()
   } catch (e) {
-    ElMessage(e.message || '确认失败，请重试')
+    if (e && e.code === 2005) {
+      // 同期已有固定方案冲突：与 MealCardBlock.onConfirm 对齐，退回对话路径发起「替换/取消」追问，
+      // 而不是只弹一句裸警告让用户卡住（BUG-046）。
+      await chat.send(PHRASE.confirm)
+    } else {
+      ElMessage(e.message || '确认失败，请重试')
+    }
   }
 }
 

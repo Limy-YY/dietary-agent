@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date, timedelta
 
@@ -19,6 +20,8 @@ import local_edits as le
 import regenerate_flow as rf
 import conversation_state as cs
 import target_resolver as tr
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- LLM 客户端（可选）
 
@@ -65,8 +68,10 @@ _INTENT_SYSTEM = (
     '"scope":"week|month|plan|null", '
     '"start_date":"YYYY-MM-DD|null", "end_date":"YYYY-MM-DD|null", '
     '"meal_types":["早餐","午餐","晚餐"]|null, '
-    '"profile":{"gender":"男|女","age":0,"height_cm":0,"weight_kg":0,'
-    '"goal_code":"maintain|fat_loss|muscle_gain|glucose_control|digestive_health","allergies":[],"conditions":{},"name":""}}。'
+    '"profile":{"gender":"男|女|null","age":10~100|null,"height_cm":120~220|null,"weight_kg":30~200|null,'
+    '"goal_code":"maintain|fat_loss|muscle_gain|glucose_control|digestive_health|null","allergies":[],"conditions":{},'
+    '"religious_ethical":[],"cooking_equipment":[],"name":""}}。'
+    '用户没提到的 profile 字段一律填 null，绝不要填 0（0 会导致建档失败）。'
     'plan_custom 必须按下方规则填 start_date/end_date/meal_types，抽不出才留 null，绝不能编造日期：'
     '「今天」=今天日期，「明天」=明天，「三天/接下来三天」=从今天起连续 3 天，'
     '「下周一到周三」=下周对应具体日期（只排到周三就只排那几天），'
@@ -124,19 +129,30 @@ _DATE_TOKEN_RE = re.compile(
 
 
 def _parse_date_range(message: str) -> tuple[str, str] | None:
-    """从消息里抽取两个日期（YYYY-MM-DD / YYYY年M月D日 / M月D日），返回 (start, end) ISO 串。"""
+    """从消息里抽取两个日期（YYYY-MM-DD / YYYY年M月D日 / M月D日），返回 (start, end) ISO 串。
+
+    无年份的「M月D日」按今年解析；当 end 早于 start 且 end 是无年份标记时，视为跨到次年
+    （如「12月30日 到 1月2日」= 今年12-30 ~ 次年1-2），而不是简单交换成同年（BUG-042）。
+    """
     tokens: list[date] = []
+    yearless: list[bool] = []
     year = date.today().year
     for m in _DATE_TOKEN_RE.finditer(message):
         if m.group(1):
             tokens.append(date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+            yearless.append(False)
         else:
             tokens.append(date(year, int(m.group(4)), int(m.group(5))))
+            yearless.append(True)
     if len(tokens) < 2:
         return None
     start, end = tokens[0], tokens[1]
     if end < start:
-        start, end = end, start
+        # 只有「end 无年份」且 (月,日) 更早时，才把 end 视为次年；其余情况仍按同年交换。
+        if yearless[1] and (end.month, end.day) < (start.month, start.day):
+            end = date(year + 1, end.month, end.day)
+        else:
+            start, end = end, start
     return start.isoformat(), end.isoformat()
 
 
@@ -322,6 +338,34 @@ def _load_profile(user_id: str) -> dict | None:
         return bc.get_profile(user_id)
     except Exception:
         return None
+
+
+def _profile_missing_fields(p: dict) -> list[str]:
+    """建档必填项校验（与后端 ProfileUpsertRequest 约束对齐），返回缺失/非法字段名。
+
+    铁律 7（needs_clarification 必须追问）：缺项就逐项追问，不静默用 0 硬填导致后端 422。
+    """
+    missing: list[str] = []
+    if p.get("gender") not in ("男", "女"):
+        missing.append("gender")
+    try:
+        if not (10 <= int(p.get("age")) <= 100):
+            missing.append("age")
+    except (TypeError, ValueError):
+        missing.append("age")
+    try:
+        if not (120 <= float(p.get("height_cm")) <= 220):
+            missing.append("height_cm")
+    except (TypeError, ValueError):
+        missing.append("height_cm")
+    try:
+        if not (30 <= float(p.get("weight_kg")) <= 200):
+            missing.append("weight_kg")
+    except (TypeError, ValueError):
+        missing.append("weight_kg")
+    if not str(p.get("goal_code") or "").strip():
+        missing.append("goal_code")
+    return missing
 
 
 # ---------------------------------------------------------------- 方案动作
@@ -632,13 +676,15 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "swap_candidate",
-            "description": "仅当用户明确要求「把某餐整顿换成另一套备选套餐」且已指明餐次时调用。若用户想去掉某道具体菜、嫌菜品重复、或只说「换一换」未指明整餐，禁止调用此工具，应改用 replace_dish 或 ask_clarification。",
+            "description": "仅当用户明确要求「把某餐整顿换成另一套备选套餐」且已指明餐次时调用。若用户想去掉某道具体菜、嫌菜品重复、或只说「换一换」未指明整餐，禁止调用此工具，应改用 replace_dish 或 ask_clarification。多日方案下若用户未指明哪一天，先用 ask_clarification 追问第几天/具体日期。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "meal_type": {"type": "string", "enum": ["早餐", "午餐", "晚餐"],
                                   "description": "用户明确指定的餐次；未指定则留空"},
                     "prefer": {"type": "string", "description": "调整意图，如「清淡」「不要牛肉」"},
+                    "day_index": {"type": "integer", "description": "多日方案中用户指定的第几天（从 1 开始）"},
+                    "slot_date": {"type": "string", "description": "用户明确给出的日期 YYYY-MM-DD"},
                 },
             },
         },
@@ -676,7 +722,7 @@ def _agent_system(profile: dict) -> str:
         + _profile_brief(profile) + "\n"
         + f"今天是 {date.today().isoformat()}。\n"
         + "可用工具：generate_plan（生成配餐方案）、ask_clarification（需求含糊时追问）、"
-          "swap_candidate（仅切换已有候选）、regenerate_slot（重生成单餐）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
+          "swap_candidate（换一换 = 整餐重生成）、regenerate_slot（重生成单餐，可保留指定菜）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
         + "局部修改必须使用对应工具，按用户明确指定的方案序号、日期和餐次定位，禁止擅自生成整份方案或确认；工具失败后停止，不得重试写操作或宣称成功。\n"
         + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
           "② 用户说「不想吃重复的」「换一换」等泛化请求且未指明具体餐次时，先对照已有方案找出跨餐重复菜，必须先调用 ask_clarification 追问用户想调整哪一餐（例如「午餐和晚餐都有「山药米饭」，你想换掉午餐的还是晚餐的？如果主食单换受限，也可以直接整餐重新生成」），禁止不问用户就擅自挑选餐次修改，也禁止诱导用户说「都换/一起换」（单轮仅支持修改一处）；"
@@ -940,37 +986,6 @@ def _rich_generate(user_id, profile, message, kind, intent, history, on_status, 
             "blocks": [blocks.meal_card_block(plan)]}
 
 
-def _pick_swap_candidate(slot: dict, prefer: str) -> str | None:
-    """从该餐候选里挑一个「要换成」的目标：默认下一个；带 prefer 时按语义挑。"""
-    cands = slot.get("candidates") or []
-    picked_id = slot.get("selected_candidate_id") or (slot.get("selected_candidate") or {}).get("candidate_id")
-    others = [c for c in cands if str(c.get("candidate_id")) != str(picked_id)]
-    if not others:
-        return None
-    if prefer:
-        # ① 换成X → 优先含 X 的候选
-        m = re.search(r"换成([一-龥A-Za-z]{1,6})", prefer)
-        if m:
-            word = m.group(1)
-            hit = [c for c in others if word in _candidate_name(c)]
-            if hit:
-                others = hit
-        # ② 不要X → 排除含 X 的候选
-        m = re.search(r"(?:不要|别吃|不吃|不想吃|避开|去掉)([一-龥A-Za-z]{1,6})", prefer)
-        if m:
-            word = m.group(1)
-            keep = [c for c in others if word not in _candidate_name(c)]
-            if keep:
-                others = keep
-        # ③ 清淡/少油 → 用油最低优先
-        if re.search(r"清淡|少油|太油|油腻|低油", prefer):
-            def _oil(c):
-                o = (c.get("oil_salt_estimate") or {}).get("oil_g")
-                return o if o is not None else 9999.0
-            others = sorted(others, key=_oil)
-    return (others[0] or {}).get("candidate_id")
-
-
 def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
     """执行一个工具，返回 {summary, blocks, terminal, reply}。"""
     user_id = ctx["user_id"]
@@ -1066,23 +1081,37 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
         meal_type = (args.get("meal_type") or "").strip()
         if not meal_type:
             return {"summary": "未指明要调整哪一餐，请追问用户具体想调整早餐、午餐还是晚餐。"}
-        slot = _operation_slot(plan,meal_type,ctx.get('context'))
+        # 卡片按钮路径带 meal_slot_id（_operation_slot）；自然语言走 le.resolve_slot 支持
+        # day_index/slot_date，避免多日方案下 meal_type 命中多个餐位而定位失败（BUG-040）。
+        slot = None
+        if (ctx.get('context') or {}).get('meal_slot_id'):
+            slot = _operation_slot(plan, meal_type, ctx.get('context'))
+        else:
+            try:
+                slot = le.resolve_slot(plan, args)
+            except ValueError as exc:
+                return {"summary": str(exc)}
         if not slot:
             return {"summary": "没找到对应的餐位。"}
         if on_status:
-            on_status("正在调整候选")
-        target_id = _pick_swap_candidate(slot, (args.get("prefer") or "").strip())
+            on_status("正在重新搭配")
+        # 换一换 = 整餐重生成（不再只循环生成时定死的 2~3 个候选，那会让相似候选原地打转）；
+        # 后端 slot/regenerate 会避开邻天已选的非主食菜。把「不要X / 清淡少油」等意图转成排除/软偏好。
+        prefer = (args.get("prefer") or "").strip()
+        ex = _extract_preferences(prefer)
         meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
-        bc.swap_candidate(
+        bc.regenerate_slot(
             meal_plan_id=meal_plan_id,
             meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
-            candidate_id=target_id,
+            expected_candidate_id=slot.get("selected_candidate_id"),
+            exclude_ingredients=ex["exclude"],
+            soft_avoid=ex["soft_avoid"],
         )
         updated = bc.get_meal_plan(meal_plan_id)
         le.remember(st,updated)
         new_slot = _find_slot(updated, meal_type)
         dish_text = _slot_dish_text(new_slot) if new_slot else "新候选"
-        return {"summary": f"已把「{meal_type}」调整为：{dish_text}",
+        return {"summary": f"已重新搭配「{meal_type}」：{dish_text}",
                 "blocks": [blocks.meal_card_block(updated)]}
 
     if name == "get_shopping_list":
@@ -1137,7 +1166,7 @@ def _agent_loop(user_id: str, profile: dict, message: str, history: list | None,
     ctx = {"user_id": user_id, "profile": profile, "state": state, "message": message, "history": history,"context": context or {},
            "local_edit_only": bool(
                re.search(r"重新(?:安排|生成|排)|重排|换成|替换.*(?:菜|肉|鱼|餐)|其他(?:不变|保留)|只换",
-                         message)) and bool(le.registry(state))}
+                         message)) and bool(le.registry(state)) and not rf.is_new_plan_request(message)}
     plan_list = [{"plan_index":i,"meal_plan_id":le.plan_id(p),"start_date":p.get("start_date"),"end_date":p.get("end_date"),
                   "slots":[{"date":s.get("slot_date"),"meal":s.get("meal_type"),"dishes":_slot_dish_text(s)} for s in _iter_slots(p)]}
                  for i,p in enumerate(le.registry(ctx["state"]),1)]
@@ -1298,6 +1327,13 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
     if kind == "profile_build":
         _st("正在为你建档")
         p = intent.get("profile") or {}
+        # 铁律 7：缺必填项逐项追问，不用 0 硬填导致后端 422 后静默吞掉（BUG-036）。
+        missing = _profile_missing_fields(p)
+        if missing:
+            label = {"gender": "性别", "age": "年龄", "height_cm": "身高",
+                     "weight_kg": "体重", "goal_code": "健康目标"}
+            asks = "、".join(label.get(k, k) for k in missing)
+            return {"text": f"建档还差这些信息：{asks}。补充后我再为你建档配餐。", "blocks": []}
         if p.get("name"):
             new_id = "u_" + re.sub(r"[^a-z0-9]", "", p["name"].lower()) or "u_" + date.today().strftime("%Y%m%d")
         else:
@@ -1307,14 +1343,17 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
                 new_id,
                 gender=p.get("gender"), age=p.get("age"), height_cm=p.get("height_cm"),
                 weight_kg=p.get("weight_kg"), goal_code=p.get("goal_code"),
-                allergies=p.get("allergies") or [], taboos=p.get("taboos") or [],
+                allergies=p.get("allergies") or [],
                 conditions=p.get("conditions") or {},
+                religious_ethical=p.get("religious_ethical") or [],
+                cooking_equipment=p.get("cooking_equipment") or [],
                 extras={"name": p.get("name") or ""},
             )
             profile = _load_profile(new_id)
             user_id = new_id
-        except Exception:
-            pass
+        except Exception as exc:
+            # 不再静默吞 422：记日志，下面按 profile 为空走「追问缺项」而非假装已建档（BUG-036）。
+            logger.warning("对话建档失败 user=%s err=%s", user_id, exc)
         if profile is None:
             return {"text": "我还不太了解你的身体情况，可以告诉我性别、年龄、身高体重和目标吗？", "blocks": []}
         # 建档后交给 LLM 工具循环排当天方案
@@ -1335,11 +1374,13 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         _st("正在换候选")
         try:
             meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
-            # 【修复】swap 接口只回部分结果（candidate + macro_delta），不携带完整 slots；
-            # 这里调它只负责落库，完整方案再按 id 重新拉取，避免状态被部分结果覆盖。
-            bc.swap_candidate(
+            old_dish_text = _slot_dish_text(slot)
+            # 换一换 = 整餐重生成：走后端 slot/regenerate（会避开邻天已选的非主食菜），
+            # 不再只循环生成时定死的 2~3 个候选。slot/regenerate 返回完整方案，仍需按 id 重拉一次保持状态一致。
+            bc.regenerate_slot(
                 meal_plan_id=meal_plan_id,
                 meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
+                expected_candidate_id=slot.get("selected_candidate_id"),
             )
             updated_plan = bc.get_meal_plan(meal_plan_id)
             le.remember(st,updated_plan)
@@ -1348,9 +1389,11 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
             slot_id = slot.get("meal_slot_id") or slot.get("slot_id")
             new_slot = next((s for s in _iter_slots(updated_plan)
                              if str(s.get("meal_slot_id") or s.get("slot_id")) == str(slot_id)), None)
-            if not new_slot or not new_slot.get("selected_candidate_id") or str(new_slot.get("selected_candidate_id")) == str(slot.get("selected_candidate_id")):
+            if not new_slot or not new_slot.get("selected_candidate_id"):
                 return {"text": "未确认候选已切换，请刷新方案核对。", "blocks": []}
             new_dish_text = _slot_dish_text(new_slot)
+            if new_dish_text == old_dish_text:
+                return {"text": "这一餐没能换出新搭配，请刷新方案核对，或换个餐位再试。", "blocks": []}
             kcal_text = "热量待估"
             if new_slot:
                 picked = new_slot.get("selected_candidate") or ((new_slot.get("candidates") or [None])[0])
@@ -1515,6 +1558,10 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
 
     if kind == "report":
         scope = intent.get("scope") or "plan"
+        # 日期字段名归一：正则路径给 period_start/period_end，LLM 分类路径按 _INTENT_SYSTEM 给
+        # start_date/end_date，两路径字段名不一致会导致 custom 报告区间丢失（BUG-038）。
+        period_start = intent.get("period_start") or intent.get("start_date")
+        period_end = intent.get("period_end") or intent.get("end_date")
 
         # 膳食报告（时间段维度）：周/月/自定义，跨方案聚合，不依赖当前方案
         if scope in ("week", "month", "custom"):
@@ -1523,15 +1570,15 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
                 if scope == "custom":
                     report = bc.period_analysis(
                         "custom",
-                        period_start=intent.get("period_start"),
-                        period_end=intent.get("period_end"),
+                        period_start=period_start,
+                        period_end=period_end,
                     )
                 else:
                     report = bc.period_analysis(scope)
             except Exception as e:
                 return {"text": f"膳食报告生成失败：{e}", "blocks": []}
             label = (
-                f"{intent.get('period_start')}~{intent.get('period_end')}"
+                f"{period_start}~{period_end}"
                 if scope == "custom"
                 else "近 7 天" if scope == "week" else "近 30 天"
             )

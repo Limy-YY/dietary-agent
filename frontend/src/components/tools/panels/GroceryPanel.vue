@@ -135,6 +135,8 @@ async function load() {
   error.value = ''
   unfixed.value = false
   dayFilter.value = '全部'
+  // 换方案时清空勾选态：checkedMap 以 ingredient 为键，跨方案会串「已买」数据（BUG-047）。
+  Object.keys(checkedMap).forEach((k) => delete checkedMap[k])
   try {
     const current = await fetchCurrentPlan()
     if (!current || current.meal_plan_id == null) {

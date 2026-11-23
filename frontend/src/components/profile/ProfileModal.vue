@@ -348,7 +348,9 @@ async function loadConditionCatalog() {
 }
 
 async function onOpen() {
-  if (!profile.profile) profile.load()
+  // 必须 await：否则应用刚启动、profile.load() 未完成时，fillForm 会读空档案回填默认值，
+  // 用户点保存就把默认 26 岁/158cm/58kg 写回真实档案（BUG-048）。
+  if (!profile.profile) await profile.load()
   await loadConditionCatalog()
   backup.value = fillForm()
 }

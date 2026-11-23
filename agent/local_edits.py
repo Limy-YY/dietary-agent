@@ -109,8 +109,8 @@ def execute(bc,state,name,args,message):
     else:
         payload['dish_id'] = resolve_dish(slot,args.get('old_dish_name'))
         payload['replacement_query'] = args.get('replacement_query') or ''
-        payload['allow_approximate'] = True
-        # Do not auto-authorize nutrition relaxation.
+        # 不自动授权「营养近似」落库：默认 allow_approximate=False，唯一可行解是近似结果时后端会拒绝，
+        # 由上层把「需明确同意近似结果」如实告诉用户（BUG-039 / data_quality 三态语义）。
         updated = bc.replace_dish(**payload)
     remember(state,updated)
     new_slot = next(s for s in updated['slots'] if s['meal_slot_id'] == slot['meal_slot_id'])

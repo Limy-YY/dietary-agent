@@ -289,7 +289,8 @@ async function streamChat(req, res, body) {
     res.write(`data: ${JSON.stringify(data)}\n\n`)
   }
 
-  const conversationId = body.conversation_id || `conv_${Date.now()}`
+  // 与真后端一致：conversation_id 为整数（BUG-003，原 `conv_${Date.now()}` 字符串会与真后端 int 校验冲突）
+  const conversationId = body.conversation_id || Date.now()
   const text = String(body.message || '')
   const missing = missingProfileFields()
   const wantsPlan = /三餐|一日|今天|明天|吃什么|搭配|一周|七天|整周|一餐|推荐|午餐|晚餐|早餐/.test(text)
