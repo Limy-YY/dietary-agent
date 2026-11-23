@@ -41,8 +41,7 @@ __all__ = [
     "combo_totals",
 ]
 
-#: 能量预筛的宽松系数（先粗筛再精算，避免组合爆炸）
-_KCAL_PRECHECK_LOW = 0.55
+#: 能量预筛的宽松上界系数（只裁上界、不裁下界；缺失值交精算判定）
 _KCAL_PRECHECK_HIGH = 1.65
 
 #: 打分权重
@@ -355,8 +354,11 @@ def _prefilter(
     sides: Sequence[DishFacts],
     target: MealTarget,
 ) -> tuple[list[DishFacts], list[DishFacts]]:
-    """按单道菜能量做宽松预筛，缩小组合空间（不影响最终区间判定）。"""
-    low = target.kcal * _KCAL_PRECHECK_LOW
+    """按单道菜能量做宽松上界预筛，缩小叉积空间（不影响最终区间判定）。
+
+    只裁上界：单道菜能量已超餐目标上界的菜，不可能与其它正能量菜凑出合法组合。
+    下界不裁：缺失值(null≠0)与小份量交精算阶段判定，避免误杀低能量复合菜。
+    """
     high = target.kcal * _KCAL_PRECHECK_HIGH
 
     def ok_kcal(f: DishFacts, share: float) -> bool:
@@ -395,7 +397,9 @@ def build_candidates(
     allowed_staples = [f for f in staples if not hard_filter_reasons(f, targets)]
     allowed_sides = [f for f in sides if not hard_filter_reasons(f, targets)]
 
-    keep_staples, keep_sides = allowed_staples, allowed_sides
+    # B2：能量边界下沉到枚举——先按单道菜能量上界剪掉「不可能凑出合法组合」的菜，
+    # 再进入叉积枚举，避免把几十万组合送进 shortlist_combos。
+    keep_staples, keep_sides = _prefilter(allowed_staples, allowed_sides, target)
 
     pool: list[Candidate] = []
     soft_hits_by_dish = {f.dish_id: _soft_avoid_hits(f, soft_avoid) for f in list(keep_staples) + list(keep_sides)}
