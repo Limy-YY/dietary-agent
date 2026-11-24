@@ -100,9 +100,9 @@ def serving_options(d,requested=1.0):
 def breakfast_shape(portions,meal_type):
     if meal_type!='早':
         return True
-    if not 1<=len(portions)<=3:
+    if not 1<=len(portions)<=4:
         return False
-    from .meal_templates import profile
+    from .meal_templates import profile, breakfast_coherent
     metas=[profile(p.facts) for p in portions]
     # A breakfast must be recognised as breakfast food by the reviewed
     # catalogue. Full rice meals are intentionally lunch/dinner-only.
@@ -115,7 +115,11 @@ def breakfast_shape(portions,meal_type):
     # Sweet bowls combine with milk/soy drink or fruit, not a cooked savoury
     # side. This prevents nutritionally valid but culinary incoherent拼盘.
     if any(m.staple=='sweet' for m in metas):
-        return all(m.staple=='sweet' or m.breakfast in ('M','F') for m in metas)
+        return all(m.staple=='sweet' or m.breakfast in ('M','F','G') for m in metas)
+    # Drinks (豆浆/牛奶/酸奶) don't pair with a wet savoury anchor (汤面/米粉/粥):
+    # the noodle/porridge already carries the liquid, so a drink is redundant.
+    if not breakfast_coherent(metas):
+        return False
     return True
 
 

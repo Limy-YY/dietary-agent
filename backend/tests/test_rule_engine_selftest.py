@@ -203,8 +203,8 @@ def main() -> int:
     check("A2 总能量 = BMR×1.4", abs(targets.energy_kcal - bmr * 1.4) < 0.01, f"{targets.energy_kcal:.1f}")
     breakfast = targets.meal_targets["早"]
     check(
-        "A3 早餐能量 = 25%",
-        abs(breakfast.kcal - bmr * 1.4 * 0.25) < 0.01,
+        "A3 早餐能量 = 30%",
+        abs(breakfast.kcal - bmr * 1.4 * 0.30) < 0.01,
         f"{breakfast.kcal:.1f}kcal",
     )
     check(
@@ -213,8 +213,8 @@ def main() -> int:
         f"{breakfast.protein.low}~{breakfast.protein.high}g",
     )
     check(
-        "A5 油限额 = 25×25%",
-        abs(breakfast.oil_limit_g - 6.25) < 0.01,
+        "A5 油限额 = 25×30%",
+        abs(breakfast.oil_limit_g - 7.5) < 0.01,
         f"{breakfast.oil_limit_g:g}g",
     )
     policy = parse_goal_policy(GOAL_ROW)

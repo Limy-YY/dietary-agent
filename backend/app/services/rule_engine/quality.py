@@ -5,6 +5,11 @@ from .meal_templates import profile, dish_roles, template_for
 
 SEASONING = ('油','盐','糖','醋','酱','胡椒','葱','蒜','姜','料酒','味精','鸡精','香料','饮用水')
 
+#: IMP-059 第 2 步：窗口内（近 6 餐）已出蔬菜的强软约束惩罚——比通用计数项大，
+#: 用来让相邻天蔬菜错开（强惩罚而非硬排除；蔬菜在宏量上近似「自由变量」，这里
+#: 给一个能压过常见营养分差的量级即可，不需要也不该做成安全级硬排除）。
+_W_RECENT_VEG = 1.0
+
 
 def main_ingredients(dish):
     # §5.4 主料口径：按 dish_ingredient.role 取主料，取代 name 写死名单。
@@ -71,6 +76,7 @@ def repetition_cost(candidate,previous,*,ctx=None):
         veg_families=ctx.rep_veg_families
         prev_sweet=ctx.rep_prev_sweet
         dish_sets=ctx.dish_sets
+        recent_veg=getattr(ctx,'rep_recent_veg_ids',None)
     else:
         recent=previous[-6:]
         counts=Counter(base_dish_id(d) for c in previous for d in c.dish_ids)
@@ -80,17 +86,23 @@ def repetition_cost(candidate,previous,*,ctx=None):
                              if profile(p.facts).roles=={'蔬菜'})
         prev_sweet=sum(profile(q.facts).staple=='sweet' for c in previous for q in c.portions)
         dish_sets=[frozenset(base_dish_id(d) for d in c.dish_ids) for c in previous]
+        recent_veg={base_dish_id(p.dish_id) for c in recent for p in c.portions
+                    if profile(p.facts).roles=={'蔬菜'}}
     penalty=0.
     for p in candidate.portions:
         meta=profile(p.facts); key=base_dish_id(p.dish_id)
         if meta.roles=={'主食'}:continue
-        if meta.roles in ({'奶类'},{'水果'}) or key in ('DISH-067','DISH-068','DISH-085'):
+        if meta.roles in ({'奶类'},{'水果'},{'坚果'}) or key in ('DISH-067','DISH-068','DISH-085'):
             weight=.035
         elif meta.roles=={'蔬菜'}:weight=.26
         else:weight=.15
         penalty+=weight*(.55*recent_counts[key]**1.25+.45*counts[key]**1.25)
         if key in adjacent:penalty+=weight*.65
-        if meta.roles=={'蔬菜'}:penalty+=.045*veg_families[meta.family]
+        if meta.roles=={'蔬菜'}:
+            penalty+=.045*veg_families[meta.family]
+            # IMP-059 第 2 步：窗口内已出蔬菜做强软约束（强惩罚，非硬排除）。
+            if recent_veg is not None and key in recent_veg:
+                penalty+=_W_RECENT_VEG
         if meta.staple=='sweet':
             penalty+=.12*prev_sweet
     keyset=frozenset(base_dish_id(d) for d in candidate.dish_ids)

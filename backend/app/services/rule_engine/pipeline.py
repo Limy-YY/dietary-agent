@@ -177,8 +177,12 @@ def _fill_copy(candidate: Candidate, target, targets: Targets) -> Candidate:
     return candidate
 
 
-def _vary_equivalent_pool(pool, target, same_day, seed, slot_date, meal_type):
-    """Shuffle only a near-best equivalent band, never the whole candidate pool."""
+def _vary_equivalent_pool(pool, target, same_day, seed, slot_date, meal_type, recent_used=None):
+    """Shuffle only a near-best equivalent band, never the whole candidate pool.
+
+    `recent_used`：近窗已出非主食菜 base_dish_id 集合（IMP-059 第 3 步）——洗牌只在
+    「与最优候选跨天重合状态一致」的等价带内进行，避免把邻天已出菜重新提回池首。
+    """
     if seed is None or len(pool) < 2:
         return pool
     from .practical_quality import candidate_priority
@@ -188,12 +192,15 @@ def _vary_equivalent_pool(pool, target, same_day, seed, slot_date, meal_type):
     best_band = 0 if best_deviation<=.15 else 1 if best_deviation<=.25 else 2 if best_deviation<=.40 else 3
     used = set().union(*(non_staple_base_ids(c) for c in same_day)) if same_day else set()
     best_overlap = bool(non_staple_base_ids(best)&used)
+    recent_used = frozenset(recent_used) if recent_used else frozenset()
+    best_recent_overlap = bool(non_staple_base_ids(best) & recent_used)
     equivalent=[]
     for candidate in pool[:24]:
         deviation=abs(candidate.totals['kcal']-target.kcal)/max(target.kcal,1)
         band=0 if deviation<=.15 else 1 if deviation<=.25 else 2 if deviation<=.40 else 3
         if (candidate_priority(candidate)[:3]==best_priority and band==best_band
                 and bool(non_staple_base_ids(candidate)&used)==best_overlap
+                and bool(non_staple_base_ids(candidate)&recent_used)==best_recent_overlap
                 and candidate.score<=best.score+.30):
             equivalent.append(candidate)
     if len(equivalent)<2:
@@ -278,6 +285,14 @@ def generate_plan(
             target = targets.meal_targets[meal_type]
             pool = [clone_candidate(c) for c in templates[meal_type]]
             previous = [c for s in slots if (c := selected(s)) is not None]
+            # IMP-059：跨天重复的「已占用」口径扩到全部候选（rank1~3），不只选中那一条——
+            # 否则「换一换」翻到的备选候选跨天重复无人惩罚。offered 与 previous 按餐位对齐。
+            offered = [s.candidates for s in slots if s.candidates]
+            # IMP-059 第 3 步：近窗（近 6 餐）已出非主食菜集合，供 _vary_equivalent_pool /
+            # diversify 做跨天去重，让「换一换」翻到的整组候选也避开邻天已出菜。
+            recent_used = frozenset().union(*(
+                non_staple_base_ids(c) for group in offered[-6:] for c in group
+            ))
             today = [c for s in slots if s.slot_date == slot_date and (c := selected(s)) is not None]
             today_slots = [s for s in slots if s.slot_date == slot_date and selected(s) is not None]
             daily_energy_carry = sum(s.target.kcal-selected(s).totals['kcal'] for s in today_slots
@@ -288,19 +303,19 @@ def generate_plan(
             protein_previous = [c for s in slots
                                 if (s.slot_date == slot_date or s.meal_type in ("午", "晚"))
                                 and (c := selected(s)) is not None]
-            ctx = build_selection_context(previous, protein_previous, today)
+            ctx = build_selection_context(previous, protein_previous, today, offered)
             pool.sort(key=lambda c: selection_key(c, target, previous,
                 repetition_cost(c, previous, ctx=ctx),
                 protein_previous=protein_previous,daily_energy_carry=daily_energy_carry,
                 same_day=today, ctx=ctx))
             pool = _vary_equivalent_pool(
-                pool, target, today, request.variation_seed, slot_date, meal_type
+                pool, target, today, request.variation_seed, slot_date, meal_type, recent_used
             )
-            picked = diversify(pool, request.candidates_per_slot, start_id=1)
+            picked = diversify(pool, request.candidates_per_slot, start_id=1, recent_used=recent_used)
             from .practical_quality import protein_rotation, purchase_credit, candidate_priority
             for c in picked:
                 used_today = set().union(*(non_staple_base_ids(x) for x in today)) if today else set()
-                c.score_breakdown['context']={'repetition':round(repetition_cost(c,previous),4),
+                c.score_breakdown['context']={'repetition':round(repetition_cost(c, previous, ctx=ctx),4),
                     'protein_rotation':round(protein_rotation(c,protein_previous),4) if meal_type in ('午','晚') else 0.,
                     'purchase_credit':round(purchase_credit(c,previous),4),
                     'daily_energy_carry_kcal':round(daily_energy_carry,2),
@@ -387,16 +402,19 @@ def generate_plan(
             raise InsufficientData("最终候选缺失能量数据")
         chosen.append(cand)
     from collections import Counter
+    from .practical_quality import plan_quality_diagnostics, adjacent_offer_overlap
     counts = Counter(d for c in chosen for d in c.dish_ids)
     meal_counts = Counter(tuple(sorted(c.dish_ids)) for c in chosen)
     diagnostics["diversity"] = {"unique_dishes": len(counts),
                                  "max_dish_occurrences": max(counts.values(), default=0),
                                  "repeated_meals": sum(n - 1 for n in meal_counts.values()),
-                                 "dish_counts": dict(counts)}
-    from .practical_quality import plan_quality_diagnostics
+                                 "dish_counts": dict(counts),
+                                 "adjacent_offer_repeat": adjacent_offer_overlap(slots)}
     diagnostics["practical_quality"] = plan_quality_diagnostics(slots)
     diagnostics["practical_quality"]["engine_seconds_after_catalog"] = round(perf_counter()-_quality_started,3)
     # 5) 输出
+    # data_notes 是给用户看的「数据说明」（面板脚注，只读），措辞面向用户；
+    # 候选数不足 / 放宽尝试这类内部诊断只进 diagnostics，不上发到面板。
     data_notes: list[str] = []
     missing_fat = sum(1 for d in dishes if d.fat_g is None)
     missing_carb = sum(1 for d in dishes if d.carb_g is None)
@@ -404,27 +422,27 @@ def generate_plan(
     missing_ca = sum(1 for d in dishes if d.calcium_mg is None)
     if missing_fat or missing_carb:
         data_notes.append(
-            f"{max(missing_fat, missing_carb)}/{len(dishes)} 道菜的脂肪或碳水聚合值为空，"
-            "相关宏量按「缺失」处理，未按 0 计"
+            f"有 {max(missing_fat, missing_carb)} 道菜暂缺脂肪或碳水的精确数据，"
+            "相关数值为量级估计（未按 0 计）"
         )
     if missing_fiber:
         data_notes.append(
-            f"{missing_fiber}/{len(dishes)} 道菜的膳食纤维聚合值为空，纤维覆盖进度不可判定"
+            f"有 {missing_fiber} 道菜缺膳食纤维数据，纤维覆盖进度仅供参考"
         )
     if missing_ca:
-        data_notes.append(f"{missing_ca}/{len(dishes)} 道菜缺钙数据，钙的覆盖进度不可判定")
+        data_notes.append(f"有 {missing_ca} 道菜缺钙数据，钙的覆盖进度仅供参考")
     unverified = [d.name for d in dishes if d.allergen_unverified]
     if unverified:
         data_notes.append(
-            f"{len(unverified)} 道菜含 allergen_status=未核查 的食材，候选卡片需保留提示"
-            f"（示例：{'、'.join(unverified[:3])}）"
+            f"有 {len(unverified)} 道菜的部分食材过敏原信息未核实，如有忌口请先确认"
+            f"（如：{'、'.join(unverified[:3])}）"
         )
-    data_notes.extend(slot_notes)
-    data_notes.extend(diagnostics["relax_notes"])
+    # 内部诊断：候选数不足 / 放宽尝试，只供 QA 与审查闭环排查，不进用户面板。
+    diagnostics["candidate_notes"] = slot_notes
 
     status = "candidates" if all(s.candidates for s in slots) else "draft"
     if status != "candidates":
-        data_notes.append("存在餐位无候选，方案停留在 draft，需放宽条件后重试")
+        data_notes.append("部分餐次尚未排定候选，方案还不完整，可以让我重新排一次")
 
     notes_for_summary = hints or []
     result = PlanResult(

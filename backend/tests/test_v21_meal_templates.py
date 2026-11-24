@@ -21,7 +21,9 @@ class TemplateTests(unittest.TestCase):
     def test_only_practical_shape_is_hard(self):
         self.assertIsNone(template_for([], '早'))
         self.assertIsNone(template_for(combo('121','121'), '早'))
-        self.assertIsNone(template_for(combo('121','127','129','131'), '早'))
+        # 早餐最多 4 项（加餐位可含坚果/饮品），5 项才硬拒绝
+        self.assertIsNotNone(template_for(combo('121','127','129','131'), '早'))
+        self.assertIsNone(template_for(combo('121','127','129','131','148'), '早'))
         self.assertIsNone(template_for(combo('121','127','146','129','131'), '午'))
         changed=SimpleNamespace(dish_id='DISH-001',name='changed')
         self.assertIsNone(template_for([changed], '早'))
@@ -41,9 +43,9 @@ class TemplateTests(unittest.TestCase):
             self.assertGreater(len(rows),10); self.assertEqual(len(keys),len(set(keys)))
             self.assertTrue(all(template_for(c,mt) for c in rows))
             if mt=='早':
-                self.assertTrue(all(len(c)<=3 for c in rows))
+                self.assertTrue(all(len(c)<=4 for c in rows))
                 self.assertTrue(any(sum('主食' in profile(d).roles for d in c)==0 for c in rows))
-                self.assertTrue(any(sum('主食' in profile(d).roles for d in c)>1 for c in rows))
+                self.assertTrue(any(sum('主食' in profile(d).roles for d in c)==1 for c in rows))
             else:
                 self.assertTrue(all(len(c)<=3 for c in rows))
             self.assertTrue(any(len(c)==2 for c in rows))

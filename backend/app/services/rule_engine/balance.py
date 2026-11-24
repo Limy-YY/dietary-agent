@@ -227,7 +227,7 @@ def build_micro_hints(report: BalanceReport, limit: int = 4) -> list[str]:
         gap_ratio = 100 - item.covered_pct
         if gap_ratio >= 30:
             hints.append(
-                f"{item.name_zh}低于目标的 {gap_ratio:.0f}%，建议后续方案增加富含{item.name_zh}的食材"
+                f"{item.name_zh}仅覆盖目标的 {item.covered_pct:.0f}%，建议后续方案增加富含{item.name_zh}的食材"
             )
         elif gap_ratio >= 10:
             hints.append(f"{item.name_zh}略有缺口（覆盖 {item.covered_pct:.0f}%），可在下一餐补一点")

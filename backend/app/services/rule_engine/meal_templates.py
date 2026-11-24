@@ -13,7 +13,7 @@ import re
 #    | commonness | complexity
 # roles: S staple, P protein dish, V vegetable, T soup, D dairy, F fruit
 # breakfast use: B sweet bowl, N neutral starch, E mild egg, L mild savory side,
-# M milk/soy drink, F fruit, C savory breakfast anchor, - lunch/dinner default.
+# M milk/soy drink, F fruit, G nuts/seed snack, C savory breakfast anchor, - lunch/dinner default.
 # commonness/complexity: 0 = common/simple, 1 = regular, 2 = specialty/complex.
 _ROWS = '''001|蒜香清蒸鸡胸肉|P|-|-|鸡肉|1|1
 002|西兰花鸡胸肉快炒|PV|-|-|鸡肉|1|1
@@ -185,7 +185,7 @@ _ROWS = '''001|蒜香清蒸鸡胸肉|P|-|-|鸡肉|1|1
 168|香煎豆腐|P|-|-|豆腐|0|1
 169|蒸土豆|S|N|tuber|土豆|0|0
 170|白粥|S|C|porridge|米饭|0|0'''
-ROLE = dict(S='主食', P='蛋白质菜', V='蔬菜', T='汤羹', D='奶类', F='水果')
+ROLE = dict(S='主食', P='蛋白质菜', V='蔬菜', T='汤羹', D='奶类', F='水果', G='坚果')
 
 @dataclass(frozen=True)
 class DishProfile:
@@ -298,6 +298,48 @@ def dish_roles(dish):
     return profile(dish).roles
 
 
+# ---------------------------------------------------------------- 早餐搭配一致性
+# 早餐的搭配约束是「模式」而非「角色」：一碗面 / 一碗粥本身就是带汤水的一顿，
+# 再配豆浆 / 牛奶既重复又违和；饮品只配干主食（馒头/面包/蒸薯/玉米）或甜碗。
+# 目录为已审核的有限集合，名称白名单与 COUNT_EGGS / BULK_STARCH 同口径。
+BREAKFAST_DRINK = frozenset({'无糖豆浆', '纯牛奶', '原味酸奶'})
+BREAKFAST_WET_STAPLE = frozenset({
+    '清汤面', '原味米粉', '小米粥', '白粥',
+    '番茄鸡蛋面', '鸡丝青菜面', '蔬菜米粉', '燕麦牛奶粥',
+})
+
+
+def _base_name(name: str) -> str:
+    return (name or '').removesuffix('（少盐）')
+
+
+def is_breakfast_drink(p) -> bool:
+    """豆浆 / 牛奶 / 酸奶这类「饮品」，与湿主食互斥。"""
+    return p.breakfast == 'M' or _base_name(p.name) in BREAKFAST_DRINK
+
+
+def is_breakfast_wet_staple(p) -> bool:
+    """汤面 / 米粉 / 粥这类「湿主食」：本身已含汤水，不宜再配饮品。
+
+    粥类靠 staple=='porridge' 判定；汤面 / 米粉与馒头 / 面包同为 staple=='grain'，
+    只能靠菜名兜底（含「面/粉/粥」且非「面包/馒头/玉米」等干粮）。
+    """
+    if p.staple == 'porridge':
+        return True
+    name = _base_name(p.name)
+    if name in BREAKFAST_WET_STAPLE:
+        return True
+    if '主食' not in p.roles or any(k in name for k in ('面包', '馒头', '玉米')):
+        return False
+    return any(h in name for h in ('面', '粉', '粥'))
+
+
+def breakfast_coherent(profiles) -> bool:
+    """早餐饮品（豆浆/牛奶/酸奶）不得与湿主食（汤面/米粉/粥）同餐。"""
+    return not (any(is_breakfast_drink(p) for p in profiles)
+                and any(is_breakfast_wet_staple(p) for p in profiles))
+
+
 def template_for(combo, meal_type):
     """Describe a practical combination; roles inform ranking, not eligibility.
 
@@ -311,7 +353,7 @@ def template_for(combo, meal_type):
     # plain rice, one egg or one vegetable is not nutritionally complete enough.
     if len(ps) == 1 and '复合菜' not in ps[0].roles: return None
     if meal_type in ('早','加餐'):
-        if len(ps) > 3: return None
+        if len(ps) > 4: return None
         return '简易营养早餐' if len(ps) <= 2 else '灵活早餐搭配'
     if meal_type not in ('午','晚') or len(ps) > 4: return None
     roles = set().union(*(p.roles for p in ps))
@@ -336,29 +378,54 @@ def iter_template_combos(dishes, meal_type):
         bf_staples = [d for d in eligible if '主食' in m(d).roles]
         bf_non_staples = [d for d in eligible if '主食' not in m(d).roles]
         bf_proteins = [d for d in bf_non_staples if '蛋白质菜' in m(d).roles]
-        bf_sides = [d for d in bf_non_staples if '蛋白质菜' not in m(d).roles]
+        bf_nuts = [d for d in bf_non_staples if '坚果' in m(d).roles]
+        bf_sides = [d for d in bf_non_staples if '蛋白质菜' not in m(d).roles and '坚果' not in m(d).roles]
 
-        # 1道菜：仅复合主食（如燕麦香蕉酸奶碗）
+        # 饮品与湿主食互斥：拆成互斥桶——湿主食只与「非饮品」交叉，
+        # 饮品只出现在干主食 / 甜碗的搭配里（一致性校验见 breakfast_coherent）。
+        bf_wet_staples = [d for d in bf_staples if is_breakfast_wet_staple(m(d))]
+        bf_dry_staples = [d for d in bf_staples if not is_breakfast_wet_staple(m(d))]
+        bf_non_staples_no_drink = [d for d in bf_non_staples if not is_breakfast_drink(m(d))]
+        bf_proteins_no_drink = [d for d in bf_proteins if not is_breakfast_drink(m(d))]
+        bf_sides_no_drink = [d for d in bf_sides if not is_breakfast_drink(m(d))]
+
+        # 1道菜：仅复合主食（如燕麦香蕉酸奶碗、番茄鸡蛋面）
         for s in bf_staples:
             if '复合菜' in m(s).roles and template_for((s,), meal_type):
                 yield (s,)
         # 2道菜：1主食 + 1非主食，或 1蛋白 + 1配菜
-        for combo in product(bf_staples, bf_non_staples):
+        for combo in product(bf_wet_staples, bf_non_staples_no_drink):
+            if template_for(combo, meal_type): yield combo
+        for combo in product(bf_dry_staples, bf_non_staples):
             if template_for(combo, meal_type): yield combo
         for combo in product(bf_proteins, bf_sides):
             if template_for(combo, meal_type): yield combo
         # 3道菜：1主食 + 1蛋白 + 1配菜，或 1主食 + 2非蛋白配菜（如牛奶+水果）
-        for combo in product(bf_staples, bf_proteins, bf_sides):
+        for combo in product(bf_wet_staples, bf_proteins_no_drink, bf_sides_no_drink):
             if template_for(combo, meal_type): yield combo
-        for s in bf_staples:
+        for combo in product(bf_dry_staples, bf_proteins, bf_sides):
+            if template_for(combo, meal_type): yield combo
+        for s in bf_wet_staples:
+            for a, b in combinations(bf_sides_no_drink, 2):
+                if template_for((s, a, b), meal_type): yield (s, a, b)
+        for s in bf_dry_staples:
             for a, b in combinations(bf_sides, 2):
                 if template_for((s, a, b), meal_type): yield (s, a, b)
+        # 4道菜：1主食 + 1蛋白 + 1配菜 + 1坚果（坚果为可选加餐位，不与水果/奶抢位）
+        for combo in product(bf_wet_staples, bf_proteins_no_drink, bf_sides_no_drink):
+            for n in bf_nuts:
+                c4 = combo + (n,)
+                if template_for(c4, meal_type): yield c4
+        for combo in product(bf_dry_staples, bf_proteins, bf_sides):
+            for n in bf_nuts:
+                c4 = combo + (n,)
+                if template_for(c4, meal_type): yield c4
         return
 
     # 午/晚餐按角色拆成 4 个互不重叠的桶
     savory = [
-        d for d in available if m(d).breakfast not in ('B', 'M', 'F')
-        and not m(d).roles & {'未知', '奶类', '水果'}
+        d for d in available if m(d).breakfast not in ('B', 'M', 'F', 'G')
+        and not m(d).roles & {'未知', '奶类', '水果', '坚果'}
     ]
     pure_staples = [d for d in savory if '主食' in m(d).roles and len(m(d).roles - {'汤羹'}) == 1]
     staple_mains = [d for d in savory if '主食' in m(d).roles and len(m(d).roles - {'汤羹'}) > 1]
@@ -449,20 +516,35 @@ class SelectionContext:
     families: tuple
     recent_purchases: frozenset
     today_used: frozenset
+    rep_recent_veg_ids: frozenset = frozenset()
 
 
-def build_selection_context(previous, protein_previous, same_day):
-    """按 selection_key / repetition_cost 需要的口径，把历史聚合量算一次。"""
+def build_selection_context(previous, protein_previous, same_day, offered=None):
+    """按 selection_key / repetition_cost 需要的口径，把历史聚合量算一次。
+
+    `previous`：已选中候选，每个已生成餐位一条（用于相邻餐 / 采购复用 / 蛋白族轮换）。
+    `offered`：可选，list-of-lists——每个已生成餐位的**全部候选**（rank1~3），用于
+    跨天重复计数。传了就用它算 rep_counts / rep_recent_counts / rep_veg_families /
+    dish_sets，让「换一换翻到的备选候选」也计入跨天已占用（否则备选菜可跨天重复，
+    见 IMP-059）。未传时退回 `previous`（每餐位一条），行为与旧版一致。
+    """
     from .practical_quality import main_family, purchases
 
-    recent = previous[-6:] if previous else []
-    rep_counts = Counter(base_dish_id(d) for c in previous for d in c.dish_ids)
-    rep_recent_counts = Counter(base_dish_id(d) for c in recent for d in c.dish_ids)
+    # 重复计数口径：默认每餐位一条（selected），可扩到每餐位全部候选（offered）。
+    rep_groups = offered if offered is not None else [[c] for c in previous]
+    rep_counts = Counter(base_dish_id(d) for group in rep_groups for c in group for d in c.dish_ids)
+    recent_groups = rep_groups[-6:]
+    rep_recent_counts = Counter(base_dish_id(d) for group in recent_groups for c in group for d in c.dish_ids)
+    # IMP-059：窗口内（近 6 餐）已出蔬菜 id 集合，供 repetition_cost 做蔬菜强软约束。
+    rep_recent_veg_ids = frozenset(
+        base_dish_id(p.dish_id) for group in recent_groups for c in group for p in c.portions
+        if profile(p.facts).roles == {'蔬菜'}
+    )
     rep_adjacent = frozenset(base_dish_id(d) for d in previous[-1].dish_ids) if previous else frozenset()
-    rep_veg_families = Counter(profile(p.facts).family for c in previous for p in c.portions
+    rep_veg_families = Counter(profile(p.facts).family for group in rep_groups for c in group for p in c.portions
                                if profile(p.facts).roles == {'蔬菜'})
     rep_prev_sweet = sum(profile(q.facts).staple == 'sweet' for c in previous for q in c.portions)
-    dish_sets = tuple(frozenset(base_dish_id(d) for d in c.dish_ids) for c in previous)
+    dish_sets = tuple(frozenset(base_dish_id(d) for d in c.dish_ids) for group in rep_groups for c in group)
 
     fam_src = protein_previous if protein_previous is not None else previous
     families = tuple(main_family(c) for c in fam_src)
@@ -474,6 +556,7 @@ def build_selection_context(previous, protein_previous, same_day):
         rep_adjacent=rep_adjacent, rep_veg_families=rep_veg_families,
         rep_prev_sweet=rep_prev_sweet, dish_sets=dish_sets, families=families,
         recent_purchases=recent_purchases, today_used=today_used,
+        rep_recent_veg_ids=rep_recent_veg_ids,
     )
 
 

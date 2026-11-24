@@ -535,11 +535,16 @@ def diversify(
     candidates: Sequence[Candidate],
     count: int = 3,
     start_id: int = 1,
+    recent_used: frozenset[str] | None = None,
 ) -> list[Candidate]:
-    """第 3 步：挑出 2~3 个差异化候选（优先换主食材，其次换做法），并分配 candidate_id 与 rank。"""
+    """第 3 步：挑出 2~3 个差异化候选（优先换主食材，其次换做法），并分配 candidate_id 与 rank。
+
+    `recent_used`：近窗已出非主食菜 base_dish_id 集合（IMP-059 第 3 步）——传给
+    `diverse_choices`，让「换一换」翻到的备选候选也避开邻天已出菜，不只避开选中那一道。
+    """
     from .practical_quality import diverse_choices,weights
     if candidates and all(weights(p.facts) for p in candidates[0].portions):
-        picked = diverse_choices(candidates,count)
+        picked = diverse_choices(candidates, count, recent_used)
         for index,cand in enumerate(picked,start=1):
             cand.candidate_id = start_id + index - 1
             cand.rank = index

@@ -206,7 +206,23 @@ def alternative_overlap(a,b):
     sa,sb=staple_key(a),staple_key(b)
     return .44*same+.27*bool(f and f==g)+.025*bool(sa and sa==sb)+.12*ingredient_overlap
 
-def diverse_choices(candidates,count):
+
+#: IMP-059 第 3 步：备选候选与「近窗已出菜」重合的惩罚权重（配合 diverse_choices 用）。
+_W_WINDOW_OVERLAP = 0.6
+
+
+def window_overlap(c, recent_used):
+    """候选与「近窗已出菜」的重合度（0~1，非主食菜按 base_dish_id 计，主食不计）。"""
+    if not recent_used:
+        return 0.0
+    from .meal_templates import non_staple_base_ids
+    ids = non_staple_base_ids(c)
+    if not ids:
+        return 0.0
+    return len(ids & recent_used) / len(ids)
+
+
+def diverse_choices(candidates,count,recent_used=None):
     if not candidates:return []
     want=max(1,min(int(count),3));picked=[candidates[0]]
     from .meal_templates import base_dish_id
@@ -223,7 +239,9 @@ def diverse_choices(candidates,count):
         # Preserve the contextual order as a tie-breaker and limit score sacrifice.
         best=min(c.score for _,c in choices)
         near=[(i,c) for i,c in choices if c.score<=best+.52]
-        i,c=min(near,key=lambda ic:(ic[1].score+max(alternative_overlap(ic[1],x) for x in picked)+.08*ic[0]/max(len(remaining),1),ic[0]))
+        i,c=min(near,key=lambda ic:(ic[1].score+max(alternative_overlap(ic[1],x) for x in picked)
+                                     +_W_WINDOW_OVERLAP*window_overlap(ic[1],recent_used)
+                                     +.08*ic[0]/max(len(remaining),1),ic[0]))
         picked.append(c);seen.add(key(c));remaining.pop(i)
     return picked
 
@@ -278,6 +296,40 @@ def plan_quality_diagnostics(slots):
             day['delta_kcal']=round(day['actual_kcal']-day['planned_target_kcal'],1)
         else:day['delta_kcal']=None
     return {'daily_planned_scope':days,'meals':rows,'main_protein_counts_lunch_dinner':dict(families),'recent_ingredient_reuse_ratio':round(reused/max(total,1),3)}
+
+
+def adjacent_offer_overlap(slots):
+    """相邻天（同餐次）备选候选菜品重合率（IMP-059 第 4 步诊断）。
+
+    对每个餐次、每对相邻天：day+1 提供的非主食菜里，有多少比例是 day 已提供过的
+    （按 base_dish_id 计），逐对取平均。比值越低，说明「换一换翻到的候选」跨天越不重复。
+    """
+    from .meal_templates import non_staple_base_ids
+    by_meal: dict[str, dict[str, set]] = {}
+    for s in slots:
+        ids: set[str] = set()
+        for c in s.candidates:
+            ids |= non_staple_base_ids(c)
+        by_meal.setdefault(s.meal_type, {})[str(s.slot_date)] = ids
+
+    per_meal: dict[str, dict] = {}
+    ratios: list[float] = []
+    for meal_type, days in by_meal.items():
+        ordered = sorted(days.items())
+        pair_ratios: list[float] = []
+        for (d0, a), (d1, b) in zip(ordered, ordered[1:]):
+            if not b:
+                continue
+            pair_ratios.append(len(a & b) / len(b))
+        per_meal[meal_type] = {
+            "adjacent_pairs": len(pair_ratios),
+            "avg_offer_repeat_ratio": round(sum(pair_ratios) / len(pair_ratios), 3) if pair_ratios else None,
+        }
+        ratios.extend(pair_ratios)
+    return {
+        "per_meal": per_meal,
+        "overall_avg_offer_repeat_ratio": round(sum(ratios) / len(ratios), 3) if ratios else None,
+    }
 
 
 def balance_rotation_loss(candidate,current,slot,slots):

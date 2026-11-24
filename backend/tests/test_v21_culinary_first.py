@@ -13,10 +13,10 @@ from collections import Counter
 
 class CulinaryFirst(unittest.TestCase):
     def setUp(self):
-        self.r=dish('061','白米饭',{'大米':50}); self.n=dish('065','清汤面',{'面条':75})
-        self.ch=dish('080','白切鸡腿',{'鸡腿':100}); self.v=dish('088','清炒生菜',{'生菜':200,'精盐':.8})
-        self.vls=dish('088-LS','清炒生菜（少盐）',{'生菜':200,'精盐':.4}); self.f=dish('060','醋溜土豆丝',{'土豆':100,'甜椒':50})
-        self.b=dish('094','清炒油菜',{'油菜':150}); self.t=N(meal_type='午',kcal=950.)
+        self.r=dish('121','白米饭',{'大米':50}); self.n=dish('125','清汤面',{'面条':75})
+        self.ch=dish('140','白切鸡腿',{'鸡腿':100}); self.v=dish('148','清炒生菜',{'生菜':200,'精盐':.8})
+        self.vls=dish('148-LS','清炒生菜（少盐）',{'生菜':200,'精盐':.4}); self.f=dish('060','醋溜土豆丝',{'土豆':100,'甜椒':50})
+        self.b=dish('154','清炒油菜',{'油菜':150}); self.t=N(meal_type='午',kcal=950.)
     def test_staple_repeat_is_neutral(self):
         meal=cand(self.r,self.ch,self.v)
         repeated=cand(self.r,self.n)
@@ -45,7 +45,7 @@ class CulinaryFirst(unittest.TestCase):
         self.assertEqual(diverse_choices([first,same,other],3),[first,other])
         self.assertGreater(repetition_cost(same,[first]),0)
     def test_expansion_and_safety_diagnostics(self):
-        extra=[dish('089','蒜炒空心菜',{'空心菜':100}),self.b,self.v]
+        extra=[dish('149','蒜炒空心菜',{'空心菜':100}),self.b,self.v]
         rows=list(extension_combos([self.r,self.ch,*extra],'午'))
         self.assertTrue(rows);self.assertTrue(all(len(c)==4 and template_for(c,'午') for c in rows))
         who=Profile(gender='男',age=20,height_cm=176,weight_kg=70)
