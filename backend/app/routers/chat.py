@@ -299,7 +299,9 @@ def agent_chat(
                 )
                 finish_reason = "clarify"
             else:
-                # context 指定方案 → 先下发 current_plan（面板刷新走同结构接口）
+                # context 指定方案 → 校验归属并回填 done.meal_plan_id。
+                # 仅卡片变更动作（换/选/确认）额外下发 current_plan；解释（explain）等只读动作
+                # 不再把 current_plan 当聊天卡下发，否则前端会渲染成「当前规划」卡、附在解释回答后面。
                 raw_plan_id = (req.context or {}).get("meal_plan_id")
                 if raw_plan_id:
                     payload = _load_plan_payload(db, int(raw_plan_id), req.user_id)
@@ -314,7 +316,8 @@ def agent_chat(
                         finish_reason = "error"
                     else:
                         meal_plan_id = payload["meal_plan_id"]
-                        yield _sse("artifact", {"type": "current_plan", "payload": payload})
+                        if (req.context or {}).get("action") in ("swap_candidate", "choose_candidate", "confirm"):
+                            yield _sse("artifact", {"type": "current_plan", "payload": payload})
 
                 if finish_reason != "error":
                     try:
