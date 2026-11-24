@@ -27,18 +27,6 @@
         <div class="po-cal-sub">目标为份量量级参考，不做热量缺口/盈余</div>
       </div>
 
-      <div
-        v-if="plan.why_summary || plan.reference_hints.length || plan.data_quality_notes.length"
-        class="plan-why"
-      >
-        <div class="plan-why-title">💡 为什么这样搭</div>
-        <p v-if="plan.why_summary" class="plan-why-summary">{{ plan.why_summary }}</p>
-        <ul v-if="plan.reference_hints.length || plan.data_quality_notes.length" class="plan-why-list">
-          <li v-for="(h, i) in plan.reference_hints" :key="'h' + i">{{ h }}</li>
-          <li v-for="(n, i) in plan.data_quality_notes" :key="'n' + i">{{ n }}</li>
-        </ul>
-      </div>
-
       <div class="section-head-row">
         <div class="section-head-title">🍽️ 食谱概览</div>
         <button class="expand-all-btn" @click="toggleAllDays">{{ allOpen ? '全部收起' : '全部展开' }}</button>
@@ -84,6 +72,27 @@
         📊 {{ reportLoading ? '正在查看…' : '查看这份方案的膳食报告' }} →
       </button>
       <div class="panel-note">{{ isFixed ? '💡 方案已生效，右侧「食材清单」已按天同步采购项，建议分批购买。' : '💡 确认方案后，「食材清单」才会同步更新采购项。' }}</div>
+
+      <div
+        v-if="plan.reference_hints.length"
+        class="plan-nutrition"
+      >
+        <div class="plan-nutrition-title">🥗 营养提示</div>
+        <ul class="plan-nutrition-list">
+          <li v-for="(h, i) in plan.reference_hints" :key="'h' + i">{{ h }}</li>
+        </ul>
+      </div>
+
+      <div v-if="plan.data_quality_notes.length" class="plan-data-notes">
+        <button class="pdn-toggle" @click="showDataNotes = !showDataNotes">
+          <span>📌 数据说明</span>
+          <span class="pdn-count">{{ plan.data_quality_notes.length }}</span>
+          <span class="pdn-chevron">{{ showDataNotes ? '▾' : '▸' }}</span>
+        </button>
+        <ul v-if="showDataNotes" class="pdn-list">
+          <li v-for="(n, i) in plan.data_quality_notes" :key="'n' + i">{{ n }}</li>
+        </ul>
+      </div>
     </template>
 
     <template v-else-if="error">
@@ -124,6 +133,8 @@ const loading = ref(false)
 const error = ref('')
 const plan = ref(null)
 const openDays = ref([])
+// 「数据说明」脚注默认折叠（内容偏数据口径，不属于上方「营养提示」）
+const showDataNotes = ref(false)
 // 正在「换一换」的餐位 slot_id（用于按钮 spinner / 禁用）
 const swapping = ref('')
 // 正在检查/加载方案级膳食报告
@@ -335,29 +346,22 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
   cursor: not-allowed;
 }
 
-/* IMP-014：方案级「为什么这样搭」依据 */
-.plan-why {
+/* 方案级「营养提示」：跨日微量补足建议（为什么这么搭归对话 explain，不在面板重复） */
+.plan-nutrition {
   margin: 10px 0 14px;
   padding: 10px 12px;
   background: var(--bg-soft, #fafafa);
   border-radius: 10px;
 }
 
-.plan-why-title {
+.plan-nutrition-title {
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-main, #333);
   margin-bottom: 6px;
 }
 
-.plan-why-summary {
-  margin: 0 0 6px;
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: var(--text-sub, #7a7a7a);
-}
-
-.plan-why-list {
+.plan-nutrition-list {
   margin: 0;
   padding-left: 16px;
   font-size: 12px;
@@ -365,7 +369,52 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
   color: var(--text-sub, #7a7a7a);
 }
 
-.plan-why-list li {
+.plan-nutrition-list li {
+  margin: 2px 0;
+}
+
+/* 数据说明：中性脚注，默认折叠，与上方「营养提示」分开，不放人话依据里 */
+.plan-data-notes {
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  background: var(--bg-soft, #fafafa);
+  border-radius: 10px;
+}
+
+.pdn-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-sub, #7a7a7a);
+  text-align: left;
+}
+
+.pdn-count {
+  font-size: 11px;
+  color: var(--text-sub, #9a9a9a);
+}
+
+.pdn-chevron {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-sub, #9a9a9a);
+}
+
+.pdn-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-sub, #7a7a7a);
+}
+
+.pdn-list li {
   margin: 2px 0;
 }
 </style>

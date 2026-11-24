@@ -717,8 +717,14 @@ button {
   text-align: left;
 }
 
-.card-foot-left:hover {
+.card-foot-left:hover:not(:disabled) {
   color: var(--brand-hover);
+}
+
+.card-foot-left:disabled {
+  color: var(--text-sub);
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .fix-btn {

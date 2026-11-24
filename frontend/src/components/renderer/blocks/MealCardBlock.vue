@@ -97,7 +97,7 @@
     <div class="card-foot">
       <button
         class="card-foot-left"
-        :disabled="readonly || chat.sending"
+        :disabled="readonly"
         :title="readonly ? '历史快照，请到当前规划查看搭配依据' : '让膳宝解释为什么这样搭'"
         @click="onReason"
       >💡 为什么这样搭？</button>
@@ -198,13 +198,13 @@ const statusText = computed(() =>
 )
 const statusClass = computed(() => (readonly.value ? 'readonly' : isFixed.value ? 'fixed' : 'draft'))
 
-// 就地更新（换一换/选用/确认）不再重建组件（__key 已改为稳定身份），这里显式复位局部状态，
-// 清掉选中候选高亮 / 展开天数等残留（原 BUG-045 靠「换 key 重建」实现，改为 watch 复位，避免重放淡入动画）。
+// 就地更新（换一换/选用/确认）不再重建组件（__key 已改为稳定身份），这里只复位「选中候选」高亮，
+// 不重置展开天数——展开态是用户的浏览位置，换一换只改候选，不应把已展开的天收起来（BUG：整卡刷新收折）。
+// 新方案（不同 raw_id）会因 __key 变化重建组件实例，openDays 由 ref(defaultOpenDays()) 自然重新初始化。
 watch(
   () => props.block,
   () => {
     pickedId.value = ''
-    openDays.value = defaultOpenDays()
   }
 )
 
