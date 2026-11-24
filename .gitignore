@@ -45,3 +45,5 @@ backend/tests/demo_plan.py
 backend/tests/fp_check.py
 backend/tests/profile_engine_phases.py
 backend/tests/_demo_output.txt
+backend/tests/_diag*
+backend/tests/_nut_check*
