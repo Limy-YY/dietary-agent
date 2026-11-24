@@ -5,10 +5,10 @@
         <div class="rc-title">📊 {{ report.headline }}</div>
         <div class="rc-meta">
           {{ report.meta.range_text }}
-          <span v-if="report.meta.valid_days">· 有效 {{ report.meta.valid_days }} 天</span>
+          <span v-if="report.meta.valid_days">· 共 {{ report.meta.valid_days }} 天</span>
           <span v-if="report.meta.total_meals"> · {{ report.meta.total_meals }} 餐</span>
           <el-tooltip placement="top" effect="dark" :content="dailyBasisTip">
-            <span class="rc-basis">日均口径</span>
+            <span class="rc-basis">按已记录餐次</span>
           </el-tooltip>
         </div>
       </div>
@@ -57,8 +57,8 @@
 
       <div class="rp-section">
         <div class="rp-section-title">🔬 {{ report.micro.title }}</div>
-        <div v-if="report.micro.overall_pct != null" class="rp-micro-overall">
-          综合达标率 <b>{{ report.micro.overall_pct }}%</b>
+        <div v-if="report.coverage && report.coverage.full_days != null" class="rp-micro-overall">
+          完整 {{ report.coverage.full_days }} 天 · 部分 {{ report.coverage.partial_days }} 天 · 无记录 {{ report.coverage.empty_days }} 天
           <template v-if="report.micro.evaluable_count != null && report.micro.total_count != null">
             · 可评估 {{ report.micro.evaluable_count }}/{{ report.micro.total_count }} 项
           </template>
@@ -67,17 +67,22 @@
           <div v-for="(m, i) in report.micro.items" :key="i" class="rp-micro">
             <MicroRing :item="m" :size="42" />
             <div class="rp-micro-name">{{ m.name }}</div>
-            <div v-if="m.valid_days != null && m.valid_days > 0" class="rp-micro-note-item">
+            <div v-if="m.intake != null && m.target != null" class="rp-micro-note-item">
+              完整天日均 {{ fmtNum(m.intake) }}{{ m.unit }} / 参考 {{ fmtNum(m.target) }}{{ m.unit }}
+            </div>
+            <div v-if="m.covered_pct == null" class="rp-micro-note-item">
+              {{ report.coverage && report.coverage.full_days > 0 ? '该微量部分餐次缺数据，不判达标' : '无完整天，不判达标' }}
+            </div>
+            <div v-else class="rp-micro-note-item">
               {{ fmtNum(m.achieved_days) }}/{{ fmtNum(m.valid_days) }} 天达标
             </div>
-            <div v-else class="rp-micro-note-item">无日数据</div>
             <div class="rp-micro-flags">
               <span v-if="m.over_days > 0" class="rp-flag over">超标 {{ fmtNum(m.over_days) }} 天</span>
               <span v-if="m.under_days > 0" class="rp-flag under">不足 {{ fmtNum(m.under_days) }} 天</span>
             </div>
           </div>
         </div>
-        <p class="rp-micro-note">达标天数按「当日摄入 ≥ 每日参考量 80% 且未超每日上限」计；仅统计有数据的日期，数据不足的日期不计入。</p>
+        <p class="rp-micro-note">环形百分比 = 完整天（三餐齐全）日均摄入 ÷ 每日参考量；「N/M 天达标」按「当日摄入 ≥ 参考量 80% 且未超每日上限」计。部分记录天不计入、不外推。</p>
       </div>
 
       <div v-if="report.daily_trend.length" class="rp-section">
@@ -171,7 +176,7 @@ function ctrlText(s) {
 }
 
 const dailyBasisTip =
-  '日均 = 总摄入 ÷ 天当量；天当量按每餐能量权重折算（早 25%／午 40%／晚 35%），没数据的日子不计入分母'
+  '摄入达成率 = 完整天（三餐齐全）日均摄入 ÷ 每日参考量；部分记录天不计入、也不外推。达标天数只统计三餐齐全的完整天'
 
 const maxCalories = computed(() => {
   const list = report.value.daily_trend.map((d) => Number(d.calories) || 0)

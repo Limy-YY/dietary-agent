@@ -357,8 +357,8 @@ export function normalizeGroups(groups) {
 /* ---------- NutritionReport ---------- */
 
 const MICRO_KEYS = ['calcium', 'iron', 'zinc', 'vitamin_a', 'vitamin_b1', 'vitamin_b2', 'vitamin_c']
-// 达标天数维度（achievement.micro.level）→ 环形颜色
-const MICRO_LEVEL_STATUS = { ok: 'ok', warn: 'warn', danger: 'danger' }
+// 关键微量主指标 = 完整天日均达成率（key_micro_summary.status）→ 环形颜色
+const MICRO_STATUS = { 达标: 'ok', 不足: 'warn', 超标: 'danger', 参考提示: 'neutral' }
 
 const MACRO_LEVEL_TAG = { ok: '达标', warn: '注意', low: '偏低', high: '偏高' }
 
@@ -479,6 +479,7 @@ export function normalizeReport(report) {
   const mealCount = numOrNull(pick(completeness, 'meal_count'))
   const energy = numOrNull(pick(macro, 'energy_kcal'))
   const planStats = pick(summary, 'plan_stats') || {}
+  const coverage = summary.coverage || {}
 
   const macroCell = (key) => macroAchieve[key] || {}
   const segments = [
@@ -496,26 +497,29 @@ export function normalizeReport(report) {
     )
   ]
 
-  // 关键微量统一用「达标天数」口径：主指标 = 达标天数占比（achieved_days/valid_days），
-  // 环形进度与颜色都取 achievement（按天统计），不再混用日均达成率/覆盖度。
+  // 关键微量主指标 = 完整天日均达成率（covered_pct = 完整天日均摄入 ÷ 每日参考量），
+  // 部分记录天不计入、不外推；达标天数只统计「三餐齐全」的完整天，作为环下注脚。
   const microItems = MICRO_KEYS.map((k) => {
     const m = microMap[k] || {}
     const a = microAchieve[k] || {}
-    const achievedPct = numOrNull(a.achieved_pct)
-    const level = typeof a.level === 'string' && a.level ? a.level : 'unknown'
+    const coveredPct = numOrNull(m.covered_pct)
+    const mStatus = str(m.status, '')
+    const hasData = coveredPct != null
     return {
       key: k,
       name: str(pick(m, 'name_zh'), k),
       unit: str(pick(m, 'unit'), ''),
-      achieved_pct: achievedPct,
+      covered_pct: coveredPct,
+      intake: numOrNull(m.intake),
+      target: numOrNull(m.target),
       achieved_days: numOrNull(a.achieved_days),
       valid_days: numOrNull(a.valid_days),
       over_days: numOrNull(a.over_days),
       under_days: numOrNull(a.under_days),
-      level,
-      percent: achievedPct,
-      value: achievedPct == null ? '—' : achievedPct + '%',
-      status: MICRO_LEVEL_STATUS[level] || 'neutral'
+      percent: coveredPct,
+      value: hasData ? coveredPct + '%' : '—',
+      // 无完整天（参考提示）→ neutral「—」；达标绿 / 不足琥珀 / 超标红
+      status: !hasData ? 'neutral' : MICRO_STATUS[mStatus] || 'neutral'
     }
   }).filter((x) => x.name)
 
@@ -573,11 +577,17 @@ export function normalizeReport(report) {
       }
     ],
     micro: {
-      title: '关键微量（达标天数）',
+      title: '关键微量（完整天）',
       items: microItems,
-      overall_pct: achievement ? numOrNull(achievement.micro_overall_pct) : null,
-      evaluable_count: achievement ? numOrNull(achievement.micro_evaluable_count) : null,
-      total_count: achievement ? numOrNull(achievement.micro_total_count) : null
+      evaluable_count: microItems.filter((x) => x.covered_pct != null).length,
+      total_count: MICRO_KEYS.length
+    },
+    coverage: {
+      days: numOrNull(pick(coverage, 'days')),
+      recorded_days: numOrNull(pick(coverage, 'recorded_days')),
+      full_days: numOrNull(pick(coverage, 'full_days')),
+      partial_days: numOrNull(pick(coverage, 'partial_days')),
+      empty_days: numOrNull(pick(coverage, 'empty_days'))
     },
     completeness: {
       meal_count: mealCount,

@@ -220,6 +220,7 @@ export function toNutritionReport(legacy, { planId, reportId, windowDays = 7 } =
       name_zh: meta.name_zh,
       target: meta.target,
       unit: meta.unit,
+      // mock 简化口径：把「完整天日均达成率」直接当「日均达成率」（未拆天当量），与真后端字段同构
       intake,
       gap: intake == null ? null : Number((intake - meta.target).toFixed(1)),
       covered_pct: pct,

@@ -2,14 +2,16 @@
 
 口径（《后端接口契约 v1.2》§3.5 / §4.3）：
 - 摄入取方案每个餐位「已选中候选」的 `macro_estimate / micro_estimate / oil_salt_estimate`；
-- 参考值（`target`）是**每日**推荐量，因此汇总值统一按方案跨度天数折算为**日均**再比较，
-  否则多日方案会被误判为大幅超标；
+- 参考值（`target`）是**每日**推荐量；微量「摄入达成率」= 完整天（早/午/晚三餐齐全）日均摄入 ÷
+  每日参考量，部分记录天不计入、也不外推成整天；
+- `coverage` 给覆盖概览：`days / recorded_days / full_days（三餐齐全）/ partial_days / empty_days`；
 - 仅 7 种关键微量参与达标判断（与库内 `app.v_key_micronutrient` 一致）；
 - `null ≠ 0`：某微量无数据时 `intake=null`、`status=参考提示`，不得判为不足或达标；
 - `daily_trend` 给按 `slot_date` 分天的实际摄入序列（当日合计，不折日均），供报告页画趋势条；
   某天该指标有餐位缺值时同样为 `null`，`status` 按当日能量对目标能量的偏离判 `ok / over / low`；
-- `achievement` 给达标率：7 项关键微量按「达标天数 ÷ 有效天数」算百分比，
-  宏量按供能比是否落在合理区间判；有效天数为 0 时百分比为 `null`（不按 0% 论）；
+- `achievement` 给达标率：7 项关键微量按「达标天数 ÷ 完整天有效天数」算百分比——
+  只统计「早/午/晚三餐齐全」的完整天，部分记录天不判断全天达标；宏量按供能比是否落在合理区间判；
+  有效天数为 0 时百分比为 `null`（不按 0% 论）；
 - 铁按普通口径（未区分经期），需在 `reference_hints` 注明；
 - `summary.reference_hints` 只放「口径/溯源说明」，`summary.insights` 放「结论/洞察」
   （结构化：verdict 总评 / plan 本方案结论 / advice 补位建议 / trend 长期回看，
@@ -45,6 +47,10 @@ MICRO_IDS = (
     "vitamin_b2",
     "vitamin_c",
 )
+
+# 完整天判定：早/午/晚三餐都已被选中（固定）才算一个「可判断达标」的完整天；
+# 只记录一两餐的「部分天」不做全天达标判断（不外推）。
+FULL_DAY_MEAL_TYPES = frozenset({"早", "午", "晚"})
 
 # 钠「别超」参考：PI-NCD / WHO/NHC 建议上限 2000mg/日（总钠），与规则引擎
 # DEFAULT_DAILY_LIMITS["salt_g"]=5g（≈2000mg 钠）、疾病规则 HTN-SODIUM-WHO-NHC-2000
@@ -293,12 +299,10 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
     salt: list[float] = []
     sodium: list[float] = []
     total_salt_equivalent: list[float] = []
-    micro_values: dict[str, list[float]] = {k: [] for k in MICRO_IDS}
-    micro_count: dict[str, int] = {k: 0 for k in MICRO_IDS}
     meals_with_micro = 0
 
     by_date: dict[str, dict] = {}
-    # 天当量累计：每餐按能量权重折算（早0.25/午0.4/晚0.35），完整一天=1.0
+    # 天当量累计：每餐按能量权重折算（早0.30/午0.40/晚0.30），完整一天=1.0（仅宏量用）
     day_equiv = 0.0
 
     def _bump(drow: dict, key: str, value: float) -> None:
@@ -309,12 +313,14 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
         # 按天分组的原始累计，供 daily_trend 使用（口径同日均：缺值不补 0）
         drow = by_date.setdefault(
             str(r["slot_date"]),
-            {"sum": {}, "count": {}, "meals": 0, "selected": 0, "micro_meals": 0},
+            {"sum": {}, "count": {}, "meals": 0, "selected": 0, "micro_meals": 0,
+             "selected_meal_types": set(), "full_count": {}},
         )
         drow["meals"] += 1
         if r["selected_candidate_id"] is None:
             continue
         drow["selected"] += 1
+        drow["selected_meal_types"].add(r["meal_type"])
         day_equiv += DEFAULT_MEAL_RATIOS.get(r["meal_type"], 0.0)
         macro = r["macro_estimate"] if isinstance(r["macro_estimate"], dict) else {}
         micro = r["micro_estimate"] if isinstance(r["micro_estimate"], dict) else {}
@@ -347,25 +353,50 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
             total_salt_equivalent.append(tev); _bump(drow,"total_salt_equivalent_g",tev)
 
         has_micro = False
+        is_full_meal = r["meal_type"] in FULL_DAY_MEAL_TYPES
         for k in MICRO_IDS:
             v = _num(micro.get(k))
             if v is not None:
-                micro_values[k].append(v)
-                micro_count[k] += 1
                 has_micro = True
                 _bump(drow, "m:" + k, v)
+                # 完整天判定只看早/午/晚三餐是否有值；加餐缺值不把整天踢掉。
+                if is_full_meal:
+                    drow["full_count"]["m:" + k] = drow["full_count"].get("m:" + k, 0) + 1
         if has_micro:
             meals_with_micro += 1
             drow["micro_meals"] += 1
 
+    # 覆盖概览：按「天」分三档——完整天（早午晚齐全）/ 部分记录天 / 无记录天。
+    recorded_days = sum(1 for d in by_date.values() if d["selected"] > 0)
+    full_days = sum(1 for d in by_date.values() if FULL_DAY_MEAL_TYPES.issubset(d["selected_meal_types"]))
+    coverage = {
+        "days": int(days),
+        "recorded_days": recorded_days,
+        "full_days": full_days,
+        "partial_days": max(recorded_days - full_days, 0),
+        "empty_days": max(int(days) - recorded_days, 0),
+    }
+
+    # 完整天（早午晚齐全）且该微量三餐都有值的「全天摄入」序列，供「完整天日均达成率 / 达标天数」使用。
+    # 部分记录天不进入（不判断、不外推）。
+    full_day_micro: dict[str, list[float]] = {k: [] for k in MICRO_IDS}
+    for d in by_date.values():
+        if not FULL_DAY_MEAL_TYPES.issubset(d["selected_meal_types"]):
+            continue
+        for k in MICRO_IDS:
+            # 「完整天」只要求早/午/晚三餐都有该微量值；加餐（水果/坚果/酸奶等）缺值不算异常，
+            # 也不外推——加餐有值则并入全天摄入（d["sum"] 本就只累加有值的餐位），缺值不把整天踢掉。
+            if d["full_count"].get("m:" + k, 0) >= len(FULL_DAY_MEAL_TYPES):
+                full_day_micro[k].append(round(d["sum"].get("m:" + k, 0.0), 2))
+
     # ── 日均口径 ────────────────────────────────────────────────
     # 日均 = Σ(所有已选餐位的该项摄入) ÷ 天当量
     #
-    # 分母「天当量」= Σ 每餐的能量权重（DEFAULT_MEAL_RATIOS：早 0.25 / 午 0.4 / 晚 0.35），
+    # 分母「天当量」= Σ 每餐的能量权重（DEFAULT_MEAL_RATIOS：早 0.30 / 午 0.40 / 晚 0.30），
     # 而不是窗口天数、也不是「有餐次的天数」：
-    #   · 完整一天（早+午+晚）= 0.25 + 0.4 + 0.35 = 1.0 天
-    #   · 只有午餐的一天            = 0.4 天
-    #   · 只有早餐的一天            = 0.25 天
+    #   · 完整一天（早+午+晚）= 0.30 + 0.40 + 0.30 = 1.0 天
+    #   · 只有午餐的一天            = 0.40 天
+    #   · 只有早餐的一天            = 0.30 天
     #   · 没数据的日子              = 0（不进分子、也不进分母）
     # 这样不完整的日子按它那一餐的能量权重折算，既不会被当成整天摊薄，也不会按 1/3 等权。
     covered_day_equiv = day_equiv or 1.0
@@ -384,6 +415,7 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
         "selected_meals": selected_meals,
         "known_meal_count": meals_with_micro,
         "missing_meal_count": meal_count - meals_with_micro,
+        "coverage": coverage,
         "energy_kcal": _daily(kcal, 1),
         "protein_g": _daily(protein, 1),
         "fat_g": _daily(fat, 1),
@@ -393,12 +425,8 @@ def _aggregate_rows(rows: list[dict], days: int, subject: str = "窗口") -> dic
         "salt_g": _daily(salt, 1),
         "sodium_mg": _daily(sodium, 1),
         "total_salt_equivalent_g": _daily(total_salt_equivalent, 2),
-        "micro_daily": {
-            k: (round(sum(micro_values[k]) / covered_day_equiv, 2) if micro_count[k] else None)
-            for k in MICRO_IDS
-        },
-        "micro_count": micro_count,
-        # 内部结构（不对外）：按 slot_date 的原始累计，仅供 daily_trend / achievement 使用
+        "full_day_micro": full_day_micro,
+        # 内部结构（不对外）：按 slot_date 的原始累计，仅供 daily_trend 使用
         "_by_date": by_date,
     }
 
@@ -469,12 +497,14 @@ def _macro_summary(agg: dict, refs: dict | None = None) -> dict:
     }
 
 
-def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, list[str]]:
-    """返回 (key_micro_summary, 不足项清单)。intake 为日均值，target 为每日参考量（RNI/AI）。
+def _micro_summary(agg: dict, refs: dict) -> tuple[dict, list[str]]:
+    """返回 (key_micro_summary, 不足项清单)。
 
+    `intake` = 完整天（早/午/晚三餐齐全且该微量三餐都有值）的日均摄入；
+    `covered_pct = intake ÷ target` 是「完整天日均达成率」。
+    部分记录天不计入、不外推（微量没有权威的「每餐目标」，只对全天判断）。
     达标区间：达到推荐量的 80%（covered>=80）即算达标，且不超过每日可耐受最高摄入量（UL）。
     「超标」只对 UL 判：超过 RNI/AI（>100%）不算超标，只有超过 UL 才有风险。
-    B1/B2 等无 UL 的微量只判「不足/达标」，永不判超标。
     """
     summary: dict[str, dict] = {}
     shortfall: list[str] = []
@@ -483,8 +513,9 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
         ref = refs.get(k) or {}
         target = _num(ref.get("reference_value"))
         ul = _num(ref.get("ul_value"))
-        intake = agg["micro_daily"][k]
-        covered_meals = int(agg["micro_count"].get(k, 0) or 0)
+        day_totals = agg["full_day_micro"].get(k, [])
+        full_days = len(day_totals)
+        intake = round(sum(day_totals) / full_days, 2) if full_days else None
 
         gap = None
         covered = None
@@ -493,9 +524,6 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
             covered = round(intake / target * 100, 1)
 
         if intake is None or target is None:
-            status = "参考提示"
-        elif covered_meals < selected_meals:
-            # 部分餐次缺该微量数据，不硬性判达标/不足
             status = "参考提示"
         elif ul is not None and intake > ul:
             status = "超标"
@@ -513,9 +541,7 @@ def _micro_summary(agg: dict, refs: dict, selected_meals: int) -> tuple[dict, li
             "intake": intake,
             "gap": gap,
             "covered_pct": covered,
-            "covered_meals": covered_meals,
-            "selected_meals": selected_meals,
-            "coverage": round(covered_meals / selected_meals, 2) if selected_meals else None,
+            "full_days": full_days,
             "status": status,
         }
     return summary, shortfall
@@ -574,9 +600,10 @@ def _daily_trend(agg: dict, target_kcal) -> list[dict]:
 
 
 def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
-    """达标率：微量按「达标天数 ÷ 有效天数」，宏量按供能比是否落在合理区间。
+    """达标率：微量按「达标天数 ÷ 完整天有效天数」，宏量按供能比是否落在合理区间。
 
-    有效天数只统计当天该微量有值的日子；有效天数为 0 时百分比为 null（不按 0% 论）。
+    只统计「早/午/晚三餐齐全」的完整天（部分记录天不做全天达标判断、不外推）；
+    完整天里该微量有值才算有效天；有效天数为 0 时百分比为 null（不按 0% 论）。
     单日「达标」与 `_micro_summary` 口径一致：达到推荐量 80% 且未超 UL。
     """
     micro: dict[str, dict] = {}
@@ -586,21 +613,19 @@ def _achievement(agg: dict, refs: dict, macro: dict) -> dict:
         ref = refs.get(k) or {}
         target = _num(ref.get("reference_value"))
         ul = _num(ref.get("ul_value"))
-        valid_days = 0
+        day_totals = agg["full_day_micro"].get(k, [])
+        valid_days = len(day_totals) if target else 0
         achieved_days = 0
         over_days = 0
         under_days = 0
-        for drow in agg["_by_date"].values():
-            v = _daily_value(drow, "m:" + k, 2)
-            if v is None or not target:
-                continue
-            valid_days += 1
-            if ul is not None and v > ul:
-                over_days += 1
-            elif v >= target * 0.8:
-                achieved_days += 1
-            else:
-                under_days += 1
+        if target:
+            for v in day_totals:
+                if ul is not None and v > ul:
+                    over_days += 1
+                elif v >= target * 0.8:
+                    achieved_days += 1
+                else:
+                    under_days += 1
         pct = round(achieved_days / valid_days * 100, 1) if valid_days else None
         if pct is None:
             level = "unknown"
@@ -700,12 +725,114 @@ def _rebuild_hints(
     return hints
 
 
+# 补位建议用：生成池（is_generation_enabled）内每道菜的 7 项微量总含量。
+# 口径与 repository._DISH_SQL 一致（amount_g × 每 100g 值 / 100），任一食材缺值→整道菜 NULL（null≠0）。
+_DISH_MICRO_SUGGEST_SQL = """
+WITH base AS (
+    SELECT d.dish_id, d.name, d.servings,
+           di.amount_g,
+           i.calcium_mg,
+           (i.micro_nutrients->>'iron_mg')::numeric      AS iron_mg,
+           (i.micro_nutrients->>'zinc_mg')::numeric      AS zinc_mg,
+           (i.micro_nutrients->>'vitamin_a_ug')::numeric AS vitamin_a_ug,
+           (i.micro_nutrients->>'vitamin_b1_mg')::numeric AS vitamin_b1_mg,
+           (i.micro_nutrients->>'vitamin_b2_mg')::numeric AS vitamin_b2_mg,
+           (i.micro_nutrients->>'vitamin_c_mg')::numeric AS vitamin_c_mg
+    FROM core.dish d
+    JOIN core.dish_ingredient di ON di.dish_id = d.dish_id
+    JOIN core.ingredient i ON i.ingredient_id = di.ingredient_id
+    WHERE NOT d.is_deleted AND NOT i.is_deleted AND d.is_generation_enabled
+), agg AS (
+    SELECT dish_id, name, servings,
+           CASE WHEN count(*) FILTER (WHERE calcium_mg IS NULL OR amount_g IS NULL) > 0
+                THEN NULL ELSE sum(amount_g * calcium_mg / 100.0) END AS calcium,
+           CASE WHEN count(*) FILTER (WHERE iron_mg IS NULL OR amount_g IS NULL) > 0
+                THEN NULL ELSE sum(amount_g * iron_mg / 100.0) END AS iron,
+           CASE WHEN count(*) FILTER (WHERE zinc_mg IS NULL OR amount_g IS NULL) > 0
+                THEN NULL ELSE sum(amount_g * zinc_mg / 100.0) END AS zinc,
+           CASE WHEN count(*) FILTER (WHERE vitamin_a_ug IS NULL OR amount_g IS NULL) > 0
+                THEN NULL ELSE sum(amount_g * vitamin_a_ug / 100.0) END AS vitamin_a,
+           CASE WHEN count(*) FILTER (WHERE vitamin_b1_mg IS NULL OR amount_g IS NULL) > 0
+                THEN NULL ELSE sum(amount_g * vitamin_b1_mg / 100.0) END AS vitamin_b1,
+           CASE WHEN count(*) FILTER (WHERE vitamin_b2_mg IS NULL OR amount_g IS NULL) > 0
+                THEN NULL ELSE sum(amount_g * vitamin_b2_mg / 100.0) END AS vitamin_b2,
+           CASE WHEN count(*) FILTER (WHERE vitamin_c_mg IS NULL OR amount_g IS NULL) > 0
+                THEN NULL ELSE sum(amount_g * vitamin_c_mg / 100.0) END AS vitamin_c
+    FROM base
+    GROUP BY dish_id, name, servings
+)
+SELECT dish_id, name, servings,
+       calcium, iron, zinc, vitamin_a, vitamin_b1, vitamin_b2, vitamin_c
+FROM agg
+"""
+
+
+def _selected_dish_ids_plan(db: Session, plan_id: int) -> set[str]:
+    """当前方案里已选中的菜式（排除掉，补位建议不再重复推荐）。"""
+    rows = db.execute(
+        text(
+            "SELECT DISTINCT mcd.dish_id FROM app.meal_slot s "
+            "JOIN app.meal_candidate_dish mcd ON mcd.candidate_id = s.selected_candidate_id "
+            "WHERE s.meal_plan_id = :pid AND s.selected_candidate_id IS NOT NULL"
+        ),
+        {"pid": plan_id},
+    ).all()
+    return {str(r[0]) for r in rows}
+
+
+def _selected_dish_ids_window(db: Session, user_id: str, start: date, end: date) -> set[str]:
+    """窗口内所有已固定方案已选中的菜式（跨方案去重，供周/月报告补位建议排除）。"""
+    rows = db.execute(
+        text(
+            "SELECT DISTINCT mcd.dish_id FROM app.meal_slot s "
+            "JOIN app.meal_plan p ON p.meal_plan_id = s.meal_plan_id AND NOT p.is_deleted "
+            "JOIN app.meal_candidate_dish mcd ON mcd.candidate_id = s.selected_candidate_id "
+            "WHERE p.user_id = :uid AND p.status = 'fixed' "
+            "  AND s.slot_date BETWEEN :ws AND :we AND s.selected_candidate_id IS NOT NULL"
+        ),
+        {"uid": user_id, "ws": start, "we": end},
+    ).all()
+    return {str(r[0]) for r in rows}
+
+
+def _shortfall_dish_suggestions(
+    db: Session, shortfall: list[str], exclude_dish_ids: set[str], limit: int = 2
+) -> dict[str, list[str]]:
+    """为每个缺口营养素推荐「生成池里、本方案/窗口没吃过、富含该营养素」的菜名。
+
+    按每份含量（总含量 ÷ servings）降序取前 `limit` 个；该营养素全库无数据时返回空，
+    由调用方回退到 `_MICRO_ADVICE` 的静态食材类别兜底。
+    """
+    if not shortfall:
+        return {}
+    rows = db.execute(text(_DISH_MICRO_SUGGEST_SQL)).mappings().all()
+
+    per_serving: dict[str, list[tuple[float, str]]] = {k: [] for k in shortfall}
+    for r in rows:
+        if r["dish_id"] in exclude_dish_ids:
+            continue
+        servings = float(r["servings"]) if r["servings"] else 1.0
+        if servings <= 0:
+            continue
+        for k in shortfall:
+            v = _num(r.get(k))
+            if v is not None:
+                per_serving[k].append((v / servings, r["name"]))
+
+    result: dict[str, list[str]] = {}
+    for k in shortfall:
+        ranked = sorted(per_serving[k], key=lambda t: (-t[0], t[1]))
+        result[k] = [name for _, name in ranked[:limit]]
+    return result
+
+
 def _build_insights(
     shortfall: list[str],
     over: list[str],
     micro: dict,
     achievement: dict,
     rebuild_rows: list[dict],
+    dish_suggestions: dict[str, list[str]] | None = None,
 ) -> dict:
     """组装面向用户的「关键结论」，分 verdict / plan / advice / trend 四块。
 
@@ -726,9 +853,14 @@ def _build_insights(
         plan_items.append({"level": "warn", "text": f"{names} 摄入偏高，长期超量需留意"})
 
     for k in shortfall:
-        advice_items.append(
-            {"text": f"想补{micro[k]['name_zh']}，可多安排：{_MICRO_ADVICE.get(k, '相关食材')}"}
-        )
+        name = micro[k]["name_zh"]
+        dishes = (dish_suggestions or {}).get(k) or []
+        if dishes:
+            advice_items.append({"text": f"想补{name}，可安排：{'、'.join(dishes)}"})
+        else:
+            advice_items.append(
+                {"text": f"想补{name}，可多安排：{_MICRO_ADVICE.get(k, '相关食材')}"}
+            )
 
     # 长期回看：回溯（窗口内累计缺口）与达标天数偏少，按营养素合并去重
     rebuild_by_nutrient = {r["nutrient_id"]: r for r in rebuild_rows}
@@ -827,12 +959,17 @@ def analyze_plan(
     refs = _load_reference(db, user_id)
 
     macro = _macro_summary(agg, refs)
-    micro, shortfall = _micro_summary(agg, refs, agg["selected_meals"])
+    micro, shortfall = _micro_summary(agg, refs)
 
+    coverage = agg["coverage"]
     reference_hints: list[str] = [
-        f"以下为日均口径：方案 {days} 天（{plan['start_date']}~{plan['end_date']}）摄入按天数折算后"
-        f"与每日参考量比较"
+        f"覆盖概览：方案 {coverage['days']} 天，其中 {coverage['full_days']} 天三餐齐全（完整）、"
+        f"{coverage['partial_days']} 天仅部分餐次、{coverage['empty_days']} 天无记录"
     ]
+    reference_hints.append(
+        "摄入达成率 = 完整天（三餐齐全）日均摄入 ÷ 每日参考量；部分记录天不计入、不外推"
+    )
+    reference_hints.append("达标天数只统计「早/午/晚三餐齐全」的完整天，部分记录天不判断全天达标")
     reference_hints.append("铁按普通口径计算，未区分经期（本期口径）")
     if any(v.get("status") == "参考提示" for v in micro.values()):
         reference_hints.append(
@@ -859,14 +996,17 @@ def analyze_plan(
 
     trend = _daily_trend(agg, plan["goal_energy_kcal"])
     achievement = _achievement(agg, refs, macro)
-    insights = _build_insights(shortfall, over, micro, achievement, rebuild_rows)
+    exclude_dish_ids = _selected_dish_ids_plan(db, req.meal_plan_id)
+    dish_suggestions = _shortfall_dish_suggestions(db, shortfall, exclude_dish_ids)
+    insights = _build_insights(shortfall, over, micro, achievement, rebuild_rows, dish_suggestions)
 
     summary = {
         "reference_hints": reference_hints,
         "insights": insights,
         "data_quality_notes": quality_notes,
         "window_days": req.window_days,
-        "basis": "daily_average",
+        "basis": "recorded_share",
+        "coverage": coverage,
         "daily_trend": trend,
         "achievement": achievement,
     }
@@ -964,17 +1104,19 @@ def analyze_period(
     refs = _load_reference(db, user_id)
 
     macro = _macro_summary(agg, refs)
-    micro, shortfall = _micro_summary(agg, refs, agg["selected_meals"])
+    micro, shortfall = _micro_summary(agg, refs)
 
+    coverage = agg["coverage"]
     reference_hints: list[str] = [
-        f"以下为日均口径：{window_start}~{window_end} 内已固定方案的摄入按天数折算后"
-        f"与每日参考量比较"
+        f"覆盖概览：{window_start}~{window_end} 共 {coverage['days']} 天，其中 "
+        f"{coverage['full_days']} 天三餐齐全（完整）、{coverage['partial_days']} 天仅部分餐次、"
+        f"{coverage['empty_days']} 天无记录"
     ]
     reference_hints.append(
-        f"日均按餐次能量权重折算为天当量：共 {agg['selected_meals']} 餐 ≈ "
-        f"{agg['covered_day_equiv']} 天当量（早 25%／午 40%／晚 35%），"
-        f"没数据的日子不计入分母"
+        "摄入达成率 = 完整天（三餐齐全）日均摄入 ÷ 每日参考量"
+        "（部分记录天不计入、不外推）"
     )
+    reference_hints.append("达标天数只统计「早/午/晚三餐齐全」的完整天，部分记录天不判断全天达标")
     if plan_stats["total_plans"]:
         reference_hints.append(
             f"统计口径：窗口内覆盖 {plan_stats['total_plans']} 份已固定方案，"
@@ -1003,14 +1145,17 @@ def analyze_period(
 
     trend = _daily_trend(agg, _load_target_kcal(db, user_id))
     achievement = _achievement(agg, refs, macro)
-    insights = _build_insights(shortfall, over, micro, achievement, [])
+    exclude_dish_ids = _selected_dish_ids_window(db, user_id, window_start, window_end)
+    dish_suggestions = _shortfall_dish_suggestions(db, shortfall, exclude_dish_ids)
+    insights = _build_insights(shortfall, over, micro, achievement, [], dish_suggestions)
 
     summary = {
         "reference_hints": reference_hints,
         "insights": insights,
         "data_quality_notes": quality_notes,
         "window_days": window_days,
-        "basis": "daily_average",
+        "basis": "recorded_share",
+        "coverage": coverage,
         "daily_trend": trend,
         "achievement": achievement,
         "plan_stats": plan_stats,

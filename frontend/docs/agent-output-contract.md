@@ -170,8 +170,9 @@
 | `macro_summary.energy_kcal` | number / null | 宏量环中心值 |
 | `macro_summary.protein_pct / fat_pct / carb_pct` | number / null | 三段供能比；null 显示「—」 |
 | `macro_summary.oil_g / salt_g / fiber_g` | number / null | 「烹调油 / 食盐 / 膳食纤维」三项独立指标 |
-| `key_micro_summary.<nutrient_id>` | 对象，固定 7 键 | 微量区；每项含 `name_zh / target / unit / intake / gap / covered_pct / covered_meals / selected_meals / coverage / status` |
-| `summary.achievement` | object / null | 达标率；含 `micro_overall_pct`、`macro`、`micro` 三段口径 |
+| `key_micro_summary.<nutrient_id>` | 对象，固定 7 键 | 微量区；每项含 `name_zh / target / unit / intake（完整天日均摄入）/ gap / covered_pct（完整天日均达成率）/ full_days / status` |
+| `summary.coverage` | object | 覆盖概览：`days / recorded_days / full_days（三餐齐全）/ partial_days / empty_days` |
+| `summary.achievement` | object / null | 达标率；含 `micro_overall_pct`、`macro`、`micro` 三段口径；`micro.<id>` 含 `achieved_days / valid_days / over_days / under_days / level`，`valid_days` 只计「三餐齐全」的完整天 |
 | `summary.daily_trend[]` | object[] | 每日摄入序列；每项含 `date / label / calories / protein_g / fat_g / carb_g / fiber_g / oil_g / salt_g / micro / meal_count / known_meal_count / status` |
 | `summary.reference_hints` | string[] | 参考口径说明（如「本期铁按普通口径，未区分经期」） |
 | `summary.insights` | object | 结构化「关键结论」：`verdict`（一句话总评）+ `plan[{level,text}]`（本方案结论，level=warn/danger/ok）+ `advice[{text}]`（补位建议）+ `trend[{text}]`（长期回看）。历史旧报告可能为 `string[]`，前端降级平铺渲染 |
@@ -182,14 +183,15 @@
 
 规则：
 
-- 微量顺序固定 7 键；`status=参考提示` 中性色 +「提示」，不得红色。
-- 三档展示：`intake=null` → 「—」+「数据不足」；`covered_meals < selected_meals`（部分缺）→ 浅色环 +「≥X%」+「覆盖 N/M 餐」+「估算」标签，不判达标/超标；完整数据 → 正常百分比 + 达标/不足/超标。
+- 微量顺序固定 7 键；`status=参考提示`（无完整天数据）灰环「—」，不得红色。
+- 环形主指标 = 完整天日均达成率（`covered_pct = intake ÷ target`，`intake` 为完整天日均摄入）；无完整天 → 「—」+「无完整天，不判达标」；有完整天但该微量在部分餐次缺数据 → 「—」+「该微量部分餐次缺数据，不判达标」；有完整天 → 正常百分比 + 达标/不足/超标（环色绿/琥珀/红）。
+- 「达标天数」为环下注脚 `achieved_days/valid_days`，**只统计「早/午/晚三餐齐全」的完整天**；部分记录天不判断全天达标、不外推。头部先展示覆盖概览（完整/部分/无记录天数）。
 - 不允许把缺失当 0 显示 0%。
 - `daily_trend[].calories=null` 表示当日数据不足，趋势值显示「—」，不补 0；`status=参考提示` 走中性色。
 - 钠只在 `macro_summary.salt_g`，不进微量区。
 - `summary.data_quality_notes` 与 `completeness` 在面板底部常驻展示，不折叠。
 - 「膳食报告」面板为**报告存档列表**：`GET /nutrition/report/list` 拉取 week/month/custom 报告摘要，点开按 `GET /nutrition/report/{id}` 回看详情；空态引导生成周/月报告或先配餐。方案级营养复盘（plan）在历史方案详情里查看，不进膳食报告存档。
-- `summary.achievement.micro_overall_pct` 是「可评估微量营养素的达标天数占比平均值」，必须同时展示 `micro_evaluable_count / micro_total_count`；不得简写为「7 项达标率」。
+- `summary.achievement.micro_overall_pct` 是「可评估微量营养素的达标天数占比平均值」（后端保留，供回看）；前端「关键微量」头部展示**覆盖概览**（完整/部分/无记录天数）+「可评估 N/7 项」，不再用单一综合百分比当结论。不得简写为「7 项达标率」。
 
 ---
 

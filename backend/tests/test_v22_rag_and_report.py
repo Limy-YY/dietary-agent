@@ -1,7 +1,7 @@
 import unittest
 
 from app.routers.agent import _search_knowledge
-from app.routers.nutrition import MICRO_IDS, _achievement, _macro_summary
+from app.routers.nutrition import MICRO_IDS, _achievement, _aggregate_rows, _macro_summary
 
 
 class _Rows:
@@ -46,13 +46,8 @@ class RagAndReportTests(unittest.TestCase):
 
     def test_micro_overall_reports_its_real_denominator(self):
         agg = {
-            "_by_date": {
-                "2026-11-20": {
-                    "selected": 1,
-                    "count": {"m:calcium": 1},
-                    "sum": {"m:calcium": 800.0},
-                }
-            }
+            # 达标天数只统计「三餐齐全」的完整天，这里给 1 个完整天的钙全天摄入
+            "full_day_micro": {"calcium": [800.0]}
         }
         refs = {
             "calcium": {
@@ -66,6 +61,37 @@ class RagAndReportTests(unittest.TestCase):
         self.assertEqual(result["micro_overall_pct"], 100.0)
         self.assertEqual(result["micro_evaluable_count"], 1)
         self.assertEqual(result["micro_total_count"], len(MICRO_IDS))
+
+    def test_full_day_ignores_snack_missing_micro(self):
+        # 早/午/晚齐全 + 加餐：加餐缺某微量不应把整天从「完整天」里踢掉（旧实现
+        # d["count"]["m:k"] >= d["selected"] 会把加餐也算进 selected，导致整天被误排除）。
+        micro_full = {
+            "calcium": 300.0, "iron": 5.0, "zinc": 3.0, "vitamin_a": 200.0,
+            "vitamin_b1": 0.5, "vitamin_b2": 0.5, "vitamin_c": 60.0,
+        }
+        macro = {"kcal": 500.0, "protein_g": 20.0, "fat_g": 15.0, "carb_g": 70.0, "fiber_g": 5.0}
+        oil_salt = {"oil_g": 5.0, "salt_g": 1.0, "sodium_mg": 400.0, "total_salt_equivalent_g": 1.0}
+        rows = [
+            {"slot_date": "2026-11-20", "meal_type": "早", "selected_candidate_id": 1,
+             "macro_estimate": dict(macro), "micro_estimate": dict(micro_full), "oil_salt_estimate": dict(oil_salt)},
+            {"slot_date": "2026-11-20", "meal_type": "午", "selected_candidate_id": 2,
+             "macro_estimate": dict(macro), "micro_estimate": dict(micro_full), "oil_salt_estimate": dict(oil_salt)},
+            {"slot_date": "2026-11-20", "meal_type": "晚", "selected_candidate_id": 3,
+             "macro_estimate": dict(macro), "micro_estimate": dict(micro_full), "oil_salt_estimate": dict(oil_salt)},
+            # 加餐：只有部分微量有值（缺 zinc/vitamin_a/b1/b2），不应导致整天被判「缺数据」
+            {"slot_date": "2026-11-20", "meal_type": "加餐", "selected_candidate_id": 4,
+             "macro_estimate": dict(macro),
+             "micro_estimate": {"calcium": 50.0, "iron": 1.0, "vitamin_c": 20.0},
+             "oil_salt_estimate": dict(oil_salt)},
+        ]
+        agg = _aggregate_rows(rows, days=1, subject="测试")
+        self.assertEqual(agg["coverage"]["full_days"], 1)
+        for k in MICRO_IDS:
+            self.assertEqual(len(agg["full_day_micro"][k]), 1, f"{k} 应计入完整天")
+        # 锌：早/午/晚各 3.0，加餐无值（null≠0 不加）→ 全天 9.0
+        self.assertEqual(agg["full_day_micro"]["zinc"][0], 9.0)
+        # 钙：早/午/晚各 300 + 加餐 50（加餐有值则并入）→ 950.0
+        self.assertEqual(agg["full_day_micro"]["calcium"][0], 950.0)
 
     def test_sodium_reference_uses_2000mg_ceiling_not_ai_1500(self):
         agg = {
