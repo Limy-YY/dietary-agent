@@ -35,16 +35,16 @@
 
 ## 目录结构
 
-| 目录                  | 说明                                                                     |
-| --------------------- | ------------------------------------------------------------------------ |
-| [frontend/](frontend/) | 前端界面（Vue 3 + Vite）：对话流 + schema 渲染器 + 右侧四面板 + 轻量档案 |
-| [backend/](backend/)   | 后端服务（FastAPI，:8000）：REST + SSE、规则引擎、RAG、数据访问层        |
-| [agent/](agent/)       | 对话 Agent 服务（:8001）：意图路由 + 工具编排 + 输出契约                 |
+| 目录                  | 说明                                                                                                |
+| --------------------- | --------------------------------------------------------------------------------------------------- |
+| [frontend/](frontend/) | 前端界面（Vue 3 + Vite）：对话流 + schema 渲染器 + 右侧四面板 + 轻量档案                            |
+| [backend/](backend/)   | 后端服务（FastAPI，:8000）：REST + SSE、规则引擎、RAG、数据访问层                                   |
+| [agent/](agent/)       | 对话 Agent 服务（:8001）：意图路由 + 工具编排 + 输出契约                                            |
 | [database/](database/) | 数据库交付包 v1.2r4（128 食材 / 120 菜 / 43 知识库 / 19 条已启用反向营养映射 / 9 条已审核疾病规则） |
-| [docker/](docker/)     | PostgreSQL 18 + pgvector 镜像，一键起库，空卷自动建库                    |
-| [tests/](tests/)       | 契约断言自动化测试                                                       |
-| [deploy/](deploy/)     | 部署运维配置（历史；一键起库已迁至 docker/）                             |
-| [docs/](docs/)         | 各次作业材料 + 测试资产                                                  |
+| [docker/](docker/)     | PostgreSQL 18 + pgvector 镜像，一键起库，空卷自动建库                                               |
+| [tests/](tests/)       | 契约断言自动化测试                                                                                  |
+| [deploy/](deploy/)     | 部署运维配置（历史；一键起库已迁至 docker/）                                                        |
+| [docs/](docs/)         | 各次作业材料 + 测试资产                                                                             |
 
 根目录脚本：
 
@@ -61,12 +61,22 @@
 
 ### 启动步骤
 
-```bash
-# 一键：起库（含建 diet_backend 账号）→ 后端 8000 → Agent 8001
-github仓库/start-local.bat
+以下命令均在**仓库根目录**执行（即克隆后进入的仓库目录，脚本内部会自行定位各子目录，无需写死本地文件夹名）。
 
-# 前端另起（:5173）
-cd github仓库/frontend && npm run dev
+一键起后端三件套——起库（含建 `diet_backend` 账号）→ 后端 8000 → Agent 8001：
+
+```bat
+start-local.bat
+```
+
+等价 PowerShell：`powershell -NoProfile -ExecutionPolicy Bypass -File .\start-local.ps1`
+
+前端另起（:5173）：
+
+```bash
+cd frontend
+npm install   # 首次运行
+npm run dev
 ```
 
 各服务与验证地址：
@@ -82,14 +92,12 @@ cd github仓库/frontend && npm run dev
 
 ### 鉴权
 
-接口无登录端点，JWT 由 `backend/.env` 的 `JWT_SECRET` 离线签发。离线签发 token：
+接口无登录端点，JWT 由 `backend/.env` 的 `JWT_SECRET` 离线签发。离线签发 token（Windows）：
 
-```cmd
+```bat
 cd backend
 ..\.venv\Scripts\python.exe -c "from app.core.security import create_access_token; print(create_access_token('demo-user', 1440))"
 ```
-
-> 注意：venv 在**仓库根目录** `github仓库\.venv`（后端与 Agent 共用），不在 `backend` 下，所以从 `backend` 目录执行时要写成 `..\.venv\Scripts\python.exe`（Windows 用反斜杠）。
 
 浏览器控制台注入后刷新即可：
 

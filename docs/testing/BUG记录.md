@@ -67,6 +67,7 @@
 | BUG-049 | 应用库账号缺 DELETE 权限，整餐重生成/替换单菜/删会话运行时失败（换一换按钮不受影响） | 数据库权限/后端 | 已闭环（SQL 已含 DELETE + 运行库已 GRANT） |
 | BUG-050 | 规则引擎用「添加盐 5g/日」卡「总钠(含天然钠)」且当单餐硬淘汰，普遍钠超标 | 规则引擎 | 已修（2026-11-23，总钠降级软扣分） |
 | BUG-051 | 膳食报告钠参考值取 AI=1500mg 当上限，与候选 2000mg 口径冲突 + AI 语义用反 | 后端报告 | 已修（2026-11-21） |
+| BUG-052 | 点餐卡「为什么这样搭」解释回答后附「当前规划」卡（后端 current_plan 当聊天卡下发） | 后端 chat.py | 已修（2026-11-24） |
 
 ---
 
@@ -556,3 +557,12 @@
 - **状态**：已修（2026-11-21）。
 - **修复建议**：① 报告钠参考值改用 **PI-NCD 2000mg**（与规则引擎/疾病规则同一阈值），`sodium_status` 按 2000mg 判偏高；② 或保留 AI=1500 但明确其语义为「适宜摄入量、非上限」，不把 >100% AI 判为偏高，上限改由 2000mg 判；③ 1500 / 2000 / 5g 三处口径需统一落定一处，避免同一「钠」多个阈值（与 BUG-050 同根，可一并定调）。
 - **修复（2026-11-21）**：① `backend/app/routers/nutrition.py` 新增常量 `SODIUM_LIMIT_MG_DAILY=2000.0`，`_macro_summary` 的 `sodium_ref` 从 `_ref_val("sodium")`（AI=1500）改为该常量；② 前端 `frontend/src/utils/schema.js` 钠的 `ref_label` 由 `AI` 改为 `上限`（与烹调油一致）；③ 新增回归测试 `test_sodium_reference_uses_2000mg_ceiling_not_ai_1500`。`sodium_status` 随之只在 >2000mg 才判「偏高」。测试：`test_v22_rag_and_report.py` 3 passed；全量后端 5 failed 均为 `test_v21_culinary_first`/`test_v21_meal_templates` 的菜式目录脱节（IMP-045）遗留，与本 bug 无关。**口径就此定调**：钠的 1500mg 只作「适宜摄入量(AI)」参考、不参与超标判定；超标上限统一用 2000mg（与规则引擎/疾病规则一致，BUG-050 同源）。
+
+## BUG-052 · 点餐卡「为什么这样搭」解释回答后附「当前规划」卡（后端 current_plan 当聊天卡下发）
+
+- **现象**：点餐卡左下角「💡 为什么这样搭？」，Agent 的解释正文正常输出，但回答末尾又跟着一张「📋 当前规划」卡（样式同餐卡，一眼看去像又发了一次餐卡）。
+- **层面**：后端 `chat.py`（Agent 代理）→ 前端渲染。
+- **根因**：[chat.py](github仓库/backend/app/routers/chat.py) `agent_chat` 里 `if raw_plan_id:` 分支**无条件**下发 `current_plan` artifact（原本意图是「卡片变更后刷新右侧当前规划面板」）。但「为什么这样搭」按钮走的是普通 `send`（非静默），`actionContext('explain')` 带了 `meal_plan_id`，于是这条 `current_plan` 被前端 [chat.js](github仓库/frontend/src/stores/chat.js) 的 artifact 处理 push 进 AI 气泡、由 `RendererHost` 的 `current_plan → CurrentPlanBlock` 渲染成卡。而真正的解释正文来自 Agent `explain` 分支，它本来就 `blocks: []`（不发卡）——多出来的卡是后端代理层强塞的，不是 Agent 发的。右侧「当前规划」面板实际靠 `panel.bump()` + REST 拉取刷新，并不消费这条 artifact，故它对换/选/确认（静默通道）是无用下发，对解释（普通通道）是有害下发。
+- **状态**：已修（2026-11-24）。
+- **修复**：`chat.py` 的 current_plan 下发改为**按 action 门控**，仅卡片变更动作 `swap_candidate / choose_candidate / confirm` 下发，`explain` 等只读动作不再下发；`_load_plan_payload` 的归属校验与 `done.meal_plan_id` 回填保留（解释仍需据此在 Agent 侧定位具体餐卡）。测试：`test_v21_chat_card_context.py` 3 passed（三个变更动作仍断言双 artifact，行为不变）。
+- **备注**：换/选/确认的 current_plan 下发当前仍是无用下发（前端静默通道丢弃），若要彻底清理可在课程后作为独立项移除（连带更新 `test_v21_chat_card_context` 的 `['artifact','artifact','done']` 断言为单 artifact）。
