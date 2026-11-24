@@ -676,7 +676,7 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "swap_candidate",
-            "description": "仅当用户明确要求「把某餐整顿换成另一套备选套餐」且已指明餐次时调用。若用户想去掉某道具体菜、嫌菜品重复、或只说「换一换」未指明整餐，禁止调用此工具，应改用 replace_dish 或 ask_clarification。多日方案下若用户未指明哪一天，先用 ask_clarification 追问第几天/具体日期。",
+            "description": "仅当用户明确要求「换一换 / 把某餐整顿换成另一套备选套餐」且已指明餐次、不带「不要X / 清淡少油」等偏好时调用（走候选内瞬时轮换）。若用户想去掉某道具体菜，改用 replace_dish；若用户要「换成 A+B 组合」或带忌口/清淡等偏好，改用 regenerate_slot；只说「换一换」未指明餐次则 ask_clarification。多日方案下未指明哪一天也先 ask_clarification。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -722,7 +722,7 @@ def _agent_system(profile: dict) -> str:
         + _profile_brief(profile) + "\n"
         + f"今天是 {date.today().isoformat()}。\n"
         + "可用工具：generate_plan（生成配餐方案）、ask_clarification（需求含糊时追问）、"
-          "swap_candidate（换一换 = 整餐重生成）、regenerate_slot（重生成单餐，可保留指定菜）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
+          "swap_candidate（换一换 = 在生成时已产出的候选里换下一套，瞬时）、regenerate_slot（重生成单餐，可保留指定菜或落地排除/清淡等偏好）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
         + "局部修改必须使用对应工具，按用户明确指定的方案序号、日期和餐次定位，禁止擅自生成整份方案或确认；工具失败后停止，不得重试写操作或宣称成功。\n"
         + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
           "② 用户说「不想吃重复的」「换一换」等泛化请求且未指明具体餐次时，先对照已有方案找出跨餐重复菜，必须先调用 ask_clarification 追问用户想调整哪一餐（例如「午餐和晚餐都有「山药米饭」，你想换掉午餐的还是晚餐的？如果主食单换受限，也可以直接整餐重新生成」），禁止不问用户就擅自挑选餐次修改，也禁止诱导用户说「都换/一起换」（单轮仅支持修改一处）；"
@@ -1094,20 +1094,26 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
         if not slot:
             return {"summary": "没找到对应的餐位。"}
         if on_status:
-            on_status("正在重新搭配")
-        # 换一换 = 整餐重生成（不再只循环生成时定死的 2~3 个候选，那会让相似候选原地打转）；
-        # 后端 slot/regenerate 会避开邻天已选的非主食菜。把「不要X / 清淡少油」等意图转成排除/软偏好。
+            on_status("正在换候选")
+        # 换一换 = 生成期已产出的候选内瞬时轮换（IMP-059 已把跨天多样性做进生成期，无需重跑引擎）。
+        # 只有带「不要X / 清淡少油」等偏好时，才走 slot/regenerate（exclude/soft_avoid 只有它能落地）。
         prefer = (args.get("prefer") or "").strip()
         ex = _extract_preferences(prefer)
         meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
-        bc.regenerate_slot(
-            meal_plan_id=meal_plan_id,
-            meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
-            expected_candidate_id=slot.get("selected_candidate_id"),
-            exclude_ingredients=ex["exclude"],
-            soft_avoid=ex["soft_avoid"],
-        )
-        updated = bc.get_meal_plan(meal_plan_id)
+        if ex["exclude"] or ex["soft_avoid"]:
+            bc.regenerate_slot(
+                meal_plan_id=meal_plan_id,
+                meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
+                expected_candidate_id=slot.get("selected_candidate_id"),
+                exclude_ingredients=ex["exclude"],
+                soft_avoid=ex["soft_avoid"],
+            )
+            updated = bc.get_meal_plan(meal_plan_id)
+        else:
+            updated = bc.swap_candidate(
+                meal_plan_id=meal_plan_id,
+                meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
+            )
         le.remember(st,updated)
         new_slot = _find_slot(updated, meal_type)
         dish_text = _slot_dish_text(new_slot) if new_slot else "新候选"
@@ -1285,13 +1291,17 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
     context=context or {};st=state
     # 每个请求只刷新一次结构化卡片目标；同一请求内后续动作复用该快照。
     st.pop('_request_context_plan_id', None)
-    try:
-        if (context.get('meal_plan_id') or context.get('plan_id')) is not None:_context_plan(st,context)
-    except Exception as exc:
-        return {"text":f"无法读取所选餐卡：{exc}","blocks":[]}
     # Explicit card actions are independent of pending natural-language edits.
     card_action = context.get("action")
     structured = card_action in ("swap_candidate", "choose_candidate", "confirm")
+    # 结构化卡片动作（换一换/选用/确认）直接用上下文里的 id 调后端，无需先拉全量方案
+    # （省一次 get_meal_plan 往返）；后端会兜底校验归属/状态/槽位/候选。
+    # 只有非结构化请求（如自然语言后续 + 随身带 meal_plan_id）才预取目标方案。
+    try:
+        if not structured and (context.get('meal_plan_id') or context.get('plan_id')) is not None:
+            _context_plan(st, context)
+    except Exception as exc:
+        return {"text": f"无法读取所选餐卡：{exc}", "blocks": []}
     if structured:
         if not context.get("meal_plan_id") or (card_action != "confirm" and not context.get("meal_slot_id")) or (card_action == "choose_candidate" and not context.get("candidate_id")):
             return {"text": "餐卡操作缺少必要标识，请刷新方案后重试。", "blocks": []}
@@ -1313,8 +1323,10 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         return _agent_loop(user_id,_load_profile(user_id),message,history,on_status,st,context)
     intent = {"intent": card_action} if structured else classify(message)
     kind = intent.get("intent", "chat")
-    _st("正在读取档案")
-    profile = _load_profile(user_id)
+    # 卡片动作（换一换/选用/确认）无需档案，跳过 _load_profile 的 REST 往返（省一次 get_profile）。
+    profile = None if structured else _load_profile(user_id)
+    if not structured:
+        _st("正在读取档案")
 
     # ③ tool-calling 编排：配餐走 _run_plan（快路径 / 富意图 + 审查闭环）；
     # 清单 / 闲聊 / 复合请求仍走 _agent_loop 工具循环；换/选/确认/取消等按钮短语 + 报告/问答/解释走下方既有分支。
@@ -1361,6 +1373,40 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
 
     # 换候选
     if kind == "swap_candidate":
+        # 结构化卡片动作（换一换按钮）：上下文已带 meal_plan_id / meal_slot_id，直接调后端，
+        # 省掉 _context_plan 的 get_meal_plan 往返；后端 /candidate/swap 返回全量方案。
+        if structured and context.get("meal_plan_id") and (context.get("meal_slot_id") or context.get("slot_id")):
+            _st("正在换候选")
+            try:
+                updated_plan = bc.swap_candidate(
+                    meal_plan_id=context.get("meal_plan_id"),
+                    meal_slot_id=context.get("meal_slot_id") or context.get("slot_id"),
+                )
+                le.remember(st, updated_plan)
+                sid = context.get("meal_slot_id") or context.get("slot_id")
+                new_slot = next((s for s in _iter_slots(updated_plan)
+                                 if str(s.get("meal_slot_id") or s.get("slot_id")) == str(sid)), None)
+                if not new_slot or not new_slot.get("selected_candidate_id"):
+                    return {"text": "未确认候选已切换，请刷新方案核对。", "blocks": []}
+                new_dish_text = _slot_dish_text(new_slot)
+                kcal_text = "热量待估"
+                picked = new_slot.get("selected_candidate") or ((new_slot.get("candidates") or [None])[0])
+                k = (picked or {}).get("macro_estimate", {}).get("kcal")
+                if k is not None:
+                    kcal_text = f"{k} kcal"
+                fallback = f"换好啦！给你换成了 {new_dish_text}，这一顿 {kcal_text}。餐卡已更新，可以继续换，或点「确认方案」固定。"
+                context_txt = (
+                    f"动作：更换「{intent.get('meal_type') or '午餐'}」候选。\n"
+                    f"新候选：{new_dish_text}\n"
+                    f"该餐热量：{kcal_text}\n"
+                    "引导：卡片已更新，可继续换或确认。"
+                )
+                narration = _narrate(message, context_txt, fallback, history)
+                return {"narration": narration, "blocks": [blocks.meal_card_block(updated_plan)]}
+            except Exception as e:
+                return {"text": f"换候选失败：{e}", "blocks": []}
+
+        # 自然语言路径：按意图定位方案/餐位。
         try:plan=_operation_plan(st,message,context)
         except ValueError as exc:return {"text":str(exc),"blocks":[]}
         if not plan:
@@ -1375,14 +1421,12 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         try:
             meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
             old_dish_text = _slot_dish_text(slot)
-            # 换一换 = 整餐重生成：走后端 slot/regenerate（会避开邻天已选的非主食菜），
-            # 不再只循环生成时定死的 2~3 个候选。slot/regenerate 返回完整方案，仍需按 id 重拉一次保持状态一致。
-            bc.regenerate_slot(
+            # 换一换 = 生成期已产出的候选内瞬时轮换（IMP-059 已把跨天多样性做进生成期，
+            # 候选不再「原地打转」，无需重跑引擎）。/candidate/swap 直接返回全量方案，无需再重拉。
+            updated_plan = bc.swap_candidate(
                 meal_plan_id=meal_plan_id,
                 meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
-                expected_candidate_id=slot.get("selected_candidate_id"),
             )
-            updated_plan = bc.get_meal_plan(meal_plan_id)
             le.remember(st,updated_plan)
 
             # 拿换好的新菜名 / 热量拼到文字里
@@ -1419,6 +1463,42 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
 
     # 选用候选
     if kind == "choose_candidate":
+        wanted_id = context.get("candidate_id")
+        meal_plan_id = context.get("meal_plan_id") or context.get("plan_id")
+        meal_slot_id = context.get("meal_slot_id") or context.get("slot_id")
+
+        # 结构化卡片动作：上下文已带全三件套 id，直接调后端（后端现在回全量方案），
+        # 省掉「先 _context_plan 拉方案 + 换完再 get_meal_plan」两次往返。
+        if wanted_id is not None and meal_plan_id and meal_slot_id:
+            _st("正在选用候选")
+            try:
+                updated_plan = bc.swap_candidate(
+                    meal_plan_id=meal_plan_id,
+                    meal_slot_id=meal_slot_id,
+                    candidate_id=wanted_id,
+                )
+                le.remember(st, updated_plan)
+                new_slot = next((s for s in _iter_slots(updated_plan)
+                                 if str(s.get("meal_slot_id") or s.get("slot_id")) == str(meal_slot_id)), None)
+                if not new_slot or str(new_slot.get("selected_candidate_id")) != str(wanted_id):
+                    return {"text": "未确认指定候选已选中，请刷新方案核对。", "blocks": []}
+                picked = new_slot.get("selected_candidate") or {}
+                kcal = (picked.get("macro_estimate") or {}).get("kcal")
+                kcal_text = f"{kcal} kcal" if kcal is not None else "热量待估"
+                name = " + ".join(str(d.get("name", "")) for d in (picked.get("dishes") or []))
+                fallback = f"已选定 {name}，这一顿 {kcal_text}。"
+                context_txt = (
+                    f"动作：选定「{intent.get('meal_type') or '午餐'}」候选。\n"
+                    f"选定菜品：{name}\n"
+                    f"该餐热量：{kcal_text}\n"
+                    "引导：卡片已更新，可继续调整或确认。"
+                )
+                narration = _narrate(message, context_txt, fallback, history)
+                return {"narration": narration, "blocks": [blocks.meal_card_block(updated_plan)]}
+            except Exception as e:
+                return {"text": f"选用失败：{e}", "blocks": []}
+
+        # 自然语言路径（未带 candidate_id，需按菜名匹配候选）：先定位方案/餐位。
         try:plan=_operation_plan(st,message,context)
         except ValueError as exc:return {"text":str(exc),"blocks":[]}
         if not plan:
@@ -1431,31 +1511,25 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         # 候选没有 name 字段（菜名在 dishes[].name）。用「菜名串完整出现在消息里」匹配，
         # 取最长命中（最具体）避免子集候选误命中（如单菜「米饭」被「米饭 + 清炒西兰花」抢走）。
         msg = intent.get("name") or ""
-        wanted_id = (context or {}).get("candidate_id")
-        target = next((c for c in slot.get("candidates") or []
-                       if wanted_id is not None and str(c.get("candidate_id")) == str(wanted_id)), None)
-        if wanted_id is not None and target is None:
-            return {"text": "该候选已失效或不属于此餐位，请刷新方案。", "blocks": []}
-        if target is None:
-            for c in slot.get("candidates") or []:
-                sig = _candidate_name(c)
-                if sig and sig in msg:
-                    if target is None or len(sig) > len(_candidate_name(target)):
-                        target = c
+        target = None
+        for c in slot.get("candidates") or []:
+            sig = _candidate_name(c)
+            if sig and sig in msg:
+                if target is None or len(sig) > len(_candidate_name(target)):
+                    target = c
         if not target:
             return {"text": "我没听清是哪个候选，可以把候选名称发我，或直接点候选卡片。",
                     "blocks": []}
 
         _st("正在选用候选")
         try:
-            # 【核心修改】选用指定候选：多传 candidate_id；接口只落库，完整方案再按 id 拉取。
-            meal_plan_id = plan.get("meal_plan_id") or plan.get("plan_id")
+            pid = plan.get("meal_plan_id") or plan.get("plan_id")
             bc.swap_candidate(
-                meal_plan_id=meal_plan_id,
+                meal_plan_id=pid,
                 meal_slot_id=slot.get("meal_slot_id") or slot.get("slot_id"),
                 candidate_id=target.get("candidate_id", ""),
             )
-            updated_plan = bc.get_meal_plan(meal_plan_id)
+            updated_plan = bc.get_meal_plan(pid)
             le.remember(st,updated_plan)
 
             new_slot = _operation_slot(updated_plan, "", {"meal_slot_id": slot.get("meal_slot_id") or slot.get("slot_id")})
@@ -1465,13 +1539,13 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
             kcal_text = f"{kcal} kcal" if kcal is not None else "热量待估"
             name = _candidate_name(target)
             fallback = f"已选定 {name}，这一顿 {kcal_text}。"
-            context = (
+            context_txt = (
                 f"动作：选定「{intent.get('meal_type') or '午餐'}」候选。\n"
                 f"选定菜品：{name}\n"
                 f"该餐热量：{kcal_text}\n"
                 "引导：卡片已更新，可继续调整或确认。"
             )
-            narration = _narrate(message, context, fallback, history)
+            narration = _narrate(message, context_txt, fallback, history)
             return {
                 "narration": narration,
                 "blocks": [blocks.meal_card_block(updated_plan)]
@@ -1486,6 +1560,45 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
 
     # 确认 / 固定
     if kind == "confirm":
+        # 结构化卡片动作（确认按钮）：上下文已带 meal_plan_id，直接调后端，省掉 get_meal_plan 往返。
+        # 冲突（同期已有固定方案）时后端返回 2005，仍需返回 quick_actions 让用户二选一（替换/取消）。
+        if structured and context.get("meal_plan_id"):
+            _st("正在确认方案")
+            try:
+                updated_plan = bc.fix_meal_plan(
+                    meal_plan_id=context.get("meal_plan_id"), replace=False
+                )
+                st.pop("_pending_confirm_plan_id", None)
+                le.remember(st, updated_plan)
+                st["plans"].insert(0, dict(updated_plan))
+                fallback = "已确认，方案已生效。食材清单已按类别整理好，可在右侧「食材清单」查看。"
+                context_txt = (
+                    "动作：确认/固定当前方案。\n"
+                    "是否取代同期的旧方案：否\n"
+                    "营养分析：用户未请求。"
+                )
+                narration = _narrate(message, context_txt, fallback, history)
+                return {
+                    "narration": narration,
+                    "blocks": [blocks.meal_card_block(updated_plan)],
+                }
+            except bc.BackendError as e:
+                if getattr(e, "code", None) == 2005:
+                    st["_pending_confirm_plan_id"] = context.get("meal_plan_id")
+                    return {
+                        "text": str(e),
+                        "blocks": [
+                            blocks.quick_actions_block([
+                                {"label": "替换", "phrase": "替换"},
+                                {"label": "取消", "phrase": "取消"},
+                            ])
+                        ],
+                    }
+                return {"text": f"确认方案失败：{e}", "blocks": []}
+            except Exception as e:
+                return {"text": f"确认方案失败：{e}", "blocks": []}
+
+        # 自然语言路径：按意图定位方案。
         try:plan=_operation_plan(st,message,context)
         except ValueError as exc:return {"text":str(exc),"blocks":[]}
         if not plan:

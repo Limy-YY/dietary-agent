@@ -365,7 +365,7 @@ def _persist_plan(
         end_date=request.end_date,
         goal_energy_kcal=Decimal(str(round(result.targets.energy_kcal, 1))),
         derived_from_plan_id=derived_from_plan_id,
-        macro_ratio=result.targets.as_dict().get("macro_ratio") or {},
+        macro_ratio=result.as_dict().get("macro_ratio") or {},
         meals={},
         sources={"rule_engine": "v1.2", "goal_code": result.targets.goal_code},
         generation_request=json.dumps(request.model_dump(mode="json"), ensure_ascii=False),
@@ -446,13 +446,13 @@ def _persist_plan(
 
 # ---------------------------------------------------------------- V2.1 local modification
 from dataclasses import replace as dc_replace
-from app.services.rule_engine.models import DishPortion, MacroRange, DEFAULT_MEAL_RATIOS
+from app.services.rule_engine.models import DishPortion, MacroRange
 from app.services.rule_engine.targets import compute_targets
 from app.services.rule_engine.candidates import build_candidates, diversify
 from app.services.rule_engine.pipeline import _split_dishes
 from app.services.rule_engine.local_edit import evaluate_portions, replace_dish_candidates
 from app.services.rule_engine.quality import repetition_cost
-from app.services.rule_engine.meal_templates import selection_key, staple_key, profile
+from app.services.rule_engine.meal_templates import base_dish_id, non_staple_base_ids, profile, selection_key, staple_key
 
 
 class LocalEditRequest(BaseModel):
@@ -496,7 +496,7 @@ def _daily_summary(plan):
 
 
 def _summary_text(plan):
-    return '已安排 %s 餐。各餐目标、实际营养及每日已安排合计见方案；未安排餐次不计入。' % len(plan.slots)
+    return '已为你安排 %s 餐，按你的能量目标与营养配比生成。' % len(plan.slots)
 
 
 def _original_request(plan):
@@ -525,8 +525,11 @@ def _edit_context(db, plan, slot, exclude=(), soft=()):
     saved = slot.target_macro or {}
     if target is None or not all(saved.get(k) is not None for k in ('kcal','protein_g','fat_g','carb_g')):
         raise BizError(BizCode.PARAM_ERROR, '餐位原始目标不完整，需重新生成方案')
-    # Preserve original slot's target; reject legacy partial-slot plans with incorrect full-day allocation.
-    if plan.goal_energy_kcal and abs(float(saved['kcal']) - float(plan.goal_energy_kcal) * DEFAULT_MEAL_RATIOS.get(slot.meal_type,0)) > 1.0:
+    # Preserve original slot's target; reject legacy partial-slot plans that allocated the
+    # whole day's energy to a single meal（单餐 kcal ≈ 全天能量，比例≈1.0）。
+    # 只拦这一种「整日能量误摊到单餐」的旧数据；早/午/晚比例口径的微调（如 0.25↔0.30）不算异常，
+    # 直接沿用保存的目标继续重生成，否则换一换会误报「口径异常」。
+    if plan.goal_energy_kcal and float(saved['kcal']) > float(plan.goal_energy_kcal) * 0.6:
         raise BizError(BizCode.PARAM_ERROR, '旧方案餐位目标口径异常，请先重新生成整份方案')
     def rng(key):
         v = float(saved[key]); return MacroRange(key,v,round(v*(1-req.tolerance),1),round(v*(1+req.tolerance),1))
@@ -577,6 +580,33 @@ def _previous_candidates(plan, slot, catalog):
             continue
         other.append(SimpleNamespace(portions=p,dish_ids=[x.dish_id for x in p]))
     return other
+
+
+def _adjacent_non_staple_ids(plan, slot, catalog) -> set[str]:
+    """邻天（±1 天，含同日）已选的非主食菜 base_id，用于「换一换 / 重生成」避重。
+
+    主食重复是可接受的（同一天多餐共用米饭/馒头），故只避非主食；
+    少盐变体经 base_dish_id 归一，避免「原味 + 少盐」被当作两道不同菜。
+    """
+    target_day = slot.slot_date
+    if target_day is None:
+        return set()
+    facts_by_id = {d.dish_id: d for d in catalog}
+    avoid: set[str] = set()
+    for other in plan.slots:
+        if other.meal_slot_id == slot.meal_slot_id or other.slot_date is None:
+            continue
+        if abs((other.slot_date - target_day).days) > 1:
+            continue
+        cand = _selected_candidate(other)
+        if cand is None:
+            continue
+        for d in cand.dishes:
+            facts = facts_by_id.get(d.dish_id)
+            if facts is not None and '主食' in profile(facts).roles:
+                continue
+            avoid.add(base_dish_id(d.dish_id))
+    return avoid
 
 def _update_candidate_row(db: Session, row: MealCandidate, candidate, rank: int) -> MealCandidate:
     """原地更新候选的菜品与营养估算，避免新增第 4 条记录触发 rank 1..3 检查约束。"""
@@ -685,6 +715,13 @@ def regenerate_slot(req: SlotRegenerateRequest, user_id: str = CurrentUser, db: 
         if attempted:
             seen = {tuple(sorted(c.dish_ids)) for c in strict}
             pool = strict + [c for c in adjust(build_candidates(target,staples,sides,targets,relaxed=True,extend=True,**kwargs)) if tuple(sorted(c.dish_ids)) not in seen]
+        # 换一换 / 重生成：优先避开邻天（±1 天）已选的非主食菜，减少「相邻天都是同一道素菜」。
+        # 过滤后不足 2 个候选时退回全池，靠 selection_key 的 repetition 软排序兜底。
+        avoid_ids = _adjacent_non_staple_ids(plan, slot, catalog)
+        if avoid_ids:
+            fresh = [c for c in pool if not (non_staple_base_ids(c) & avoid_ids)]
+            if len(fresh) >= 2:
+                pool = fresh
         pool.sort(key=lambda c: selection_key(c,target,previous,repetition_cost(c,previous)))
         picked = diversify(pool,3)
         if len(picked) < 2:
@@ -909,18 +946,19 @@ def swap_candidate(
             "ver": "v1.2",
         },
     )
-    db.commit()
+    db.flush()
 
-    return api_success(
-        {
-            "meal_plan_id": plan.meal_plan_id,
-            "meal_slot_id": slot.meal_slot_id,
-            "selected_candidate_id": target.candidate_id,
-            "previous_candidate_id": previous_id,
-            "candidate": _serialize_candidate(target, _dish_details(db, [d.dish_id for d in target.dishes])),
-            "macro_delta": delta,
-        }
-    )
+    # 直接返回全量序列化方案：Agent「选用候选」一次拿到结果，省去再次 get_meal_plan 的往返。
+    # plan 已由 _get_plan(lock=True) 载入 slots→candidates→dishes，selected_candidate_id 已在内存更新，
+    # 故这里无需再 _get_plan 重查；在 commit 前序列化，避免 commit 后 ORM 对象过期触发懒加载。
+    # 序列化 / 提交任一失败都回滚并归为业务错误，避免裸 500 且保证换候选不会半提交。
+    try:
+        result = _serialize_plan(plan, db)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise BizError(BizCode.PLAN_GENERATION_FAILED, '换候选失败，原方案保留') from exc
+    return api_success(result)
 
 
 # ---------------------------------------------------------------- API-24 固定

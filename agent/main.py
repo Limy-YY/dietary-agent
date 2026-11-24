@@ -64,26 +64,36 @@ async def _stream(req: AgentChatRequest):
                                   on_status, conversation_id=conv_id, context=req.context or {}))
     )
 
-    # 实时转发「过程状态」（thinking 步骤），直到 agent.run 结束
-    while not agent_task.done():
+    if req.silent:
+        # 静默按钮动作（换一换/选用/确认）：前端只消费 meal_card/done、丢弃 status，
+        # 直接等 agent.run 结果，省去 50ms 轮询带来的平均 ~25ms 白等。
         try:
+            result = await agent_task
+        except Exception as e:
+            yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
+            yield _sse("done", {"conversation_id": conv_id, "finish_reason": "error"})
+            return
+    else:
+        # 实时转发「过程状态」（thinking 步骤），直到 agent.run 结束
+        while not agent_task.done():
+            try:
+                stage = status_q.get_nowait()
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0.05)
+                continue
+            yield _sse("status", {"stage": stage})
+        # 让事件循环先处理 run() 结束前最后一刻 call_soon_threadsafe 排队的 status，再排空
+        await asyncio.sleep(0)
+        while not status_q.empty():
             stage = status_q.get_nowait()
-        except asyncio.QueueEmpty:
-            await asyncio.sleep(0.05)
-            continue
-        yield _sse("status", {"stage": stage})
-    # 让事件循环先处理 run() 结束前最后一刻 call_soon_threadsafe 排队的 status，再排空
-    await asyncio.sleep(0)
-    while not status_q.empty():
-        stage = status_q.get_nowait()
-        yield _sse("status", {"stage": stage})
+            yield _sse("status", {"stage": stage})
 
-    try:
-        result = agent_task.result()
-    except Exception as e:  # 生成中失败 → error 事件，前端可重试
-        yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
-        yield _sse("done", {"conversation_id": conv_id, "finish_reason": "error"})
-        return
+        try:
+            result = agent_task.result()
+        except Exception as e:  # 生成中失败 → error 事件，前端可重试
+            yield _sse("error", {"code": 2003, "message": f"生成失败：{e}"})
+            yield _sse("done", {"conversation_id": conv_id, "finish_reason": "error"})
+            return
 
     # Silent card actions must return an updated card for the requested plan.
     # Text-only errors (including fixed-plan conflicts) must not become successful done events.
