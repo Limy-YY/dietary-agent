@@ -384,6 +384,7 @@ core,dish,BASE TABLE,17,source_id,text,text,YES,,,,
 core,dish,BASE TABLE,18,is_deleted,boolean,bool,NO,false,,,
 core,dish,BASE TABLE,19,created_at,timestamp with time zone,timestamptz,NO,now(),,,
 core,dish,BASE TABLE,20,updated_at,timestamp with time zone,timestamptz,NO,now(),,,
+core,dish,BASE TABLE,21,steps,ARRAY,_text,YES,,,,
 core,dish_ingredient,BASE TABLE,1,dish_ingredient_id,bigint,int8,NO,,,64,0
 core,dish_ingredient,BASE TABLE,2,dish_id,text,text,NO,,,,
 core,dish_ingredient,BASE TABLE,3,ingredient_id,bigint,int8,NO,,,64,0
