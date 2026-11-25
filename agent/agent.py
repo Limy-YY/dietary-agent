@@ -119,8 +119,6 @@ _NARRATE_SYSTEM = (
     + "\n你现在要针对刚刚完成的一个动作写一句到三句的短回应，用自然段落即可，不要用标题、列表或表格。\n"
     "重要：结构化结果（食谱卡片/膳食报告）已经由前端单独渲染，你的文字不要整段复述卡片里的数据，"
     "只需自然点出关键信息（如本餐/本周的核心菜、热量量级、状态变化）并引导下一步。\n"
-    "不要照抄「本轮结果」里的方案定位行（形如「方案1（YYYY-MM-DD 至 YYYY-MM-DD，早餐X餐…共N餐）」）——"
-    "方案编号与日期已在卡片标题里显示，你的开头应是自然的人话（如「帮你把今天的三餐排好了」），而不是技术性回执。\n"
     "所有数值只能引用「本轮结果」里给出的，不得自行计算或编造。"
 )
 
@@ -930,7 +928,7 @@ def _fast_generate(user_id, profile, message, kind, intent, history, on_status, 
         return {"text": f"方案没排出来：{e}", "blocks": []}
     st.pop(rf.KEY, None)
     le.remember(st, plan)
-    fallback = "帮你把这次配餐排好了，可以在下方卡片上「换一换」调整，满意后点「确认方案」固定。"
+    fallback = _plan_label_line(plan)
     narration = _narrate(message, _plan_label_line(plan) + "\n" + _plan_brief(plan), fallback, history)
     return {"narration": narration, "blocks": [blocks.meal_card_block(plan)]}
 
