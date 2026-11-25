@@ -86,7 +86,7 @@ npm run dev
 | 数据库（Docker 容器 `diet-agent-db`） | 5432 | `docker compose ps`（healthy）                               |
 | 后端                                    | 8000 | `http://127.0.0.1:8000/api/health`（status=ok, database=ok） |
 | Agent                                   | 8001 | `http://127.0.0.1:8001/health`（llm=true）                   |
-| 前端                                    | 5173 | `http://127.0.0.1:5173`                                      |
+| 前端                                    | 5174 | `http://127.0.0.1:5174`                                      |
 
 > 前端默认已接真实后端（[frontend/.env.development](frontend/.env.development) `VITE_USE_MOCK=false` + `VITE_API_BASE=http://127.0.0.1:8000`）；不装后端时可改回 `true` 走内置 Mock。
 
@@ -105,7 +105,7 @@ cd backend
 localStorage.setItem('sz_token', '<token>')
 ```
 
-除 `/api/health` 外，所有业务接口带 `Authorization: Bearer <token>`，`user_id` 由 token 注入。
+除 `/api/health` 外，所有业务接口带 `Authorization: Bearer <token>`，`user_id` 由 token 注入
 
 ## 作业材料（docs/）
 
