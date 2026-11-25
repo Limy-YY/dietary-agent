@@ -4,7 +4,7 @@ import { streamChat } from '@/api/agent.js'
 import { listConversations, listMessages, renameConversation, deleteConversation } from '@/api/conversation.js'
 import { fetchPlanById } from '@/api/mealPlan.js'
 import { getToken } from '@/api/http.js'
-import { normalizeArtifact } from '@/utils/schema.js'
+import { normalizeArtifact, normalizeSources } from '@/utils/schema.js'
 import { groupOf, uid } from '@/utils/format.js'
 import { usePanelStore } from './panel.js'
 
@@ -52,6 +52,8 @@ function toMessage(item) {
     role: item.role === 'user' ? 'user' : 'ai',
     text: item.content || '',
     blocks,
+    // F5（IMP-063）：历史消息里的结构化引用，回看时原样还原
+    sources: normalizeSources(item.sources || (item.structured_output && item.structured_output.sources)),
     status: 'done',
     error: '',
     suggestions: [],
@@ -306,6 +308,8 @@ export const useChatStore = defineStore('chat', () => {
     const session = ensureSession()
     const panel = usePanelStore()
     showWelcome.value = false
+    // 新一轮主动配餐开始：清掉复用时钉住的草稿聚焦，回到常规 /current 展示
+    panel.clearFocusPlan()
 
     // 先等历史懒加载完成再追加本轮消息：否则 hydrateSession 返回时会整组覆盖
     // session.messages，把刚 push 的 user/ai 消息连同流式渲染一起冲掉（BUG-043）。
@@ -341,6 +345,7 @@ export const useChatStore = defineStore('chat', () => {
       clarify: null,
       thinking: '',
       thinkingSteps: [],
+      sources: [],
       createdAt: new Date().toISOString()
     })
 
@@ -366,6 +371,8 @@ export const useChatStore = defineStore('chat', () => {
               aiMsg.thinking = '' // 正文开始，隐藏思考步骤
               aiMsg.text += payload.content
             }
+            // F5：结构化引用随正文帧下发时落消息（Agent A10 就绪后生效）
+            if (Array.isArray(payload.sources)) aiMsg.sources = normalizeSources(payload.sources)
             session.updatedAt = new Date().toISOString()
           }
 
@@ -422,6 +429,10 @@ export const useChatStore = defineStore('chat', () => {
               aiMsg.suggestions = payload.suggestions
                 .map((s) => (typeof s === 'string' ? s : s && (s.text || s.label)))
                 .filter((s) => typeof s === 'string' && s)
+            }
+            // F5：done 帧兜底下发结构化引用
+            if (Array.isArray(payload.sources) && !aiMsg.sources?.length) {
+              aiMsg.sources = normalizeSources(payload.sources)
             }
             session.updatedAt = new Date().toISOString()
           }

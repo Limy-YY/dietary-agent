@@ -9,7 +9,12 @@
     <template v-else-if="groups.length">
       <div class="data-timestamp">🕐 清单生成于 {{ updatedText }} · 共 {{ total }} 项</div>
 
-      <div class="grocery-progress">已买 {{ doneCount }}/{{ total }} 项</div>
+      <div class="grocery-progress-row">
+        <div class="grocery-progress">已买 {{ doneCount }}/{{ total }} 项</div>
+        <button v-if="groups.length" class="grocery-toggle-all" @click="toggleAllGroups">
+          {{ allCollapsed ? '全部展开' : '全部折叠' }}
+        </button>
+      </div>
 
       <div v-if="hasDays" class="batch-hint">💡 整周方案已按天分列，建议按 2~3 天分批采购，食材更新鲜。</div>
 
@@ -29,20 +34,28 @@
           <span class="gd-day">{{ g.day }}</span>
           <span class="gd-date">{{ g.day_short }}</span>
         </div>
-        <div class="grocery-group-title">
-          <span>{{ g.category }}</span>
-          <span style="font-weight: 400; color: var(--text-sub); font-size: 11.5px">{{ g.items.length }} 项</span>
-        </div>
-        <label
-          v-for="it in g.items"
-          :key="it.item_id"
-          class="grocery-item"
-          :class="{ checked: checkedMap[it.item_id] }"
+        <button
+          type="button"
+          class="grocery-group-title"
+          :aria-expanded="!isCollapsed(g.group_id)"
+          @click="toggleGroup(g.group_id)"
         >
-          <input type="checkbox" v-model="checkedMap[it.item_id]" @change="index++" />
-          <span class="gi-name">{{ it.name }}</span>
-          <span class="gi-amount">{{ it.amount }}</span>
-        </label>
+          <span class="gg-chevron">{{ isCollapsed(g.group_id) ? '▸' : '▾' }}</span>
+          <span class="gg-category">{{ g.category }}</span>
+          <span class="gg-meta">{{ groupDone(g) }}/{{ g.items.length }} 项</span>
+        </button>
+        <div v-show="!isCollapsed(g.group_id)" class="grocery-group-body">
+          <label
+            v-for="it in g.items"
+            :key="it.item_id"
+            class="grocery-item"
+            :class="{ checked: checkedMap[it.item_id] }"
+          >
+            <input type="checkbox" v-model="checkedMap[it.item_id]" @change="index++" />
+            <span class="gi-name">{{ it.name }}</span>
+            <span class="gi-amount">{{ it.amount }}</span>
+          </label>
+        </div>
       </template>
       <div class="grocery-note">数量为估算量，按实际采购调整；粮油等常备品类按家中存量自行增减。</div>
     </template>
@@ -97,6 +110,8 @@ const groups = ref([])
 const totalItems = ref(null)
 const generatedAt = ref('')
 const checkedMap = reactive({})
+// F8（IMP-069）：按稳定 group_id 记录各类折叠态；v-show 不销毁 DOM，勾选态保留
+const collapsedMap = reactive({})
 const index = ref(0)
 const dayFilter = ref('全部')
 
@@ -107,6 +122,29 @@ const total = computed(() => {
 const doneCount = computed(() =>
   groups.value.reduce((s, g) => s + g.items.filter((it) => checkedMap[it.item_id]).length, 0)
 )
+
+const allCollapsed = computed(
+  () => groups.value.length > 0 && groups.value.every((g) => collapsedMap[g.group_id])
+)
+
+function groupDone(g) {
+  return g.items.filter((it) => checkedMap[it.item_id]).length
+}
+
+function isCollapsed(id) {
+  return Boolean(collapsedMap[id])
+}
+
+function toggleGroup(id) {
+  collapsedMap[id] = !collapsedMap[id]
+}
+
+function toggleAllGroups() {
+  const target = !allCollapsed.value
+  groups.value.forEach((g) => {
+    collapsedMap[g.group_id] = target
+  })
+}
 const updatedText = computed(() => (generatedAt.value ? fmtDateTime(generatedAt.value) : '刚刚'))
 
 const hasDays = computed(() => groups.value.some((g) => g.day))
@@ -137,6 +175,8 @@ async function load() {
   dayFilter.value = '全部'
   // 换方案时清空勾选态：checkedMap 以 ingredient 为键，跨方案会串「已买」数据（BUG-047）。
   Object.keys(checkedMap).forEach((k) => delete checkedMap[k])
+  // F8：换方案同步重置折叠态，避免新清单沿用旧方案的收起状态
+  Object.keys(collapsedMap).forEach((k) => delete collapsedMap[k])
   try {
     const current = await fetchCurrentPlan()
     if (!current || current.meal_plan_id == null) {
@@ -174,6 +214,63 @@ watch(() => panel.active, (v) => v === 'grocery' && load())
 <style scoped>
 .sk-wrap {
   padding-top: 8px;
+}
+
+/* F8（IMP-069）：折叠交互相关样式全部写在本组件 scoped，不进 base.css */
+.grocery-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.grocery-progress {
+  font-size: 12.5px;
+  color: var(--text-sub);
+}
+
+.grocery-toggle-all {
+  flex: none;
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: var(--brand-hover);
+  cursor: pointer;
+}
+
+.grocery-toggle-all:hover {
+  text-decoration: underline;
+}
+
+/* 标题行由 div 改为 button：重置按钮默认样式，布局复用 base.css 的 .grocery-group-title */
+.grocery-group-title {
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gg-chevron {
+  flex: none;
+  width: 12px;
+  font-size: 10px;
+  color: var(--text-sub);
+}
+
+.gg-category {
+  flex: 1;
+  min-width: 0;
+}
+
+.gg-meta {
+  flex: none;
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--text-sub);
 }
 
 .grocery-note {

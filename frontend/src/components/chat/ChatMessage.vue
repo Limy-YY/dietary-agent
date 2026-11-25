@@ -18,10 +18,35 @@
           💭 {{ thinkingRecord }}
         </div>
         <div v-if="message.text" class="bubble md-bubble">
-          <div class="md" v-html="renderMarkdown(message.text)"></div>
+          <div class="md" v-html="bodyHtml" @click="onBubbleClick"></div>
           <span v-if="message.status === 'streaming'" class="caret"></span>
         </div>
         <div v-else-if="message.status === 'streaming' && !message.thinking" class="typing"><i></i><i></i><i></i></div>
+
+        <!-- F5（IMP-063）：文末结构化来源卡片流 -->
+        <div v-if="message.sources && message.sources.length" class="cite-sources">
+          <div class="cite-sources-title">参考来源</div>
+          <div
+            v-for="(s, i) in message.sources"
+            :id="`cite-card-${s.id}`"
+            :key="s.id || i"
+            class="cite-card"
+          >
+            <div class="cite-card-head">
+              <span class="cite-card-index">{{ i + 1 }}</span>
+              <a
+                v-if="s.url"
+                :href="s.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="cite-card-title"
+              >{{ s.title || s.source || s.url }}</a>
+              <span v-else class="cite-card-title">{{ s.title || s.source || '来源' }}</span>
+              <span v-if="s.domain" class="cite-card-domain">{{ s.domain }}</span>
+            </div>
+            <div v-if="s.snippet" class="cite-card-snippet">{{ s.snippet }}</div>
+          </div>
+        </div>
       </template>
 
       <RendererHost
@@ -60,6 +85,52 @@ import { renderMarkdown } from '@/utils/markdown.js'
 
 const props = defineProps({ message: { type: Object, required: true } })
 defineEmits(['phrase', 'retry'])
+
+/** F5：HTML 注入前转义，悬浮卡文案一律来自后端结构化引用，不直接拼原始字符串 */
+function escapeHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]))
+}
+
+const sourceList = computed(() => props.message.sources || [])
+
+/** 按正文编号 n 找对应引用：先按下标（第 n 条），再按 id 兜底 */
+function sourceFor(n) {
+  const list = sourceList.value
+  return list[Number(n) - 1] || list.find((s) => String(s.id) === String(n)) || null
+}
+
+/** 悬浮卡内嵌在胶囊里（v-html 内无法挂 Vue 状态），字段先转义再拼 */
+function tipHtml(src) {
+  const title = escapeHtml(src.title || src.source || '参考来源')
+  const snippet = src.snippet ? `<span class="cite-tip-snippet">${escapeHtml(src.snippet)}</span>` : ''
+  const domain = src.domain ? `<span class="cite-tip-domain">${escapeHtml(src.domain)}</span>` : ''
+  return `<span class="cite-tip-title">${title}</span>${snippet}${domain}`
+}
+
+/** F5：正文 [n] 命中结构化引用时替换为可点胶囊；未命中保持纯文本，不臆造来源 */
+const bodyHtml = computed(() => {
+  const html = renderMarkdown(props.message.text)
+  if (!sourceList.value.length) return html
+  return html.replace(/\[(\d+)\]/g, (m, n) => {
+    const src = sourceFor(n)
+    if (!src) return m
+    return `<button type="button" class="cite-chip" data-cite="${escapeHtml(src.id)}" aria-label="引用 ${n}">[${escapeHtml(n)}]<span class="cite-tip">${tipHtml(src)}</span></button>`
+  })
+})
+
+function jumpTo(id) {
+  const el = document.getElementById(`cite-card-${id}`)
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+/** v-html 胶囊点击代理：命中 data-cite 才滚动到文末来源卡 */
+function onBubbleClick(ev) {
+  const chip = ev.target.closest?.('.cite-chip')
+  if (!chip) return
+  jumpTo(chip.dataset.cite)
+}
 
 // 思考记录：过滤掉「理解需求 / 读取档案 / 整理回复」这类元步骤，只留核心动作，折叠成一行「已X」
 const META_STEPS = ['正在理解你的需求', '正在读取档案', '正在整理回复']
@@ -173,5 +244,134 @@ const showSuggestions = computed(
 
 .suggest-chip:hover {
   background: var(--brand-medium, #dce8df);
+}
+
+/* F5（IMP-063）：正文引用胶囊 —— 小字号品牌色，行内不打断排版 */
+.cite-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  margin: 0 1px;
+  border: 1px solid var(--brand-medium, #dce8df);
+  border-radius: 5px;
+  background: var(--brand-light, #eef3ee);
+  color: var(--brand-hover, #3d6a4b);
+  font-size: 11.5px;
+  line-height: 1.5;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+
+.cite-chip:hover {
+  background: var(--brand-medium, #dce8df);
+}
+
+/* 悬浮卡：hover 胶囊时在上方展开，内容来自后端结构化引用 */
+.cite-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  width: 240px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid var(--border-soft, #e5e7eb);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  text-align: left;
+  white-space: normal;
+}
+
+.cite-chip:hover .cite-tip {
+  display: flex;
+}
+
+.cite-tip-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-main, #333);
+  line-height: 1.5;
+}
+
+.cite-tip-snippet {
+  font-size: 12px;
+  color: var(--text-sub, #7a7a7a);
+  line-height: 1.6;
+}
+
+.cite-tip-domain {
+  font-size: 11px;
+  color: var(--text-sub, #9a9a9a);
+}
+
+/* 文末来源卡片流 */
+.cite-sources {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cite-sources-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-sub, #7a7a7a);
+}
+
+.cite-card {
+  padding: 10px 12px;
+  background: var(--bg-soft, #fafafa);
+  border: 1px solid var(--border-soft, #eef0ee);
+  border-radius: 10px;
+}
+
+.cite-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.cite-card-index {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--brand-light, #eef3ee);
+  color: var(--brand-hover, #3d6a4b);
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cite-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-hover, #3d6a4b);
+  text-decoration: none;
+}
+
+.cite-card-title:hover {
+  text-decoration: underline;
+}
+
+.cite-card-domain {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-sub, #9a9a9a);
+}
+
+.cite-card-snippet {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-sub, #7a7a7a);
+  line-height: 1.6;
 }
 </style>

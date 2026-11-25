@@ -8,6 +8,8 @@ export const usePanelStore = defineStore('panel', () => {
   const revision = ref(0)
   /** 报告面板未读角标 */
   const unreadReports = ref(0)
+  /** F6（IMP-064）：复用生成后要求「当前规划」面板直接展示的新方案 id；为空时按 /current 常规加载 */
+  const focusPlanId = ref(null)
 
   function open(key) {
     active.value = key
@@ -31,5 +33,16 @@ export const usePanelStore = defineStore('panel', () => {
     unreadReports.value += 1
   }
 
-  return { active, revision, unreadReports, open, close, toggle, bump, markReportUnread }
+  /** F6：记下要直达展示的新草稿方案，并切到当前规划面板 */
+  function showPlan(planId) {
+    focusPlanId.value = planId ? String(planId) : null
+    active.value = 'current_plan'
+  }
+
+  /** 新的正常配餐流程开始后清掉复用聚焦，避免面板一直钉在旧草稿上 */
+  function clearFocusPlan() {
+    focusPlanId.value = null
+  }
+
+  return { active, revision, unreadReports, focusPlanId, open, close, toggle, bump, markReportUnread, showPlan, clearFocusPlan }
 })

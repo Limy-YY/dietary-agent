@@ -9,7 +9,7 @@
     <template v-else-if="plan">
       <div class="data-timestamp">🕒 {{ plan.status === 'fixed' ? '固定于' : '更新于' }} {{ updatedText }}</div>
 
-      <div class="plan-overview">
+      <div class="plan-overview" :class="{ focused: isFocused }">
         <div class="po-head">
           <div>
             <div class="po-title">{{ plan.title || '当前规划' }}</div>
@@ -74,12 +74,14 @@
       <div class="panel-note">{{ isFixed ? '💡 方案已生效，右侧「食材清单」已按天同步采购项，建议分批购买。' : '💡 确认方案后，「食材清单」才会同步更新采购项。' }}</div>
 
       <div
-        v-if="plan.reference_hints.length"
+        v-if="tips.length"
         class="plan-nutrition"
       >
         <div class="plan-nutrition-title">🥗 营养提示</div>
         <ul class="plan-nutrition-list">
-          <li v-for="(h, i) in plan.reference_hints" :key="'h' + i">{{ h }}</li>
+          <li v-for="(t, i) in tips" :key="'t' + i">
+            <span v-if="t.title" class="pt-name">{{ t.title }}</span>{{ t.text }}<span v-if="t.source" class="pt-source">（{{ t.source }}）</span>
+          </li>
         </ul>
       </div>
 
@@ -115,7 +117,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { fetchCurrentPlan } from '@/api/mealPlan.js'
+import { fetchCurrentPlan, fetchPlanById } from '@/api/mealPlan.js'
 import { fetchReport } from '@/api/nutrition.js'
 import { fmtKcal, normalizeCurrentPlan } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
@@ -141,6 +143,15 @@ const swapping = ref('')
 const reportLoading = ref(false)
 
 const isFixed = computed(() => plan.value?.status === 'fixed')
+// F6：刚复用生成的新草稿，在总览区高亮一圈，让用户一眼看到落点
+const isFocused = computed(() => Boolean(plan.value?.plan_id && plan.value.plan_id === panel.focusPlanId))
+
+// F9（IMP-070）：优先渲染后端落库的 nutrition_tips（科普化）；后端/数据岗未就绪时回退旧 reference_hints
+const tips = computed(() => {
+  const rich = plan.value?.nutrition_tips || []
+  if (rich.length) return rich
+  return (plan.value?.reference_hints || []).map((h) => ({ title: '', text: h, source: '' }))
+})
 const updatedText = computed(() => {
   const t = plan.value?.fixed_at
   return t ? fmtDateTime(t) : '—'
@@ -240,7 +251,9 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const raw = await fetchCurrentPlan()
+    // F6（IMP-064）：复用生成后按返回的新方案 id 直查展示，不依赖 /current 优先返回已固定方案
+    const focusId = panel.focusPlanId
+    const raw = focusId ? await fetchPlanById(focusId) : await fetchCurrentPlan()
     const view = raw ? normalizeCurrentPlan(raw) : null
     plan.value = view && view.has_plan ? view.plan : null
     const days = plan.value?.days || []
@@ -313,6 +326,7 @@ function onAction(a) {
 onMounted(load)
 watch(() => panel.revision, load)
 watch(() => panel.active, (v) => v === 'current_plan' && load())
+watch(() => panel.focusPlanId, () => load())
 </script>
 
 <style scoped>
@@ -339,6 +353,17 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
 .cp-swap:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* F6：复用生成的新草稿高亮（scoped，不进 base.css） */
+.plan-overview.focused {
+  outline: 2px solid var(--brand-medium, #dce8df);
+  animation: plan-focus-pulse 1.6s ease 2;
+}
+
+@keyframes plan-focus-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(74, 124, 89, 0.25); }
+  50% { box-shadow: 0 0 0 6px rgba(74, 124, 89, 0.12); }
 }
 
 .cp-report-link {
@@ -387,6 +412,16 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
 
 .plan-nutrition-list li {
   margin: 2px 0;
+}
+
+.pt-name {
+  font-weight: 600;
+  color: var(--text-main, #333);
+  margin-right: 4px;
+}
+
+.pt-source {
+  color: var(--text-sub, #9a9a9a);
 }
 
 /* 数据说明：中性脚注，默认折叠，与上方「营养提示」分开，不放人话依据里 */

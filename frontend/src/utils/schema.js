@@ -49,6 +49,53 @@ export function fmtKcal(v) {
   return n.toFixed(1)
 }
 
+/** 从 URL 抽取域名（无协议时补全再解析），抽不出来返回空串 */
+export function domainOfUrl(url) {
+  const u = String(url || '').trim()
+  if (!u) return ''
+  try {
+    const host = new URL(/^https?:\/\//i.test(u) ? u : `https://${u}`).hostname
+    return host.replace(/^www\./, '')
+  } catch (e) {
+    return ''
+  }
+}
+
+/** F9：营养提示归一化，兼容字符串数组与 {title,text,source} 对象数组；空项丢弃 */
+export function normalizeNutritionTips(list) {
+  return arr(list)
+    .map((t) => {
+      if (t == null) return null
+      if (typeof t === 'string') {
+        const text = t.trim()
+        return text ? { title: '', text, source: '' } : null
+      }
+      const title = str(pick(t, 'title', 'nutrient', 'name'), '')
+      const text = str(pick(t, 'text', 'advice', 'content', 'message'), '').trim()
+      const source = str(pick(t, 'source', 'source_name'), '')
+      return text ? { title, text, source } : null
+    })
+    .filter(Boolean)
+}
+
+/** F5（IMP-063）：结构化引用归一化为 {id,title,source,url,snippet,domain}，供对话气泡胶囊 / 悬浮卡 / 来源卡使用 */
+export function normalizeSources(list) {
+  return arr(list)
+    .map((s, i) => {
+      if (s == null || typeof s !== 'object') return null
+      const url = str(pick(s, 'url', 'source_url', 'link'), '')
+      return {
+        id: str(pick(s, 'id', 'source_id', 'doc_id'), String(i + 1)),
+        title: str(pick(s, 'title'), ''),
+        source: str(pick(s, 'source', 'publisher'), ''),
+        url,
+        snippet: str(pick(s, 'snippet', 'content', 'summary'), ''),
+        domain: str(pick(s, 'domain'), '') || domainOfUrl(url)
+      }
+    })
+    .filter(Boolean)
+}
+
 /* ---------- 枚举展示（只做中文标签，不承载业务映射表） ---------- */
 
 const MEAL_LABELS = { 早: '早餐', 午: '午餐', 晚: '晚餐' }
@@ -257,9 +304,20 @@ export function normalizeMealCard(payload) {
     goal_code: str(pick(p, 'goal_code'), ''),
     goal_energy_kcal: numOrNull(pick(p, 'goal_energy_kcal')),
     macro_ratio: p.macro_ratio || null,
+    // F7（IMP-076）：副标题合计改用各餐实际选中热量求和，与全天目标天然不同；
+    // 任一餐实际热量缺失则省略「本方案合计」段，不回落 0。
     subtitle: planType === '餐'
       ? `本餐目标 ${fmtKcal(slots[0]?.target_kcal)} kcal · 单餐候选`
-      : `全天目标 ${fmtKcal(pick(p, 'goal_energy_kcal'))} kcal · 已安排餐次目标合计 ${fmtKcal(sumComplete(slots.map(s => s.target_kcal)))} kcal · 共 ${days.length} 天`,
+      : (() => {
+          const goal = numOrNull(pick(p, 'goal_energy_kcal'))
+          const actualKcal = sumComplete(slots.map((s) => s.kcal))
+          const parts = []
+          if (goal !== null) {
+            parts.push(`全天目标 ${fmtKcal(goal)} kcal${days.length > 1 ? `（共 ${days.length} 天）` : ''}`)
+          }
+          if (actualKcal !== null) parts.push(`本方案合计 ${fmtKcal(actualKcal)} kcal`)
+          return parts.join(' · ')
+        })(),
     slots,
     days,
     reason: str(pick(p, 'why_summary'), ''),
@@ -321,6 +379,9 @@ export function normalizeCurrentPlan(payload) {
       // reference_hints / data_quality_notes），面板只读渲染，不补算。
       why_summary: str(pick(p, 'why_summary'), ''),
       reference_hints: arr(pick(p, 'reference_hints')),
+      // F9（IMP-070）：科普化营养提示，读取后端落库的 nutrition_tips（只读展示，不实时生成）；
+      // 后端/数据岗未就绪时面板回退渲染旧 reference_hints。兼容顶层与 generation_context 两种落位。
+      nutrition_tips: normalizeNutritionTips(pick(p, 'nutrition_tips') || (p.generation_context || {}).nutrition_tips),
       data_quality_notes: arr(pick(p, 'data_quality_notes'))
     }
   }

@@ -151,10 +151,17 @@ async function regenerate() {
   if (!id) return
   regenerating.value = true
   try {
-    await regeneratePlan(id)
-    ElMessage.success('已按这个思路排了新方案')
-    panel.bump()
+    const r = await regeneratePlan(id)
+    const newId = r?.meal_plan_id
     visible.value = false
+    if (newId) {
+      // F6（IMP-064）：按返回的新方案 id 直达当前规划面板并高亮，不依赖 /current 的优先 fixed 语义
+      panel.showPlan(newId)
+      ElMessage.success('已按这个思路排了新方案，已切到当前规划查看')
+    } else {
+      panel.bump()
+      ElMessage.success('已按这个思路排了新方案')
+    }
   } catch (e) {
     ElMessage.error(e.message || '再排失败')
   } finally {

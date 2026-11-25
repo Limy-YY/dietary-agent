@@ -6,6 +6,18 @@ const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
 // 开启 GFM 表格 / 删除线（markdown-it 的 default 预设已含，这里显式声明以防预设变动）。
 md.enable(['table', 'strikethrough'])
 
+// F5（IMP-063）：外链新标签打开并带 noopener/noreferrer，防止 LLM 输出的链接把当前页顶走；
+// 页内锚点（# 开头）不套 target=_blank。
+const defaultLinkOpen = md.renderer.rules.link_open
+md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  const href = tokens[idx].attrGet('href') || ''
+  if (/^https?:\/\//i.test(href)) {
+    tokens[idx].attrSet('target', '_blank')
+    tokens[idx].attrSet('rel', 'noopener noreferrer')
+  }
+  return defaultLinkOpen ? defaultLinkOpen(tokens, idx, options, env, self) : self.renderToken(tokens, idx, options)
+}
+
 // LLM 常把表格写成「制表符分隔」而不是 GFM 的「| … | … |」；这里把连续的制表符行转成竖线表格。
 function normalizeTables(text) {
   const lines = text.split('\n')
