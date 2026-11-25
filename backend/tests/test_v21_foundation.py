@@ -8,8 +8,7 @@ from app.services.rule_engine import Profile, PlanRequest, compute_targets, buil
 class FoundationTests(unittest.TestCase):
     def setUp(self):
         self.profile = Profile(gender="男", age=20, height_cm=180, weight_kg=68,
-                               allergies=["花生"], religious_ethical=["清真"],
-                               cooking_equipment=["炒锅", "蒸锅"])
+                               allergies=["花生"])
         self.request = PlanRequest(start_date="2026-11-18", end_date="2026-11-18", meal_types=["午"])
 
     def targets(self, meals):
@@ -55,7 +54,7 @@ class FoundationTests(unittest.TestCase):
         self.assertTrue(pool)
         self.assertIsNone(pool[0].totals["sodium_mg"])
         self.assertIn("oil_salt_unknown", pool[0].reason_codes)
-        for excluded in [dishes[-1], dishes[-2]]:
+        for excluded in [dishes[-1]]:  # 花生过敏（宗教/厨具硬过滤已移除）
             self.assertEqual(build_candidates(target, [staple], [excluded], t, relaxed=True), [])
         self.assertEqual(build_candidates(target, [staple], [replace(side, energy_kcal=None)], t, relaxed=True), [])
 

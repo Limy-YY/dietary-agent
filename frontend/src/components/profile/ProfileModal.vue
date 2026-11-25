@@ -55,11 +55,8 @@
             </div>
           </div>
           <div class="pf-li">
-            <span class="pf-k">烹饪条件</span>
-            <div class="pf-v pf-tags">
-              <span v-for="c in p.cooking_equipment || []" :key="c" class="pf-tag">{{ c }}</span>
-              <span v-if="!(p.cooking_equipment || []).length" class="pf-tag">未填写</span>
-            </div>
+            <span class="pf-k">活动水平</span>
+            <span class="pf-v">{{ p.activity_level || '未填写' }}</span>
           </div>
           <div class="pf-li">
             <span class="pf-k">疾病限制</span>
@@ -77,13 +74,6 @@
             <div class="pf-v pf-tags">
               <span v-for="a in p.allergies || []" :key="a" class="pf-tag">{{ a }}</span>
               <span v-if="!(p.allergies || []).length" class="pf-tag">无</span>
-            </div>
-          </div>
-          <div class="pf-li">
-            <span class="pf-k">宗教伦理</span>
-            <div class="pf-v pf-tags">
-              <span v-for="r in p.religious_ethical || []" :key="r" class="pf-tag">{{ r }}</span>
-              <span v-if="!(p.religious_ethical || []).length" class="pf-tag">无</span>
             </div>
           </div>
           <div class="pf-li">
@@ -149,9 +139,11 @@
           </el-col>
         </el-row>
 
-        <div class="pf-group" :class="{ 'pf-hl-group': isHl('cooking_equipment') }">
-          <span class="field-label">烹饪设备</span>
-          <PillGroup v-model="form.cooking_equipment" :options="COOKWARE_OPTIONS" allow-custom />
+        <div class="pf-group" :class="{ 'pf-hl-group': isHl('activity_level') }">
+          <span class="field-label">活动水平</span>
+          <el-select v-model="form.activity_level" style="width: 100%">
+            <el-option v-for="a in ACTIVITY_OPTIONS" :key="a.value" :label="a.label" :value="a.value" />
+          </el-select>
         </div>
 
         <div class="pf-group" :class="{ 'pf-hl-group': isHl('conditions') }">
@@ -170,11 +162,6 @@
         <div class="pf-group" :class="{ 'pf-hl-group': isHl('allergies') }">
           <span class="field-label">过敏原 / 忌口</span>
           <PillGroup v-model="form.allergies" :options="ALLERGY_OPTIONS" allow-custom />
-        </div>
-
-        <div class="pf-group" :class="{ 'pf-hl-group': isHl('religious_ethical') }">
-          <span class="field-label">宗教伦理限制</span>
-          <PillGroup v-model="form.religious_ethical" :options="ETHICAL_OPTIONS" allow-custom />
         </div>
       </el-form>
       <div class="modal-note">
@@ -228,8 +215,12 @@ const conditionLabels = computed(() => {
 })
 const CONDITION_STATUS = { confirmed: '已确诊', suspected: '疑似', unknown: '未填写' }
 const ALLERGY_OPTIONS = ['花生', '牛奶', '海鲜', '鸡蛋', '麸质', '无']
-const ETHICAL_OPTIONS = ['清真', '素食', '不吃牛肉', '不吃猪肉', '无']
-const COOKWARE_OPTIONS = ['灶具', '电饭煲', '空气炸锅', '微波炉', '蒸锅', '烤箱']
+const ACTIVITY_OPTIONS = [
+  { value: '久坐少动', label: '久坐少动' },
+  { value: '轻度活动', label: '轻度活动' },
+  { value: '中度活动', label: '中度活动' },
+  { value: '重度活动', label: '重度活动' }
+]
 
 const open = computed({
   get: () => ui.profileOpen,
@@ -288,10 +279,9 @@ const form = reactive({
   height_cm: 158,
   weight_kg: 58,
   goal_code: 'fat_loss',
-  cooking_equipment: [],
+  activity_level: '久坐少动',
   conditions: {},
-  allergies: [],
-  religious_ethical: []
+  allergies: []
 })
 const backup = ref(null)
 
@@ -318,9 +308,8 @@ function fillForm() {
   form.height_cm = Number(pr.height_cm) || 158
   form.weight_kg = Number(pr.weight_kg) || 58
   form.goal_code = pr.goal_code || 'fat_loss'
-  form.cooking_equipment = [...(pr.cooking_equipment || [])]
+  form.activity_level = pr.activity_level || '久坐少动'
   form.allergies = toNoneList(pr.allergies)
-  form.religious_ethical = toNoneList(pr.religious_ethical)
   const cond = emptyConditions()
   conditionIds.value.forEach((id) => {
     const st = pr.conditions && pr.conditions[id] && pr.conditions[id].status
@@ -329,9 +318,7 @@ function fillForm() {
   form.conditions = cond
   return {
     ...form,
-    cooking_equipment: [...form.cooking_equipment],
     allergies: [...form.allergies],
-    religious_ethical: [...form.religious_ethical],
     conditions: { ...cond }
   }
 }
@@ -405,9 +392,7 @@ function cancelEdit() {
   if (b) {
     Object.assign(form, {
       ...b,
-      cooking_equipment: [...b.cooking_equipment],
       allergies: [...b.allergies],
-      religious_ethical: [...b.religious_ethical],
       conditions: { ...b.conditions }
     })
   }
@@ -423,13 +408,12 @@ async function save() {
     height_cm: Number(form.height_cm),
     weight_kg: Number(form.weight_kg),
     goal_code: form.goal_code,
-    cooking_equipment: [...form.cooking_equipment],
+    activity_level: form.activity_level,
     conditions: conditionIds.value.reduce((acc, id) => {
       acc[id] = { status: form.conditions[id] || 'unknown' }
       return acc
     }, {}),
-    allergies: form.allergies.filter((x) => x && x !== '无'),
-    religious_ethical: form.religious_ethical.filter((x) => x && x !== '无')
+    allergies: form.allergies.filter((x) => x && x !== '无')
   }
   try {
     await profile.save(payload)

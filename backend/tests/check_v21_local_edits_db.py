@@ -27,7 +27,7 @@ with engine.connect() as conn:
     try:
         with Session(bind=conn,join_transaction_mode='create_savepoint') as db:
             uid='v21-test-'+uuid4().hex[:12]
-            db.add(Profile(user_id=uid,name='V21 test fixture',gender='男',sex='男',age=20,height_cm=176,weight_kg=70,goal_code='maintain',allergies=['花生'],religious_ethical=['清真']))
+            db.add(Profile(user_id=uid,name='V21 test fixture',gender='男',sex='男',age=20,height_cm=176,weight_kg=70,goal_code='maintain',allergies=['花生']))
             db.commit()
             p=generate_week_plan(GenerateRequest(start_date=date(2026,11,20),end_date=date(2026,11,21),meal_types=['早','午','晚']),user_id=uid,db=db).data
             pid=p['meal_plan_id']; before={s['meal_slot_id']:s for s in p['slots']}; target=p['slots'][4]; sid=target['meal_slot_id']; old=target['selected_candidate_id']

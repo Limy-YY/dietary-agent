@@ -16,7 +16,16 @@ from collections.abc import Mapping
 #: 三大宏量的能量系数（kcal/g）
 KCAL_PER_G = {"protein_g": 4.0, "fat_g": 9.0, "carb_g": 4.0}
 
-#: 活动系数固定值（口径：BMR × 1.4，不再读 activity_level）
+#: 活动水平 → PAL（身体活动水平系数）。能量目标 = BMR × PAL，取代 v1.2 的固定 1.4。
+ACTIVITY_PAL: dict[str, float] = {
+    "久坐少动": 1.2,
+    "轻度活动": 1.375,
+    "中度活动": 1.55,
+    "重度活动": 1.725,
+}
+#: 活动水平缺省档（与前端默认一致）。
+DEFAULT_ACTIVITY_LEVEL = "久坐少动"
+#: PAL 兜底（档案活动水平缺失 / 非法时用）。
 DEFAULT_ACTIVITY_FACTOR = 1.4
 
 #: 默认每餐能量占比（早 30% / 午 40% / 晚 30%，与 CLAUDE.md §5 及 targets.py docstring 一致）
@@ -57,40 +66,6 @@ STAPLE_NAME_HINTS: tuple[str, ...] = ("饭", "粥", "红薯", "馒头", "面条"
 #: 汤羹类别（只允许作为第二道菜，避免「汤 + 汤」）
 SOUP_CATEGORY = "汤羹"
 
-#: 宗教/伦理忌口关键词（名称命中即硬排除；用户 religious_ethical 取值需含左侧键）
-RELIGIOUS_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "清真": ("猪", "五花", "培根", "火腿", "香肠", "腊肉", "排骨", "肉肠"),
-    "伊斯兰": ("猪", "五花", "培根", "火腿", "香肠", "腊肉", "排骨", "肉肠"),
-    "素食": ("鸡", "鸭", "猪", "牛", "羊", "鱼", "虾", "蟹", "蛤", "贝", "肉", "排骨", "培根", "火腿", "香肠"),
-    "佛教": ("鸡", "鸭", "猪", "牛", "羊", "鱼", "虾", "蟹", "蛤", "贝", "肉", "排骨", "葱", "蒜", "韭"),
-}
-
-#: 宗教/伦理忌口的「主食材族」结构化兜底（dish_meta.family，一对多）。
-#: 菜名/食材名的子串命中救不了「彩椒里脊丝 / 木耳炒肉片 / 肉末豆腐」这类菜名不含「猪」的猪肉菜，
-#: 但 DB 侧 dish_meta.family 已标注为「猪肉」，据此硬排除（BUG-034）。
-#: - 清真/伊斯兰 只禁「猪肉」族（「内脏」现库为猪肝、菜名含「猪」已被关键词命中；且未来可能纳入禽内脏，故不按族排除）。
-#: - 素食/佛教 禁所有动物性主食材族；「鸡蛋」不在此列（对应蛋奶素口径，与关键词不含「蛋」一致）。
-RELIGIOUS_FAMILY_FORBIDDEN: dict[str, set[str]] = {
-    "清真": {"猪肉"},
-    "伊斯兰": {"猪肉"},
-    "素食": {"猪肉", "鸡肉", "牛肉", "羊肉", "鸭肉", "鱼", "虾", "水产", "贝类", "内脏"},
-    "佛教": {"猪肉", "鸡肉", "牛肉", "羊肉", "鸭肉", "鱼", "虾", "水产", "贝类", "内脏"},
-}
-
-#: 做法所需的厨具（method_text 命中键 → 需要 cooking_equipment 含任一值）
-METHOD_EQUIPMENT: dict[str, tuple[str, ...]] = {
-    "蒸": ("蒸锅", "电饭煲", "炒锅"),
-    "烤箱": ("烤箱", "空气炸锅"),
-    "烤": ("烤箱", "空气炸锅"),
-    "炖": ("炖锅", "电饭煲", "炒锅", "高压锅"),
-    "焖": ("炒锅", "炖锅", "电饭煲"),
-    "炒": ("炒锅",),
-    "快炒": ("炒锅",),
-    "煮": ("锅", "炒锅", "电饭煲"),
-    "拌": (),
-    "凉拌": (),
-}
-
 
 # ---------------------------------------------------------------- 输入模型
 
@@ -106,8 +81,7 @@ class Profile:
     goal_code: str = "maintain"
     conditions: dict[str, dict[str, Any]] = field(default_factory=dict)
     allergies: list[str] = field(default_factory=list)
-    religious_ethical: list[str] = field(default_factory=list)
-    cooking_equipment: list[str] = field(default_factory=list)
+    activity_level: str = DEFAULT_ACTIVITY_LEVEL
     name: str | None = None
 
     @property
@@ -325,9 +299,7 @@ class Targets:
     micro_targets: dict[str, MicroReference]
     oil_salt_strict: bool = False
     hard_allergens: list[str] = field(default_factory=list)
-    hard_religious: list[str] = field(default_factory=list)
     excluded_ingredients: list[str] = field(default_factory=list)
-    equipment: list[str] = field(default_factory=list)
     confirmed_conditions: list[str] = field(default_factory=list)
     condition_note: list[str] = field(default_factory=list)
     micro_note: list[str] = field(default_factory=list)
@@ -361,7 +333,6 @@ class Targets:
             },
             "hard_constraints": {
                 "allergens": self.hard_allergens,
-                "religious_ethical": self.hard_religious,
                 "excluded_ingredients": self.excluded_ingredients,
                 "confirmed_conditions": self.confirmed_conditions,
             },

@@ -23,10 +23,7 @@ from .meal_templates import (iter_template_combos, template_for, main_dish, reta
 from .models import (
     DEFAULT_MACRO_TOLERANCE,
     KEY_MICRONUTRIENTS,
-    METHOD_EQUIPMENT,
     MICRO_IDS,
-    RELIGIOUS_KEYWORDS,
-    RELIGIOUS_FAMILY_FORBIDDEN,
     SODIUM_LIMIT_MG_DAILY,
     Candidate,
     DishFacts,
@@ -113,15 +110,7 @@ def hard_filter_reasons(
         if allergen and (canonical & known or allergen in name_blob):
             reasons.append(f"allergen:{allergen}")
 
-    # 2) 宗教 / 伦理忌口
-    for taboo in targets.hard_religious:
-        keywords = _match_religious_keywords(taboo)
-        forbidden_families = _match_religious_families(taboo)
-        family = _dish_family(facts)
-        if any(kw in name_blob for kw in keywords) or family in forbidden_families:
-            reasons.append(f"religious:{taboo}")
-
-    # 2.5) 已确诊疾病硬排除（L0）：仅痛风 → 高嘌呤菜（purine_level=高）。
+    # 2) 已确诊疾病硬排除（L0）：仅痛风 → 高嘌呤菜（purine_level=高）。
     # 其余病种走软约束/闸门，见 CONDITION_HARD_FILTER 与疾病硬过滤口径提案。
     for condition_id in targets.confirmed_conditions:
         levels = CONDITION_HARD_FILTER.get(condition_id)
@@ -135,57 +124,12 @@ def hard_filter_reasons(
         if excluded in name_blob:
             reasons.append(f"excluded:{excluded}")
 
-    # 4) 做法所需厨具：档案填了厨具但无一满足该做法 → 硬排除
-    equipment = [str(e) for e in (targets.equipment or [])]
-    if equipment:
-        required = _required_equipment(facts.method_text)
-        if required and not any(req in equipment for req in required):
-            reasons.append(f"equipment:{facts.method_text}")
-
-    # 5) 软排除只记录、不排除（由打分处理）
+    # 4) 软排除只记录、不排除（由打分处理）
     for avoid in soft_avoid:
         if avoid and avoid in name_blob:
             reasons.append(f"soft_avoid:{avoid}")
 
     return reasons
-
-
-def _match_religious_keywords(taboo: str) -> tuple[str, ...]:
-    taboo_text = str(taboo or "").strip()
-    if not taboo_text:
-        return ()
-    for key, keywords in RELIGIOUS_KEYWORDS.items():
-        if key in taboo_text:
-            return keywords
-    return ()
-
-
-def _match_religious_families(taboo: str) -> set[str]:
-    """按禁忌键取「主食材族」硬排除集合（结构化兜底，见 RELIGIOUS_FAMILY_FORBIDDEN）。"""
-    taboo_text = str(taboo or "").strip()
-    if not taboo_text:
-        return set()
-    for key, families in RELIGIOUS_FAMILY_FORBIDDEN.items():
-        if key in taboo_text:
-            return families
-    return set()
-
-
-def _dish_family(facts: DishFacts) -> str:
-    """从 dish_meta 读主食材族（§5.1 角色单一来源）；缺失返回空串。"""
-    meta = getattr(facts, "dish_meta", None) or {}
-    return str(meta.get("family") or "").strip()
-
-
-def _required_equipment(method_text: str | None) -> tuple[str, ...]:
-    """按做法文本推断所需厨具；无法判断时返回空（不做过滤）。"""
-    if not method_text:
-        return ()
-    text = str(method_text)
-    for key, equipment in METHOD_EQUIPMENT.items():
-        if key in text:
-            return equipment
-    return ()
 
 
 def combo_totals(portions: Sequence[DishPortion]) -> dict[str, float | None]:

@@ -1,7 +1,8 @@
 """用户档案（API-01/02、API-20）请求与响应模型。
 
-对应《后端接口契约 v1.2》§3.3：可写 11 项 + 只读 `target_calories / profile_version`，
-`sex / goal / taboos / activity_level / birth_date / extras` 为 v1.1 兼容列（只读回显）。
+可写：name / avatar / gender / age / height_cm / weight_kg / goal_code /
+activity_level / conditions / allergies + 只读 `target_calories / profile_version`；
+`sex / goal / taboos / birth_date / extras` 为 v1.1 兼容列（只读回显）。
 """
 from typing import Literal
 
@@ -27,11 +28,10 @@ class ProfileUpsertRequest(BaseModel):
     height_cm: float = Field(ge=120, le=220)
     weight_kg: float = Field(ge=30, le=200)
     goal_code: str
-    cooking_equipment: list[str] = Field(default_factory=list)
+    activity_level: Literal["久坐少动", "轻度活动", "中度活动", "重度活动"] = "久坐少动"
     # {"<condition_id>": {"status": "confirmed|suspected|unknown", ...}}
     conditions: dict[str, dict] = Field(default_factory=dict)
     allergies: list[str] = Field(default_factory=list)
-    religious_ethical: list[str] = Field(default_factory=list)
 
 
 class UserProfile(BaseModel):
@@ -46,10 +46,9 @@ class UserProfile(BaseModel):
     weight_kg: float | None = None
     goal_code: str | None = None
     goal_name: str | None = None
-    cooking_equipment: list[str] = Field(default_factory=list)
+    activity_level: str | None = None
     conditions: dict = Field(default_factory=dict)
     allergies: list[str] = Field(default_factory=list)
-    religious_ethical: list[str] = Field(default_factory=list)
     target_calories: float | None = None
     profile_version: int | None = None
     # v1.1 兼容列（只读回显，新接口不再写入）

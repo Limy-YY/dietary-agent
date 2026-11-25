@@ -32,10 +32,13 @@ export function getConditionCatalog() {
   return CONDITION_IDS.map((id) => ({ condition_id: id, name_zh: CONDITION_NAMES[id] }))
 }
 
+const ACTIVITY_PAL = { 久坐少动: 1.2, 轻度活动: 1.375, 中度活动: 1.55, 重度活动: 1.725 }
+
 function bmrTarget(p) {
   const isFemale = p.gender !== '男'
   const bmr = 10 * Number(p.weight_kg) + 6.25 * Number(p.height_cm) - 5 * Number(p.age) + (isFemale ? -161 : 5)
-  return Math.round((bmr * 1.4) / 10) * 10
+  const pal = ACTIVITY_PAL[p.activity_level] || 1.4
+  return Math.round((bmr * pal) / 10) * 10
 }
 
 const DEFAULT_PROFILE = {
@@ -48,7 +51,7 @@ const DEFAULT_PROFILE = {
   weight_kg: 58,
   goal_code: 'fat_loss',
   goal_name: GOAL_NAMES.fat_loss,
-  cooking_equipment: ['电饭煲', '炒锅'],
+  activity_level: '久坐少动',
   conditions: {
     hypertension: { status: 'confirmed' },
     diabetes: { status: 'unknown' },
@@ -56,7 +59,6 @@ const DEFAULT_PROFILE = {
     gout: { status: 'unknown' }
   },
   allergies: ['花生'],
-  religious_ethical: [],
   target_calories: 0
 }
 DEFAULT_PROFILE.target_calories = bmrTarget(DEFAULT_PROFILE)
@@ -101,7 +103,7 @@ export function saveProfile(payload) {
   const next = { ...state.profile }
   const writable = [
     'name', 'avatar', 'gender', 'age', 'height_cm', 'weight_kg',
-    'goal_code', 'cooking_equipment', 'allergies', 'religious_ethical'
+    'goal_code', 'activity_level', 'allergies'
   ]
   writable.forEach((k) => {
     if (payload[k] !== undefined) next[k] = payload[k]
@@ -109,10 +111,8 @@ export function saveProfile(payload) {
   if (payload.conditions !== undefined) next.conditions = normalizeConditions(payload.conditions)
   next.gender = next.gender === '男' ? '男' : '女'
   next.goal_name = GOAL_NAMES[next.goal_code] || ''
-  next.cooking_equipment = Array.isArray(next.cooking_equipment) ? next.cooking_equipment : []
   next.allergies = Array.isArray(next.allergies) ? next.allergies.filter((x) => x && x !== '无') : []
-  next.religious_ethical = Array.isArray(next.religious_ethical) ? next.religious_ethical.filter((x) => x && x !== '无') : []
-  // 只读字段：target_calories 由后端按 BMR×1.4 计算，忽略请求体里的值
+  // 只读字段：target_calories 由后端按 BMR×PAL 计算，忽略请求体里的值
   next.target_calories = bmrTarget(next)
   state.profile = next
   return next

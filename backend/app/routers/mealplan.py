@@ -133,11 +133,11 @@ def _derived_plan_type(start: date, end: date, meal_types: list[str]) -> str:
 
 
 def _load_engine_profile(db: Session, user_id: str) -> EngineProfile:
-    """把 app.profile 映射成规则引擎的 Profile（v1.2 字段优先，回退旧列）。"""
+    """把 app.profile 映射成规则引擎的 Profile（主字段优先，回退旧列）。"""
     row = db.execute(
         text(
             "SELECT name, gender, sex, age, height_cm, weight_kg, goal_code, goal, "
-            "conditions, allergies, religious_ethical, cooking_equipment "
+            "activity_level, conditions, allergies "
             "FROM app.profile WHERE user_id = :uid"
         ),
         {"uid": user_id},
@@ -153,10 +153,9 @@ def _load_engine_profile(db: Session, user_id: str) -> EngineProfile:
         height_cm=float(row["height_cm"] or 165),
         weight_kg=float(row["weight_kg"] or 55),
         goal_code=row["goal_code"] or row["goal"] or "maintain",
+        activity_level=row["activity_level"] or "久坐少动",
         conditions=conditions,
         allergies=list(row["allergies"] or []),
-        religious_ethical=list(row["religious_ethical"] or []),
-        cooking_equipment=list(row["cooking_equipment"] or []),
     )
 
 

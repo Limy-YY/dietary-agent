@@ -59,8 +59,7 @@ def main() -> int:
                   f"油盐糖={policy.daily_limits}")
 
         # 3) 7 微量参考值
-        profile = Profile(gender="女", age=20, height_cm=160, weight_kg=55, goal_code="fat_loss",
-                          cooking_equipment=["炒锅", "蒸锅", "电饭煲"])
+        profile = Profile(gender="女", age=20, height_cm=160, weight_kg=55, goal_code="fat_loss")
         refs = ds.get_micro_reference_rows(profile)
         print(f"[DB-3] 微量参考行={len(refs)}")
         for r in refs:

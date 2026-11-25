@@ -1,11 +1,11 @@
 """用户档案接口（API-01 / API-02）。
 
-写：`app.profile`（v1.2 十一项 + 后端算 `target_calories`，同步兼容列 `sex`）；
+写：`app.profile`（主字段 + 后端算 `target_calories`，同步兼容列 `sex`）；
 读：`app.v_profile_effective`（`COALESCE(gender, sex)` / `COALESCE(goal_code, goal)`），
 并 join `core.goal_structure_map` 取中文 `goal_name`。
 
-v1.1 兼容列约定（契约 §3.3）：`sex` 随 `gender` 同步供库函数使用；
-`goal / taboos / activity_level / birth_date / extras` 只读，新接口不写入。
+v1.1 兼容列约定：`sex` 随 `gender` 同步供库函数使用；
+`goal / taboos / birth_date / extras` 只读，新接口不写入。
 """
 import json
 
@@ -18,13 +18,14 @@ from app.core.response import ApiResponse, api_success
 from app.core.security import CurrentUser
 from app.db import get_db
 from app.schemas.profile import ProfileUpsertRequest, UserProfile
+from app.services.rule_engine.models import ACTIVITY_PAL, DEFAULT_ACTIVITY_FACTOR
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
 # 视图已做旧列回退（gender/goal_code）；`sex / goal / taboos` 等兼容列仍需回原表取
 PROFILE_SQL = """
 SELECT p.user_id, p.name, p.avatar, p.gender, p.age, p.height_cm, p.weight_kg,
-       p.goal_code, p.cooking_equipment, p.conditions, p.allergies, p.religious_ethical,
+       p.goal_code, p.activity_level, p.conditions, p.allergies,
        p.target_calories, p.profile_version,
        p.taboos, p.birth_date, p.created_at, p.updated_at,
        p.gender_from_legacy, p.goal_code_from_legacy,
@@ -64,10 +65,9 @@ def row_to_profile(row) -> UserProfile:
         weight_kg=_f(g("weight_kg")),
         goal_code=g("goal_code"),
         goal_name=g("goal_name"),
-        cooking_equipment=list(g("cooking_equipment") or []),
+        activity_level=g("activity_level"),
         conditions=cond if isinstance(cond, dict) else {},
         allergies=list(g("allergies") or []),
-        religious_ethical=list(g("religious_ethical") or []),
         target_calories=_f(g("target_calories")),
         profile_version=g("profile_version"),
         sex=g("sex"),
@@ -91,11 +91,12 @@ def _bmr_kcal(gender: str, age: float, height_cm: float, weight_kg: float) -> fl
     raise BizError(BizCode.CALC_FAILED, f"BMR 计算失败：未知性别 {gender}", http_status=400)
 
 
-def _target_calories(gender: str, age: int, height_cm: float, weight_kg: float) -> float:
-    """`target_calories = BMR × 1.4`（v1.2 统一活动系数，已删除 activity_level）。"""
+def _target_calories(gender: str, age: int, height_cm: float, weight_kg: float, activity_level: str | None) -> float:
+    """`target_calories = BMR × PAL(activity_level)`（v1.3 活动水平 → PAL，缺失回退默认系数）。"""
     try:
         bmr = _bmr_kcal(gender, age, height_cm, weight_kg)
-        target = round(bmr * 1.4, 1)
+        pal = ACTIVITY_PAL.get(activity_level or "", DEFAULT_ACTIVITY_FACTOR)
+        target = round(bmr * pal, 1)
     except BizError:
         raise
     except Exception as exc:  # noqa: BLE001 - 统一映射为 2001
@@ -167,25 +168,24 @@ def _check_conditions(db: Session, conditions: dict[str, dict]) -> None:
 def _upsert(req: ProfileUpsertRequest, user_id: str, db: Session) -> UserProfile:
     goal_code = _check_goal_code(db, req.goal_code)
     _check_conditions(db, req.conditions)
-    target = _target_calories(req.gender, req.age, req.height_cm, req.weight_kg)
+    target = _target_calories(req.gender, req.age, req.height_cm, req.weight_kg, req.activity_level)
 
     db.execute(
         text(
             "INSERT INTO app.profile "
             "(user_id, name, avatar, gender, sex, age, height_cm, weight_kg, "
-            " goal_code, cooking_equipment, conditions, allergies, religious_ethical, "
+            " goal_code, activity_level, conditions, allergies, "
             " target_calories) "
             "VALUES (:uid, :name, :avatar, :gender, :sex, :age, :height, :weight, "
-            "        :goal_code, :equipment, CAST(:conditions AS jsonb), :allergies, "
-            "        :religious, :target) "
+            "        :goal_code, :activity_level, CAST(:conditions AS jsonb), :allergies, "
+            "        :target) "
             "ON CONFLICT (user_id) DO UPDATE SET "
             " name = EXCLUDED.name, avatar = EXCLUDED.avatar, "
             " gender = EXCLUDED.gender, sex = EXCLUDED.sex, "
             " age = EXCLUDED.age, height_cm = EXCLUDED.height_cm, "
             " weight_kg = EXCLUDED.weight_kg, goal_code = EXCLUDED.goal_code, "
-            " cooking_equipment = EXCLUDED.cooking_equipment, "
+            " activity_level = EXCLUDED.activity_level, "
             " conditions = EXCLUDED.conditions, allergies = EXCLUDED.allergies, "
-            " religious_ethical = EXCLUDED.religious_ethical, "
             " target_calories = EXCLUDED.target_calories, "
             " profile_version = app.profile.profile_version + 1, "
             " updated_at = now()"
@@ -200,10 +200,9 @@ def _upsert(req: ProfileUpsertRequest, user_id: str, db: Session) -> UserProfile
             "height": req.height_cm,
             "weight": req.weight_kg,
             "goal_code": goal_code,
-            "equipment": req.cooking_equipment,
+            "activity_level": req.activity_level,
             "conditions": json.dumps(req.conditions, ensure_ascii=False),
             "allergies": req.allergies,
-            "religious": req.religious_ethical,
             "target": target,
         },
     )

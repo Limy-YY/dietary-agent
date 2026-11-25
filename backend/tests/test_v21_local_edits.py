@@ -10,7 +10,7 @@ from app.services.rule_engine.errors import RuleEngineError
 class LocalTests(unittest.TestCase):
     def setUp(self):
         self.dishes=sample_dishes()
-        self.targets=compute_targets(Profile(allergies=['花生'],religious_ethical=['清真']),GOAL_ROW,MICRO_REFS,PlanRequest(start_date='2026-11-20',end_date='2026-11-20'))
+        self.targets=compute_targets(Profile(allergies=['花生']),GOAL_ROW,MICRO_REFS,PlanRequest(start_date='2026-11-20',end_date='2026-11-20'))
         self.target=self.targets.meal_targets['午']
     def test_replace_preserves_other_portions(self):
         old=[DishPortion(self.dishes[0],1.25),DishPortion(self.dishes[3],1)]

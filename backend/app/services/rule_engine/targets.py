@@ -1,7 +1,7 @@
 """第 1 步：算目标（档案 + goal_structure_map + 微量参考值 → Targets）。
 
 口径（任务书 v1.2 模块 A / 契约 §0.2）：
-- 能量 = BMR(Mifflin-St Jeor) × 1.4（activity_factor 从 goal_structure_map 读，默认 1.4）；
+- 能量 = BMR(Mifflin-St Jeor) × PAL（活动水平→PAL 映射，取代 v1.2 固定 1.4）；
   热量只由档案决定，goal 只改结构比例，不改热量；
 - 每餐能量占比默认早 30% / 午 40% / 晚 30%，可被请求覆盖；
 - 宏量目标按 macro_policy 的占比换算为克数，区间 = 目标 ± 容差；
@@ -26,7 +26,9 @@ from collections.abc import Iterable
 from typing import Any
 
 from .models import (
+    ACTIVITY_PAL,
     DEFAULT_ACTIVITY_FACTOR,
+    DEFAULT_ACTIVITY_LEVEL,
     DEFAULT_DAILY_LIMITS,
     DEFAULT_MEAL_RATIOS,
     KEY_MICRONUTRIENTS,
@@ -324,7 +326,8 @@ def compute_targets(
     """第 1 步：把档案与库内策略转成可计算目标。"""
     policy = parse_goal_policy(goal_row, baseline_row)
     bmr = bmr_mifflin(profile.gender, profile.weight_kg, profile.height_cm, profile.age)
-    energy = max(bmr * policy.activity_factor, 0.0)
+    pal = ACTIVITY_PAL.get(profile.activity_level, DEFAULT_ACTIVITY_FACTOR)
+    energy = max(bmr * pal, 0.0)
 
     ratios = dict(DEFAULT_MEAL_RATIOS)
     if request.meal_ratios:
@@ -375,7 +378,7 @@ def compute_targets(
 
     return Targets(
         bmr=bmr,
-        activity_factor=policy.activity_factor,
+        activity_factor=pal,
         energy_kcal=energy,
         goal_code=request.goal_code or policy.goal_code,
         goal_name=policy.goal_name,
@@ -384,9 +387,7 @@ def compute_targets(
         micro_targets=micro_targets,
         oil_salt_strict=policy.oil_salt_strict,
         hard_allergens=[a for a in (profile.allergies or []) if a],
-        hard_religious=[r for r in (profile.religious_ethical or []) if r],
         excluded_ingredients=[e for e in (request.exclude_ingredients or []) if e],
-        equipment=list(profile.cooking_equipment or []),
         confirmed_conditions=confirmed,
         condition_note=condition_note + list(policy.notes),
         micro_note=micro_note,

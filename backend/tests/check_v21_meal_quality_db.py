@@ -58,7 +58,7 @@ with SessionLocal() as db:
     assert set(CATALOG)=={base_dish_id(d.dish_id) for d in dishes},'Catalogue differs from the observed 110 dishes'
     base=Profile(gender='男',age=20,height_cm=176,weight_kg=70,goal_code='maintain')
     for case in cases: check_case(ds,base,case)
-    constrained=Profile(gender='男',age=20,height_cm=176,weight_kg=70,goal_code='maintain',allergies=['花生'],religious_ethical=['清真'])
+    constrained=Profile(gender='男',age=20,height_cm=176,weight_kg=70,goal_code='maintain',allergies=['花生'])
     check_case(ds,constrained,('过敏与忌口','2026-11-20','2026-11-20',['早','午','晚'],3))
     db.rollback()
 print('PASS all candidate template and safety checks; inspect REVIEW and menu quality before acceptance.')

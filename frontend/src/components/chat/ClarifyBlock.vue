@@ -26,10 +26,9 @@ const FIELD_LABELS = {
   height_cm: '身高',
   weight_kg: '体重',
   goal_code: '健康目标',
-  cooking_equipment: '烹饪设备',
+  activity_level: '活动水平',
   conditions: '疾病情况',
-  allergies: '过敏原',
-  religious_ethical: '宗教伦理'
+  allergies: '过敏原'
 }
 
 function fieldLabel(key) {

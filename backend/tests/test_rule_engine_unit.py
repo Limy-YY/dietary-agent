@@ -7,8 +7,8 @@
 覆盖：
 1) bmr_mifflin           — Mifflin-St Jeor 公式与性别符号
 2) parse_goal_policy     — 缺行回退、基线补齐、油盐糖上限覆盖、定性「收紧」标记
-3) compute_targets       — 能量 = BMR×1.4、餐次子集分权重算、微量参考值缺失话术
-4) hard_filter_reasons   — 过敏原 / 宗教忌口 / 显式排除 / 厨具 四类硬排除
+3) compute_targets       — 能量 = BMR×PAL(活动水平)、餐次子集分权重算、微量参考值缺失话术
+4) hard_filter_reasons   — 过敏原 / 痛风高嘌呤 / 显式排除 三类硬排除
 5) sum_or_none & combo   — 缺失值不落 0（预算里最容易出错的地方）
 6) status_of             — 微量四态判定（达标 / 不足 / 参考提示）
 7) plan_dates            — 日期区间与上限截断
@@ -162,11 +162,20 @@ def test_goal_policy_invalid_activity_factor_resets():
 # ---------------------------------------------------------------- 3. 目标计算
 
 
-def test_energy_equals_bmr_times_1_4():
-    """v1.2 口径：能量 = BMR × 1.4，无活动系数、无缺口。"""
+def test_energy_equals_bmr_times_pal():
+    """v1.3 口径：能量 = BMR × PAL(活动水平)，缺省「久坐少动」= 1.2。"""
     t = compute_targets(make_profile(), None, None, make_request())
     assert t.bmr == pytest.approx(1314.0)
-    assert t.energy_kcal == pytest.approx(1314.0 * 1.4)
+    assert t.energy_kcal == pytest.approx(1314.0 * 1.2)
+
+
+@pytest.mark.parametrize("level,pal", [
+    ("久坐少动", 1.2), ("轻度活动", 1.375), ("中度活动", 1.55), ("重度活动", 1.725),
+])
+def test_activity_level_maps_to_pal(level, pal):
+    t = compute_targets(make_profile(activity_level=level), None, None, make_request())
+    assert t.energy_kcal == pytest.approx(1314.0 * pal)
+    assert t.activity_factor == pytest.approx(pal)
 
 
 def test_meal_ratios_split_30_40_30():
@@ -226,13 +235,10 @@ def test_micro_reference_loaded_from_rows():
 
 
 def test_hard_constraints_carried_into_targets():
-    profile = make_profile(allergies=["花生"], religious_ethical=["清真"],
-                           cooking_equipment=["电饭煲"])
+    profile = make_profile(allergies=["花生"])
     t = compute_targets(profile, None, None, make_request(exclude_ingredients=["香菜"]))
     assert t.hard_allergens == ["花生"]
-    assert t.hard_religious == ["清真"]
     assert t.excluded_ingredients == ["香菜"]
-    assert t.equipment == ["电饭煲"]
 
 
 # ---------------------------------------------------------------- 4. 硬约束过滤
@@ -276,26 +282,6 @@ def test_allergen_alias_normalized():
     assert "allergen:蛋" in hard_filter_reasons(facts, tastes)
 
 
-def test_religious_taboo_blocks_pork():
-    tastes = _targets(religious_ethical=["清真"])
-    facts = make_dish(name="排骨汤", ingredient_names=["排骨"], category="汤羹")
-    assert "religious:清真" in hard_filter_reasons(facts, tastes)
-
-
-def test_religious_taboo_does_not_block_fish_for_halal():
-    tastes = _targets(religious_ethical=["清真"])
-    facts = make_dish(name="清蒸鲈鱼", ingredient_names=["鲈鱼"])
-    assert hard_filter_reasons(facts, tastes) == []
-
-
-def test_vegetarian_blocks_meat_but_not_tofu():
-    tastes = _targets(religious_ethical=["素食"])
-    meat = make_dish(name="照烧鸡腿饭", ingredient_names=["鸡腿", "米饭"])
-    tofu = make_dish(name="家常豆腐", ingredient_names=["豆腐"], method_text="红烧")
-    assert hard_filter_reasons(meat, tastes)
-    assert hard_filter_reasons(tofu, tastes) == []
-
-
 def test_gout_blocks_high_purine_dish():
     """痛风 L0 硬排除：已确诊痛风 → 高嘌呤菜（purine_level=高）硬排除；低/未知不排（null≠0）。"""
     gout = _targets(conditions={"gout": {"status": "confirmed"}})
@@ -318,14 +304,6 @@ def test_exclude_ingredient_blocks_by_name_or_ingredient():
     tastes = _targets(_req={"exclude_ingredients": ["香菜"]})
     facts = make_dish(name="香菜拌豆腐", ingredient_names=["香菜"])
     assert "excluded:香菜" in hard_filter_reasons(facts, tastes)
-
-
-def test_equipment_filter_only_when_profile_has_equipment():
-    facts = make_dish(name="爆炒腰花", method_text="快炒")
-    blocked = _targets(cooking_equipment=["电饭煲"])
-    no_equip = _targets()
-    assert "equipment:快炒" in hard_filter_reasons(facts, blocked)
-    assert hard_filter_reasons(facts, no_equip) == []
 
 
 def test_soft_avoid_recorded_but_not_blocking():

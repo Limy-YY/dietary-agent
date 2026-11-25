@@ -13,7 +13,7 @@ class EngineTests(unittest.TestCase):
     def setUp(self):
         self.dishes = sample_dishes()
         self.profile = Profile(gender="女", age=20, height_cm=160, weight_kg=55,
-                               allergies=["花生"], religious_ethical=["清真"], cooking_equipment=["炒锅", "蒸锅"])
+                               allergies=["花生"])
         self.req = PlanRequest(start_date="2026-11-18", end_date="2026-11-20", meal_types=["早", "午", "晚"])
 
     def test_roles(self):
