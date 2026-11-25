@@ -13,7 +13,35 @@
       </div>
     </div>
 
-    <div v-if="plan && plan.days.length" style="padding: 8px 20px 14px">
+    <!-- 多天：按天折叠（与 MealCardBlock 一周视图一致） -->
+    <div v-if="plan && plan.days.length > 1" class="cp-days">
+      <div class="cp-days-toolbar">
+        <button class="expand-all-btn" @click="toggleAllDays">{{ allOpen ? '全部收起' : '全部展开' }}</button>
+      </div>
+      <div v-for="(day, di) in plan.days" :key="day.iso + di" class="week-day" :class="{ open: isOpen(di) }">
+        <div class="week-day-head" @click="toggleDay(di)">
+          <div class="wd-date">
+            <div class="wd-day">
+              {{ day.weekday }}
+              <span v-if="day.is_today" class="wp-today">今天</span>
+            </div>
+            <div class="wd-num">{{ day.date }}</div>
+          </div>
+          <div class="wd-kcal">{{ fmtKcal(day.kcal) }} kcal</div>
+          <span class="wd-chevron">▾</span>
+        </div>
+        <div class="week-day-body">
+          <div v-for="(s, si) in day.slots" :key="si" class="cp-slot">
+            <span class="cp-slot-label">{{ s.label }} {{ s.time }}</span>
+            <span class="cp-slot-dish">{{ s.dish_text || '—' }}</span>
+            <span class="cp-slot-kcal">{{ fmtKcal(s.kcal) }} kcal</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 单天：平铺（无折叠意义） -->
+    <div v-else-if="plan && plan.days.length" class="cp-single">
       <div v-for="(day, di) in plan.days" :key="day.iso + di" class="cp-day">
         <div class="cp-day-head">
           <span>{{ day.weekday }} · {{ day.date }}</span>
@@ -31,14 +59,59 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { fmtKcal } from '@/utils/schema.js'
 
 const props = defineProps({ block: { type: Object, required: true } })
 const plan = computed(() => props.block.plan || null)
+
+// 多天时按天折叠：默认展开「今天」（无今天则第一天），支持同时展开多天
+const openDays = ref([])
+
+const allOpen = computed(() => {
+  const n = plan.value?.days?.length || 0
+  return n > 0 && openDays.value.length === n
+})
+
+function isOpen(di) {
+  return openDays.value.includes(di)
+}
+
+function toggleDay(di) {
+  const i = openDays.value.indexOf(di)
+  if (i >= 0) openDays.value.splice(i, 1)
+  else openDays.value.push(di)
+}
+
+function toggleAllDays() {
+  const days = plan.value?.days || []
+  openDays.value = allOpen.value ? [] : days.map((_, i) => i)
+}
+
+// 新方案（不同 plan_id）重置展开态；同一方案内的内容更新（固定/换候选）不重置，保留浏览位置
+watch(
+  () => plan.value?.plan_id,
+  () => {
+    const days = plan.value?.days || []
+    const todayIdx = days.findIndex((d) => d.is_today)
+    openDays.value = days.length ? [todayIdx >= 0 ? todayIdx : 0] : []
+  },
+  { immediate: true }
+)
 </script>
 
 <style scoped>
+/* 多天折叠列表：贴边，与 MealCardBlock 的 week-list 对齐 */
+.cp-days-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 20px 2px;
+}
+
+.cp-single {
+  padding: 8px 20px 14px;
+}
+
 .cp-day {
   margin-bottom: 12px;
 }

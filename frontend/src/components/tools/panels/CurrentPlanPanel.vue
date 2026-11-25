@@ -275,17 +275,33 @@ async function confirmPlan() {
 
 function openRecipe() {
   if (!plan.value) return
-  ui.recipePayload = {
-    title: `${plan.value.title} · 完整食谱`,
-    meals: plan.value.days.flatMap((d) =>
+  const days = plan.value.days
+  // 多天：传 days 分组，弹窗按天折叠；单天/单餐：沿用扁平 meals（弹窗无 days 时退化）
+  const payload = { title: `${plan.value.title} · 完整食谱` }
+  if (days.length > 1) {
+    payload.days = days.map((d) => ({
+      weekday: d.weekday,
+      date: d.date,
+      is_today: d.is_today,
+      kcal: d.kcal,
+      meals: d.slots.map((s) => ({
+        label: s.label,
+        time: s.time,
+        kcal: s.kcal,
+        dishes: s.dishes
+      }))
+    }))
+  } else {
+    payload.meals = days.flatMap((d) =>
       d.slots.map((s) => ({
-        label: plan.value.days.length > 1 ? `${d.weekday} ${s.label}` : s.label,
+        label: s.label,
         time: s.time,
         kcal: s.kcal,
         dishes: s.dishes
       }))
     )
   }
+  ui.recipePayload = payload
   ui.recipeOpen = true
 }
 
