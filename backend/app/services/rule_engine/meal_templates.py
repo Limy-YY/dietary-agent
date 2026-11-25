@@ -656,8 +656,11 @@ def shortlist_combos(combos, target, relaxed, servings, diagnostics=None, option
             distance += max(lo-want,want-hi,0)/max(want,1)
             distance += .12*abs(sum(values)*servings-want)/max(want,1)
         if not relaxed:
-            if feasible: strict.append((distance, combo))
-            else:stats["macro_bounds_rejected"]+=1
+            # ② 软约束：界外组合不淘汰，按「距目标距离」排到界内之后（1000 分隔档），
+            # 仅当界内组合不足 2400 时按距离补足，让低能量健康菜有机会进候选池。
+            strict.append((distance + (0.0 if feasible else 1000.0), combo))
+            if not feasible:
+                stats["macro_bounds_softened"] += 1
         elif all(d.energy_kcal is not None for d in combo):
             # Cheap structure-first ordering before expensive portion search.
             a=dietary_attributes(combo,[min(o,key=lambda v:abs(v-1)) for o in allowed])

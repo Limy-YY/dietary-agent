@@ -433,7 +433,9 @@ def build_candidates(
             if hard or totals.get("kcal") is None:
                 for fail in hard or ['kcal_missing']:stats['option_reject:'+fail.split(':')[0]]+=1
                 continue
-            if not passed and (not relaxed or any(f.startswith(("oil_over:", "salt_over:")) for f in failures)):
+            # ② 宏量/能量区间软约束：kcal_out / protein_out / fat_out / carb_out 不再淘汰，
+            # 仅保留油盐超限为硬淘汰；界外候选由 _score 偏差项扣分 + macro_range_relaxed 标记参与排序。
+            if any(f.startswith(("oil_over:", "salt_over:")) for f in failures):
                 for fail in failures:stats["option_reject:"+fail.split(":")[0]]+=1
                 continue
             micro = _micro_totals(portions)

@@ -43,7 +43,7 @@ def portion_limits(d, target):
     if '主食' in meta.roles:
         # Only recipe ingredient identifiers corresponding to uncooked grains/noodles.
         raw=sum(g for n,g in w.items() if n in GRAIN)
-        add('grain',raw,55 if early else 85,80 if early else 120)
+        add('grain',raw,55 if early else 85,80 if early else 130)
         baked=sum(g for n,g in w.items() if n in ('馒头','面包'))
         add('bread',baked,100 if early else 150,150 if early else 225)
     vg=sum(g for n,g in w.items() if any(k in n for k in VEG) and n not in CONDIMENT)
