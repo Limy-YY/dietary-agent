@@ -999,6 +999,7 @@ CREATE TABLE app.meal_plan (
     derived_from_plan_id bigint,
     is_deleted boolean DEFAULT false NOT NULL,
     deleted_at timestamp with time zone,
+    is_executed boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT meal_plan_deleted_at_check CHECK (((is_deleted AND (deleted_at IS NOT NULL)) OR ((NOT is_deleted) AND (deleted_at IS NULL)))),
     CONSTRAINT meal_plan_fixed_at_check CHECK ((((status = 'fixed'::text) AND (fixed_at IS NOT NULL)) OR ((status <> 'fixed'::text) AND (fixed_at IS NULL)))),

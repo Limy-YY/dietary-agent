@@ -22,11 +22,11 @@ docker compose ps                        # 等 healthy，首次约 10 秒
 docker compose logs -f db                # 看 [initdb NN] 十步
 ```
 
-## 首次启动做的十一步
+## 首次启动做的十四步
 
 | 脚本 | 内容 |
 | --- | --- |
-| `00_preflight.sh` | 校验 `/delivery` 十份资产齐全、建 `vector` 扩展 |
+| `00_preflight.sh` | 校验 `/delivery` 资产齐全（含 37/41/42/43）、建 `vector` 扩展 |
 | `10_restore.sh` | `pg_restore --exit-on-error` 还原 `01` 合并版 dump |
 | `20_migrate.sh` | 应用 12（v1.2 → v1.2r1 整改，写 r1 / r1b 标记） |
 | `30_grants.sh` | 应用 03，建 `diet_app` 并授予最小权限 |
@@ -35,7 +35,10 @@ docker compose logs -f db                # 看 [initdb NN] 十步
 | `55_topics.sh` | 应用 19，知识库 26 → 43 篇 |
 | `56_nutrition_data.sh` | 应用 20，同步铁参考值、补纤维与钙、重算菜式汇总 |
 | `57_reverse_nutrition.sh` | 应用 21，写入审核修订后的 13 条待审核反向营养映射 |
+| `58_executed.sh` | 应用 37，补 `meal_plan.is_executed` 打卡字段 |
+| `59_rag_sources.sh` | 应用 41_RAG真实来源链接（已核查 RAG 来源 URL） |
 | `59_review_activation.sh` | 应用 41（反向营养审核激活 → 19 条）、42（疾病规则口径审核 → 9 条）、43（激活后验收） |
+| `59v_v21_merge.sh` | 应用 39 + 45 + 44 + 46，补齐 v21 基线至 213 道（170 普通 + 43 少盐） |
 | `60_verify.sh` | 跑 04 + 22 + 43 验收，输出关键计数 |
 
 `01` 是 v1.2r2 合并版 dump，本身已含 12/18/19/20/21 的结果；后面复跑这些脚本是**幂等验证**
@@ -55,7 +58,7 @@ docker compose logs -f db                # 看 [initdb NN] 十步
 
 ## 2026-11-19 本轮增量（v1.2r4）
 
-`59` 步是这轮新增的，做两件事，并各自带自检：
+`59_review_activation.sh` 这步是这轮新增的，做两件事，并各自带自检：
 
 | 脚本 | 内容 | 期望计数 |
 | --- | --- | --- |

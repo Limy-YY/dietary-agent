@@ -590,3 +590,11 @@
 - **状态**：未修。
 - **修复建议**：提示词加一句硬约束——「**不要在正文生成『来源 / 参考文献』小节，来源会由系统自动附在文末；你只需在结论后标注 [1][2]**」。与 BUG-053 同根（「来源 + 免责」的唯一事实来源落在确定性 suffix），可一并修。
 - **备注更正**：BUG-053 末尾「参照 rag_qa 分支已做到」的写法实为误判——rag_qa 同样存在来源重复（本 bug 即证据），两分支都需把「正文不写来源」写进提示词。
+
+## BUG-055 · 空库重建链路 initdb 中断：58 步引用不存在的 37 号迁移（is_executed 缺失）+ 59 步 41 号 glob 撞车
+
+- **现象**：按 `database/08_空库恢复与复跑说明.md` 空库重建，`docker/initdb/58_executed.sh` 执行 `psql -f /delivery/37_*.sql`，但 `database/` 没有任何 `37_*.sql`，`set -euo pipefail` 下整条 initdb 在第 58 步终止；即便跳过，首次 `POST /api/meal-plan/week/generate` 也必 400（`code=2006`，`column "is_executed" of relation "meal_plan" does not exist`）。此外 `59_rag_sources.sh`、`59_review_activation.sh` 都写 `-f /delivery/41_*.sql`，而 `database/` 有两个 `41_*`（RAG 真实来源 / 反向营养激活），glob 展开成两个参数、第二个被 psql 当数据库名 → 连接失败，同样在 `set -e` 下中断。
+- **层面**：数据库交付资产（`database/`）+ initdb 脚本（`docker/initdb/`）。
+- **根因**：① `is_executed` 列在 ORM `backend/app/models/meal_plan.py:79` 已定义、`routers/{mealplan,nutrition}.py` 均读写，但 v1.2r2 基线（01 dump / 02 结构）与全部迁移脚本都没落库，且 58 步引用的「迁移 37」文件从未提交（`database/` 只有同号的 `37_21号反向营养映射审核修订说明.md`）。② 两个互不相关的迁移都被编为 41 号，两个 initdb 脚本用宽 glob `41_*.sql` 各匹配到两个文件。
+- **状态**：已修（2026-11-25）。
+- **修复**：① 新增 `database/37_meal_plan_is_executed_v1.2r3.sql`（`ALTER TABLE app.meal_plan ADD COLUMN IF NOT EXISTS is_executed boolean NOT NULL DEFAULT false`，幂等，被 58 步 glob 命中，无需改脚本）；② `59_rag_sources.sh` → 精确 `41_RAG真实来源链接_v1.2r4.sql`、`59_review_activation.sh` → 精确 `41_反向营养映射审核激活_v1.2r4.sql`；③ `00_preflight.sh` 资产预检补 `37_*.sql`；④ `02_数据库结构...sql` 的 meal_plan 表补 `is_executed` 列；⑤ `09_文件校验值.sha256` 补 37/47~60 条目并更新改动文件 hash；⑥ 对齐 `docker/README.md` 与 `08_空库恢复与复跑说明.md` 的 initdb 步骤描述。
