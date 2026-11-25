@@ -676,11 +676,11 @@ BEGIN
     FROM audit.schema_migration
     WHERE migration_id = '2026-11-19-dish-expansion-120';
 
-    IF total_dishes <> 213 THEN
-        RAISE EXCEPTION '有效菜式总数应为213（170基础+43少盐变体），实际为%', total_dishes;
+    IF total_dishes <> 222 THEN
+        RAISE EXCEPTION '有效菜式总数应为222（179基础+43少盐变体），实际为%', total_dishes;
     END IF;
-    IF dish_nls <> 170 THEN
-        RAISE EXCEPTION '非-LS基础菜式应为170，实际为%', dish_nls;
+    IF dish_nls <> 179 THEN
+        RAISE EXCEPTION '非-LS基础菜式应为179，实际为%', dish_nls;
     END IF;
     IF new_dishes <> 30 THEN
         RAISE EXCEPTION '本批新增菜式应为30，实际为%', new_dishes;

@@ -7,6 +7,8 @@
 --   is_generation_enabled —— A 裁剪开关（默认 true；白名单外置 false，可逆，不删行）。
 --   dish_ingredient.role CHECK —— §5.4 主料口径，锁 7 个规范值。
 --   ingredient.nutrient_source —— §5.5 蛋白/脂肪来源软约束（首版按 category 推导，可后端细化）。
+-- 修订（2026-11-25，issue #21）：A 裁剪白名单原写了 4 道少盐变体，含 46 号并未生成的 DISH-141-LS，
+--   导致第 7 步断言 4≠3 整段回滚、连累 49/53/54；现按实际产物收敛为 3 道，断言改 3/40。
 -- ============================================================================
 
 BEGIN;
@@ -195,9 +197,11 @@ FROM (VALUES
 WHERE d.dish_id = v.dish_id;
 
 -- 4. A 裁剪白名单：关闭「非生成池」菜（可逆开关，不删行）
--- 4a. 少盐变体：默认全摘，仅保留 4 道高盐主菜的少盐版
+-- 4a. 少盐变体：默认全摘，仅保留 3 道高盐主菜的少盐版
+--     （原稿写了 4 道含 DISH-141-LS，但 46 号只给 43 道基础菜生成少盐版，141「清蒸豆腐」不在其中，
+--       白名单指向不存在的菜会让第 7 步断言 4≠3 直接回滚，连累 49/53/54。此处按实际产物收敛为 3 道。）
 UPDATE core.dish SET is_generation_enabled = false
-WHERE dish_id LIKE '%-LS' AND dish_id NOT IN ('DISH-002-LS', 'DISH-006-LS', 'DISH-019-LS', 'DISH-141-LS');
+WHERE dish_id LIKE '%-LS' AND dish_id NOT IN ('DISH-002-LS', 'DISH-006-LS', 'DISH-019-LS');
 -- 4b. 基础菜：关闭 84 道（复杂度/重复/家族瘦身/蔬菜瘦身）
 UPDATE core.dish SET is_generation_enabled = false
 WHERE dish_id IN ('DISH-003', 'DISH-004', 'DISH-005', 'DISH-007', 'DISH-013', 'DISH-016', 'DISH-018', 'DISH-020', 'DISH-021', 'DISH-026', 'DISH-027', 'DISH-029', 'DISH-030', 'DISH-033', 'DISH-037', 'DISH-040', 'DISH-045', 'DISH-048', 'DISH-050', 'DISH-051', 'DISH-052', 'DISH-053', 'DISH-055', 'DISH-064', 'DISH-065', 'DISH-066', 'DISH-067', 'DISH-069', 'DISH-071', 'DISH-075', 'DISH-076', 'DISH-078', 'DISH-079', 'DISH-082', 'DISH-084', 'DISH-085', 'DISH-090', 'DISH-091', 'DISH-094', 'DISH-096', 'DISH-097', 'DISH-098', 'DISH-099', 'DISH-100', 'DISH-101', 'DISH-103', 'DISH-104', 'DISH-105', 'DISH-106', 'DISH-109', 'DISH-110', 'DISH-112', 'DISH-115', 'DISH-117', 'DISH-118', 'DISH-119', 'DISH-120', 'DISH-126', 'DISH-134', 'DISH-135', 'DISH-136', 'DISH-137', 'DISH-139', 'DISH-140', 'DISH-143', 'DISH-144', 'DISH-145', 'DISH-146', 'DISH-147', 'DISH-148', 'DISH-149', 'DISH-150', 'DISH-151', 'DISH-152', 'DISH-154', 'DISH-155', 'DISH-156', 'DISH-157', 'DISH-158', 'DISH-160', 'DISH-161', 'DISH-162', 'DISH-167', 'DISH-168');
@@ -226,7 +230,7 @@ UPDATE core.ingredient SET nutrient_source = jsonb_build_object(
     ELSE NULL END
 ) WHERE NOT is_deleted;
 
--- 7. 自检：dish_meta 应覆盖全部 170 基础菜；白名单外应恰好关闭 43-4=39 少盐 + 其余基础菜
+-- 7. 自检：dish_meta 应覆盖当前全部基础菜；白名单外应恰好关闭其余少盐变体（43-3=40）
 DO $$
 DECLARE meta_missing int; base_on int; ls_on int; ls_off int;
 BEGIN
@@ -239,9 +243,9 @@ BEGIN
   SELECT count(*) INTO ls_off FROM core.dish
    WHERE dish_id LIKE '%-LS' AND NOT is_deleted AND NOT is_generation_enabled;
   IF meta_missing <> 0 THEN RAISE EXCEPTION 'dish_meta 缺失 % 道基础菜', meta_missing; END IF;
-  IF ls_on <> 4 THEN RAISE EXCEPTION '少盐变体开启数应为 4，实为 %', ls_on; END IF;
-  IF ls_off <> 39 THEN RAISE EXCEPTION '少盐变体关闭数应为 39，实为 %', ls_off; END IF;
-  RAISE NOTICE 'dish_meta 全覆盖 170；基础菜开启 %；少盐开 % / 关 %', base_on, ls_on, ls_off;
+  IF ls_on <> 3 THEN RAISE EXCEPTION '少盐变体开启数应为 3，实为 %', ls_on; END IF;
+  IF ls_off <> 40 THEN RAISE EXCEPTION '少盐变体关闭数应为 40，实为 %', ls_off; END IF;
+  RAISE NOTICE 'dish_meta 覆盖当前基础菜（0 缺失）；基础菜开启 %；少盐开 % / 关 %', base_on, ls_on, ls_off;
 END $$;
 
 COMMIT;

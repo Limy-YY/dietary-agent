@@ -67,10 +67,24 @@ SET dish_meta = '{"roles":["G"],"breakfast":"G","staple":"-","family":"坚果","
     updated_at = now()
 WHERE dish_id = 'DISH-179';
 
+-- 5b. 刷新 DISH-179 的 avoid_snapshot（对齐实时视图；新菜插入时快照为空，04 会判为不一致）
+UPDATE core.dish d SET
+    avoid_snapshot = jsonb_set(
+        jsonb_set(COALESCE(d.avoid_snapshot,'{}'::jsonb), '{strict_allergens}', to_jsonb(v.strict_allergens)),
+        '{unverified_food_ids}', to_jsonb(v.unverified_food_ids)),
+    updated_at = now()
+FROM app.v_dish_live_nutrition v
+WHERE d.dish_id = v.dish_id AND d.dish_id = 'DISH-179';
+
 -- 6. 自检
 DO $$
-DECLARE n_dish int; n_rel int; n_meta int;
+DECLARE n_dish int; n_rel int; n_meta int; n_bad_snap int;
 BEGIN
+  SELECT count(*) INTO n_bad_snap
+    FROM core.dish d JOIN app.v_dish_live_nutrition v USING (dish_id)
+   WHERE d.dish_id = 'DISH-179'
+     AND COALESCE(d.avoid_snapshot -> 'strict_allergens', '[]'::jsonb) <> COALESCE(to_jsonb(v.strict_allergens), '[]'::jsonb);
+  IF n_bad_snap <> 0 THEN RAISE EXCEPTION 'DISH-179 过敏原快照与视图不一致：% 道', n_bad_snap; END IF;
   SELECT count(*) INTO n_dish FROM core.dish WHERE dish_id='DISH-179' AND NOT is_deleted AND is_generation_enabled;
   SELECT count(*) INTO n_rel FROM core.dish_ingredient WHERE dish_id='DISH-179';
   SELECT count(*) INTO n_meta FROM core.dish WHERE dish_id='DISH-179' AND dish_meta IS NOT NULL;

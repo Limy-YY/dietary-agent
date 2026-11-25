@@ -1,0 +1,72 @@
+222 道交付链路实测记录（issue #21 / #23）
+==================================================
+
+环境：云主机 Ubuntu jammy，PostgreSQL 18.7（18.7-1.pgdg22.04+5）+ pgvector 0.8.7
+      socket /tmp/pg18，端口 5545，superuser postgres，库名 diet_agent
+      /delivery 为 database/ 全目录软链，POSTGRES_USER=postgres、POSTGRES_DB=diet_agent
+      无 Docker，本记录是把 docker/initdb/*.sh 按容器内同一顺序逐个 bash 执行的结果
+
+一、空库重建（2026-11-25 第二轮，16 步）
+--------------------------------------------------
+00_preflight.sh           rc=0   vector=0.8.7
+10_restore.sh             rc=0   dish=60（01 dump 基线 60 道 / 128 种食材）
+20_migrate.sh             rc=0   12 整改
+30_grants.sh              rc=0   03 权限
+40_conditions.sh          rc=0   18 病种 4 条
+50_vector.sh              rc=0   14 向量结构
+55_topics.sh              rc=0   19 知识库 43 篇
+56_nutrition_data.sh      rc=0   20 铁/纤维/钙（此时 60 道，断言通过）
+57_reverse_nutrition.sh   rc=0   21 反向营养 13 条
+58_executed.sh            rc=0   无 37_*.sql，跳过；migration 记录=2
+59_rag_sources.sh         rc=0   41 RAG 来源（逐个显式执行）
+59_review_activation.sh   rc=0   41 反向营养激活 + 42 + 43
+59v_v21_merge.sh          rc=0   dish_total=213 / dish_nLS=170 / dish_LS=43
+59w_rollout_222.sh        rc=0   dish_total=222 / dish_nLS=179 / dish_LS=43 / dish_steps=222
+59x_nutrition_finalize.sh rc=0   dish_121_rice_g=65 / vit_a_null_ing=0
+60_verify.sh              rc=0   04 + 22 + 43 全部通过
+
+二、验收输出（60_verify）
+--------------------------------------------------
+04 rc=0
+  - branch acceptance passed with rule HTN-SODIUM-DASH-1500 / condition hypertension
+  - v21 合并段验收通过：93 道，配料非空 / energy_kcal 非空 / 快照一致 / 菜名唯一
+  - DISH-121..170 段验收通过：50 道，编号无缺号 / 营养完整 / 无孤儿 / 快照一致
+  - 过敏原复核通过：未核查 0 条，快照与视图一致，迁移登记 1 条
+22 rc=0  食材 132 / 菜式 222 / 在用食材 103；铁 12mg；首批纤维钙 60 道；知识文档 43 篇
+43 rc=0  反向营养 19 条已启用（moderate 8 / low 11）；疾病规则 9 条 approved、7 条生效
+
+汇总 SELECT（60_verify 尾部）：
+  dish=222  base=179  ls=43  steps=222  ingredient=132
+  fiber_calcium_dishes=60  review_activation=2  backlog=43
+
+三、幂等（整条链路可重复执行）
+--------------------------------------------------
+二跑 59v_v21_merge.sh + 59w_rollout_222.sh + 59x_nutrition_finalize.sh + 60_verify.sh：
+  全部 rc=0，dish=222 / nLS=179 / LS=43 / steps=222，白米饭仍 65g。
+
+四、第二轮修掉的点
+--------------------------------------------------
+1. 38 可重跑：自检 7 处计数补 dish_id NOT LIKE '%-LS'
+   （46 的 18 道 -LS 变体基础菜在 061..120 字符串区间内，原先复跑报 78）。
+2. 40/55/56/57/58/59 挂进 initdb：新增 59x_nutrition_finalize.sh，顺序 40→55→56→57→58→59。
+3. 45 与 58 的重跑冲突：45 的配料克数 guard 对 DISH-121 的 CN-280 50→65g 放行，其余照旧拦。
+4. 58 定位改 food_id='CN-280'（原写死 ingredient_id=531，增量库不一定还是大米）。
+5. 00_preflight 的存在性检查补 40/55/56/57/58/59。
+
+五、上一轮已修（保留）
+--------------------------------------------------
+47 去幻影 DISH-141-LS、断言 3/40；04 改 222/179；22 改 132/222/103；
+59v 补挂 SQL 38；新增 59w（47→49→53→54→61）；41_*.sql 逐个显式执行；
+58_executed 无 37_*.sql 时跳过；49/54 新菜 avoid_snapshot 回刷。
+
+六、06 明细
+--------------------------------------------------
+06_菜式数据明细_222道.csv：222 行（179 普通 + 43 少盐）+ 表头 22 列，UTF-8 BOM，全字段加引号。
+与旧 213 行明细逐字段比对：除 reference_source_url 外 213 行完全一致；
+30 行 URL 由空变有值（NHC 指南来源菜此前未导出该列，属补齐）。旧的 06_120 / 06_213 已删除。
+
+七、仍未纳入（归属他人，另行处理）
+--------------------------------------------------
+20（断言纤维钙重算 60 道，仅能在 38 之前跑）、48（4 种食材 fiber_g 仍 NULL）、
+50（3 种死食材未清）；另有 54 种食材 vitamin_c_mg 仍为 null（水产 13、谷物 11、
+豆类 6、猪肉 5、调味料 5、蛋奶 3、禽肉 2 等），这些菜式的维生素 C 合计为 null。

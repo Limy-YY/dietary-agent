@@ -9,10 +9,14 @@
 --
 -- 幂等：白米饭大米已是 65g 时重复执行无副作用；updated_at 置 now() 用于触发 dish_facts 数据指纹失效。
 
-UPDATE core.dish_ingredient
+-- 修订（2026-11-25，issue #23）：改按 food_id 匹配大米（CN-280）。原先写死 ingredient_id = 531，
+-- 在 01 备份之外的增量库里 531 未必还是大米，空库重建时可能静默改不到目标行。
+UPDATE core.dish_ingredient di
 SET amount_g = 65
-WHERE dish_id = 'DISH-121'
-  AND ingredient_id = 531;
+FROM core.ingredient i
+WHERE di.ingredient_id = i.ingredient_id
+  AND di.dish_id = 'DISH-121'
+  AND i.food_id = 'CN-280';
 
 UPDATE core.dish
 SET updated_at = now()

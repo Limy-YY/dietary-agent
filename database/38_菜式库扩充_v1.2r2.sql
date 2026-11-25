@@ -682,24 +682,27 @@ FROM app.v_dish_live_nutrition v
 WHERE d.dish_id = v.dish_id AND d.dish_id BETWEEN 'DISH-061' AND 'DISH-120';
 
 -- 4. 自检：计数、外键、用量、来源、分类、快照完整性；不通过直接抛错
+-- 修订（2026-11-25，issue #23）：本批口径只数普通菜。46 号生成的少盐变体里有 18 道基础菜落在
+-- DISH-061..120 段，其 dish_id 形如 DISH-081-LS，按字符串落在同一 BETWEEN 区间；原先不带
+-- NOT LIKE '%-LS' 的盘点会把它们算进来（78 道），导致 213 之后重跑 38 直接报错。全部计数补上 -LS 过滤。
 DO $$
 DECLARE
   v_new_dishes integer; v_new_rows integer; v_orphan integer;
   v_bad_amount integer; v_bad_source integer; v_bad_snapshot integer; v_bad_category integer;
 BEGIN
-  SELECT count(*) INTO v_new_dishes FROM core.dish WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND NOT is_deleted;
+  SELECT count(*) INTO v_new_dishes FROM core.dish WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS' AND NOT is_deleted;
   IF v_new_dishes <> 60 THEN RAISE EXCEPTION '本批新增菜式应为 60，实际 %', v_new_dishes; END IF;
-  SELECT count(*) INTO v_new_rows FROM core.dish_ingredient WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120';
+  SELECT count(*) INTO v_new_rows FROM core.dish_ingredient WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS';
   IF v_new_rows <> 236 THEN RAISE EXCEPTION '本批配料关系应为 236，实际 %', v_new_rows; END IF;
-  SELECT count(*) INTO v_orphan FROM core.dish_ingredient di LEFT JOIN core.dish d ON d.dish_id=di.dish_id LEFT JOIN core.ingredient i ON i.ingredient_id=di.ingredient_id WHERE di.dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND (d.dish_id IS NULL OR i.ingredient_id IS NULL);
+  SELECT count(*) INTO v_orphan FROM core.dish_ingredient di LEFT JOIN core.dish d ON d.dish_id=di.dish_id LEFT JOIN core.ingredient i ON i.ingredient_id=di.ingredient_id WHERE di.dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND di.dish_id NOT LIKE '%-LS' AND (d.dish_id IS NULL OR i.ingredient_id IS NULL);
   IF v_orphan > 0 THEN RAISE EXCEPTION '存在孤儿配料关系 % 条', v_orphan; END IF;
-  SELECT count(*) INTO v_bad_amount FROM core.dish_ingredient WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND amount_g <= 0;
+  SELECT count(*) INTO v_bad_amount FROM core.dish_ingredient WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS' AND amount_g <= 0;
   IF v_bad_amount > 0 THEN RAISE EXCEPTION '存在非正用量配料 % 条', v_bad_amount; END IF;
-  SELECT count(*) INTO v_bad_source FROM core.dish WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND (source IS NULL OR source = '' OR source_id IS NULL OR source_id = '');
+  SELECT count(*) INTO v_bad_source FROM core.dish WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS' AND (source IS NULL OR source = '' OR source_id IS NULL OR source_id = '');
   IF v_bad_source > 0 THEN RAISE EXCEPTION '存在来源为空的菜式 % 道', v_bad_source; END IF;
-  SELECT count(*) INTO v_bad_category FROM core.dish WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND category IS NULL;
+  SELECT count(*) INTO v_bad_category FROM core.dish WHERE dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND dish_id NOT LIKE '%-LS' AND category IS NULL;
   IF v_bad_category > 0 THEN RAISE EXCEPTION '存在未填分类菜式 % 道', v_bad_category; END IF;
-  SELECT count(*) INTO v_bad_snapshot FROM core.dish d JOIN app.v_dish_live_nutrition v ON v.dish_id=d.dish_id WHERE d.dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND v.energy_kcal IS NULL;
+  SELECT count(*) INTO v_bad_snapshot FROM core.dish d JOIN app.v_dish_live_nutrition v ON v.dish_id=d.dish_id WHERE d.dish_id BETWEEN 'DISH-061' AND 'DISH-120' AND d.dish_id NOT LIKE '%-LS' AND v.energy_kcal IS NULL;
   IF v_bad_snapshot > 0 THEN RAISE EXCEPTION '存在热量快照缺失菜式 % 道', v_bad_snapshot; END IF;
 END $$;
 

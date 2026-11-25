@@ -367,7 +367,14 @@ BEGIN
     JOIN core.ingredient i USING (ingredient_id)
     JOIN _v21_dish_ingredient x ON x.dish_id = di.dish_id AND x.food_id = i.food_id
     WHERE di.generated_from = x.generated_from
-      AND (di.amount_g IS DISTINCT FROM x.amount_g OR di.role IS DISTINCT FROM x.role)
+      AND (
+            di.role IS DISTINCT FROM x.role
+         OR (di.amount_g IS DISTINCT FROM x.amount_g
+             -- 修订（2026-11-25，issue #23）：58 号把白米饭大米由 50g 对齐到 65g，
+             -- 之后重跑本迁移属于预期差异，不视为事实冲突。
+             AND NOT (x.food_id = 'CN-280' AND x.dish_id = 'DISH-121'
+                      AND x.amount_g = 50 AND di.amount_g = 65))
+          )
   ) THEN
     RAISE EXCEPTION '本迁移的配料关系已存在但克数或角色不同，停止迁移';
   END IF;

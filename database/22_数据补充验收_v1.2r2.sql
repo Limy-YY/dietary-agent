@@ -2,6 +2,7 @@
 \pset pager off
 
 -- v1.2r4 合并版数据补充验收：铁参考值、纤维、钙、审核修订后的反向营养映射，叠加 v1.2r2 菜式扩充（60 → 120）。
+-- 修订（2026-11-25，issue #23）：总量断言改按 222 道口径（179 基础 + 43 少盐变体、132 种食材、103 种在用餐食材）。
 -- 反向营养按阶段验收（v1.2r4 起）：
 --   激活前（未跑 41）：13 条待审核、0 条启用、moderate 7 / low 6；
 --   激活后（已跑 41）：19 条全部 approved+启用、moderate 8 / low 11。
@@ -107,9 +108,9 @@ BEGIN
 
     SELECT count(*) INTO v_doc_count FROM knowledge.knowledge_doc WHERE NOT is_deleted;
 
-    IF v_ingredient_count <> 128 THEN RAISE EXCEPTION '食材应为128种，实际为%种', v_ingredient_count; END IF;
-    IF v_dish_count <> 120 THEN RAISE EXCEPTION '菜式应为120道，实际为%道', v_dish_count; END IF;
-    IF v_used_ingredient_count <> 88 THEN RAISE EXCEPTION '120道菜应使用88种食材，实际为%种', v_used_ingredient_count; END IF;
+    IF v_ingredient_count <> 132 THEN RAISE EXCEPTION '食材应为132种，实际为%种', v_ingredient_count; END IF;
+    IF v_dish_count <> 222 THEN RAISE EXCEPTION '有效菜式应为222道，实际为%道', v_dish_count; END IF;
+    IF v_used_ingredient_count <> 103 THEN RAISE EXCEPTION '222道菜应使用103种食材，实际为%种', v_used_ingredient_count; END IF;
     IF v_r1_used <> 57 THEN RAISE EXCEPTION '首批60道菜应使用57种食材，实际为%种', v_r1_used; END IF;
     IF v_r1_fiber_missing <> 0 THEN RAISE EXCEPTION '首批菜式使用食材仍有%种缺纤维', v_r1_fiber_missing; END IF;
     IF v_r1_calcium_missing <> 0 THEN RAISE EXCEPTION '首批菜式使用食材仍有%种缺钙', v_r1_calcium_missing; END IF;
