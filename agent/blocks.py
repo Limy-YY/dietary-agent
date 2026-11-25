@@ -14,6 +14,13 @@ SOURCES = [
      "published_at": "2023-09-01", "url": "https://www.cnsoc.org/"},
 ]
 
+_GOAL_LABEL = {
+    "maintain": "均衡维持",
+    "fat_loss": "减脂控卡",
+    "muscle_gain": "增肌塑形",
+    "glucose_control": "平稳控糖",
+    "digestive_health": "肠胃调理",
+}
 
 def _candidate_kcal(candidate: dict | None):
     """候选热量：契约口径在 macro_estimate.kcal；缺失保持 None（null≠0）。"""
@@ -86,9 +93,12 @@ def meal_card_block(plan: dict) -> dict:
     target_vals = [(s.get("target_macro") or {}).get("kcal") for s in first_slots]
     planned_target = round(sum(target_vals), 1) if target_vals and all(v is not None for v in target_vals) else None
 
-    goal = plan.get("goal_text", "")
+    goal_code = str(plan.get("goal_code") or "").strip()
+    goal = _GOAL_LABEL.get(goal_code) or str(plan.get("goal_text") or "").strip() or "均衡膳食"
+    goal_kcal = plan.get("goal_energy_kcal")
+    goal_part = f"目标：{goal}（{round(goal_kcal)} kcal）" if goal_kcal is not None else f"目标：{goal}"
     kcal_text = f"约 {day_kcal} kcal" if day_kcal is not None else "热量待估"
-    subtitle = f"目标：{goal} · 已安排餐次合计{kcal_text}"
+    subtitle = f"{goal_part} · 已安排餐次合计{kcal_text}"
     title = {"周": "📅 一周食谱", "餐": "🍱 一餐搭配", "日": "🗓️ 今日食谱", "多日": "🗓️ 多日方案", "自定义": "🗓️ 膳食方案"}.get(scope, "🗓️ 膳食方案")
 
     return {

@@ -58,7 +58,8 @@ _INTENT_SYSTEM = (
     'profile_build（用户描述身体指标/目标/过敏，需建档）、rag_qa（营养知识问答）、'
     'report（生成/复盘膳食报告，如「生成周/月膳食报告」「看看这周/这个月吃得怎么样」「复盘这段时间」「复盘 11月1日到11月10日」）、'
     'explain（解释当前方案为什么这样搭/搭配理由）、'
-    'reverse_nutrition（症状咨询，如口角炎/乏力/掉发）、chat（闲聊）。\n'
+    'reverse_nutrition（症状咨询，如口角炎/乏力/掉发）、'
+    'capability（询问智能体能做什么/有哪些功能/使用帮助）、chat（闲聊）。\n'
     '注意：只有用户明确要求「生成/推荐/安排 菜单、三餐、食谱」时才归 plan_*；'
     '「一周/七天/7天」归 plan_week，「今天/明天一日三餐」归 plan_day，「推荐一餐」归 plan_meal，'
     '其余非标准范围（N 天、自定义日期、指定餐次子集）归 plan_custom；'
@@ -83,8 +84,9 @@ _INTENT_SYSTEM = (
 
 # 系统指令（回复生成时统一注入）：8 条共享铁律 + 4 处需求约束（FR-19/20/21/29）
 SYSTEM_INSTRUCTION = (
-    "你是「膳宝」，一个友好、简洁的膳食搭配助手：用「你」称呼用户，语气轻松不生硬，回复直接给结论、不堆客套话。"
-    "你负责营养配餐与营养答疑。遵守以下铁律：\n"
+    "你是「膳宝」，一位专业、温和、接地气的私人营养师：用「你」称呼用户，说话像真人营养师面对面沟通，"
+    "有判断、有依据、不堆客套话、不念系统术语，先给清晰结论再自然解释原因。"
+    "你负责个性化营养配餐、方案调整、膳食复盘与营养知识答疑。遵守以下铁律：\n"
     "1) 零编造：所有数值（能量/营养素/油盐/参考值）一律来自工具或后端返回，绝不自己计算、不估算、不编造。\n"
     "2) 硬约束优先：过敏原与疾病忌口是硬约束，优先于用户口头偏好。\n"
     "3) 可溯源：营养结论标注出处（source/source_id）。\n"
@@ -116,10 +118,12 @@ _FMT = (
 # 叙事系统指令（结构化动作的正文生成用）：铁律之上加 persona 与「不重复卡片」约束。
 _NARRATE_SYSTEM = (
     SYSTEM_INSTRUCTION
-    + "\n你现在要针对刚刚完成的一个动作写一句到三句的短回应，用自然段落即可，不要用标题、列表或表格。\n"
-    "重要：结构化结果（食谱卡片/膳食报告）已经由前端单独渲染，你的文字不要整段复述卡片里的数据，"
-    "只需自然点出关键信息（如本餐/本周的核心菜、热量量级、状态变化）并引导下一步。\n"
-    "所有数值只能引用「本轮结果」里给出的，不得自行计算或编造。"
+    + "\n你要针对刚刚完成的动作向用户作自然回应，用自然段落即可，不要用标题、列表或表格。\n"
+    "重要规则：\n"
+    "- 严禁在开头或正文中照抄「方案1（2026-xx-xx 至…共N餐）」这类内部定位编号行，开头直接用自然语言切入；\n"
+    "- 结构化卡片已经由前端单独渲染，不要逐菜报流水账，只需点出核心搭配亮点、能量量级与变化；\n"
+    "- 如果是换候选、确认等小动作，用 1～2 句简洁确认即可；如果是刚生成配餐方案，请结合用户健康目标（减脂重结构与饱腹感、控糖重低升糖与碳水分配、增肌重优质蛋白）用专业营养师口吻讲清餐食优势与搭配依据，结尾自然引导单餐微调；\n"
+    "- 所有数值只能引用「本轮结果」里给出的，不得自行计算或编造。"
 )
 
 
@@ -191,6 +195,9 @@ def _regex_intent(message: str) -> dict | None:
         "午餐": "午餐", "午饭": "午餐", "中午": "午餐",
         "晚餐": "晚餐", "晚饭": "晚餐", "晚上": "晚餐",
     }
+
+    if has(r"^(?:请问|你好|哈喽|嗨)?[，,！!\s]*(?:你|膳宝)?(?:能|可以|会)(?:做|干|帮我做)(?:什么|啥|哪些)|有哪些功能|功能介绍|怎么使用|能力范围"):
+        return {"intent": "capability"}
 
     # ── 卡片按钮话术（换 / 选 / 确认·固定 / 取消）──
     if has(r"换一换|换一餐|换个候选|换个方案"):
@@ -697,6 +704,20 @@ _TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_nutrition_knowledge",
+            "description": "检索《中国居民膳食指南》《中国食物成分表》等权威营养知识库，解答食材营养价值、饮食宜忌、慢性病饮食建议与搭配原理。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "要检索的营养问题或食材关键词"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -722,13 +743,15 @@ def _agent_system(profile: dict) -> str:
         + _profile_brief(profile) + "\n"
         + f"今天是 {date.today().isoformat()}。\n"
         + "可用工具：generate_plan（生成配餐方案）、ask_clarification（需求含糊时追问）、"
-          "swap_candidate（换一换 = 在生成时已产出的候选里换下一套，瞬时）、regenerate_slot（重生成单餐，可保留指定菜或落地排除/清淡等偏好）、replace_dish（替换单菜）、get_shopping_list（查食材清单）。\n"
+          "swap_candidate（换一换 = 在生成时已产出的候选里换下一套，瞬时）、regenerate_slot（重生成单餐，可保留指定菜或落地排除/清淡等偏好）、"
+          "replace_dish（替换单菜）、get_shopping_list（查食材清单）、search_nutrition_knowledge（检索权威营养知识库与食物成分）。\n"
         + "局部修改必须使用对应工具，按用户明确指定的方案序号、日期和餐次定位，禁止擅自生成整份方案或确认；工具失败后停止，不得重试写操作或宣称成功。\n"
-        + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」）就按顺序调用多个工具，最后统一回复；"
+        + "规则：① 用户一次说多件事（如「排三天午餐顺便列清单」「排三餐顺便查查痛风能不能吃菠菜」）就按顺序调用多个工具，最后统一回复；"
           "② 用户说「不想吃重复的」「换一换」等泛化请求且未指明具体餐次时，先对照已有方案找出跨餐重复菜，必须先调用 ask_clarification 追问用户想调整哪一餐（例如「午餐和晚餐都有「山药米饭」，你想换掉午餐的还是晚餐的？如果主食单换受限，也可以直接整餐重新生成」），禁止不问用户就擅自挑选餐次修改，也禁止诱导用户说「都换/一起换」（单轮仅支持修改一处）；"
           "③ 区分「局部替换」与「整餐重生成」：只有当用户明确指明要替换当前餐卡中【已有的某道具体菜】（如「把燕麦碗换成…」「不要西兰花蒸蛋」）时才调用 replace_dish；只要「换成/改成」前面是餐次名（如「早餐换成…」「晚餐改成…」），或用户表达「某餐我想吃 X」「X 加/和/配 Y」想指定整顿组合，或当前餐卡只有 1 道菜却想改成多道菜时，一律调用 regenerate_slot 整餐重生成，禁止调用 replace_dish；"
           "④ 需要行动先调用工具，别凭空捏造方案内容；⑤ 数值只引用工具返回，绝不自行计算；"
-          "⑥ 最终回复面向用户、结论先行、简洁自然，不要出现「工具」「调用」等内部字眼。"
+          "⑥ 若用户询问你的能力范围或能否检索营养资料，必须如实说明你具备个性化配餐、方案微调、权威营养知识库检索（《中国居民膳食指南》《中国食物成分表》等）及膳食报告分析能力，严禁声称「没有文献/知识检索功能」；"
+          "⑦ 最终回复面向用户、结论先行、简洁自然，不要出现「工具」「调用」等内部字眼。"
     )
 
 
@@ -928,8 +951,14 @@ def _fast_generate(user_id, profile, message, kind, intent, history, on_status, 
         return {"text": f"方案没排出来：{e}", "blocks": []}
     st.pop(rf.KEY, None)
     le.remember(st, plan)
-    fallback = _plan_label_line(plan)
-    narration = _narrate(message, _plan_label_line(plan) + "\n" + _plan_brief(plan), fallback, history)
+    # 修改 _fast_generate（约第 578 行）：去掉 _plan_label_line，补入档案与搭配依据
+    fallback = "已为你排好配餐方案，各餐菜品与热量见下方餐卡，有哪一餐不合口味可以随时告诉我调整。"
+    narrate_ctx = (
+        f"{_profile_brief(profile)}\n"
+        f"{_plan_brief(plan)}\n"
+        f"{_plan_coverage_feedback(plan)}"
+    )
+    narration = _narrate(message, narrate_ctx, fallback, history)
     return {"narration": narration, "blocks": [blocks.meal_card_block(plan)]}
 
 
@@ -941,17 +970,20 @@ _REVIEW_SYSTEM = (
     "- 有数据质量提示（data_quality_notes）或覆盖度提示（reference_hints）时，"
       "用用户能懂的话转述（如「你上周蔬菜偏低，这周多加了绿叶菜」），不要念原始字段名；\n"
     "- 用户提过的偏好（清淡/少油/不要X/单日特例）要体现进解释，引用用户自己的约束；\n"
-    "- 若存在无法满足的硬约束（过敏/疾病/宗教忌口），明确说出来并建议调整，不得装作已满足。"
+    "- 若存在无法满足的硬约束（过敏/疾病/宗教忌口），明确说出来并建议调整，不得装作已满足。\n"
+    "语气参考范文（仅模仿口吻与结构，数值和菜名必须严格取自本轮「方案数据」）：\n"
+    "「这份方案是按你减脂的目标搭配的，全天能量定在 1500 千卡左右，早中晚按三四三的能量比例分着吃。早餐选了燕麦牛奶粥，全谷物和乳制品就补上了；午餐杂粮饭加高蛋白的菜，蛋白质够、下午也不容易饿；晚餐特意安排的蒸拌做法，油和盐尽量少。减脂其实不用饿肚子，关键在于每顿结构齐全、蛋白和纤维补足，这样既不容易饿、血糖也稳。哪一餐不合口味，我可以单独给你调。」"
 )
 
 
-def _review_plan(message: str, rich: dict, plan: dict, history: list | None) -> dict:
-    """审查闭环（§3.4）：把完整覆盖度反馈 + 用户约束喂给 LLM 做一次审查，产出个性化正文（真流式）。"""
+# 修改 _review_plan（约第 594 行）：去掉 _plan_label_line，补入 _profile_brief(profile)（注意同步给函数签名加上 profile 参数）
+def _review_plan(message: str, rich: dict, plan: dict, history: list | None, profile: dict | None = None) -> dict:
     slim = _slim_intent(rich)
-    context = _plan_label_line(plan) + "\n" + _plan_brief(plan) + "\n" + _plan_coverage_feedback(plan)
-    fallback = _plan_label_line(plan)
+    context = _plan_brief(plan) + "\n" + _plan_coverage_feedback(plan)
+    fallback = "已按你的需求排好配餐方案，详细搭配与热量见下方餐卡，需要微调哪一餐随时告诉我。"
     prompt = (
         f"用户消息：{message}\n\n"
+        + (f"{_profile_brief(profile)}\n\n" if profile else "")
         + (f"用户约束：{json.dumps(slim, ensure_ascii=False)}\n\n" if slim else "")
         + f"方案数据：\n{context}"
     )
@@ -982,7 +1014,7 @@ def _rich_generate(user_id, profile, message, kind, intent, history, on_status, 
     le.remember(st, plan)
     if on_status:
         on_status("正在审查方案")
-    return {"narration": _review_plan(message, rich, plan, history),
+    return {"narration": _review_plan(message, rich, plan, history, profile),
             "blocks": [blocks.meal_card_block(plan)]}
 
 
@@ -1129,6 +1161,20 @@ def _tool_exec(name: str, args: dict, ctx: dict, on_status=None) -> dict:
             "summary": "已根据最终确认方案生成食材清单。",
             "blocks": [blocks.shopping_list_block(shopping)],
         }
+
+    if name == "search_nutrition_knowledge":
+        q = (args.get("query") or ctx.get("message") or "").strip()
+        if on_status:
+            on_status("正在检索营养知识")
+        try:
+            r = bc.rag_query(q, 5)
+            items = r.get("items", [])
+            content, _ = _rag_material(items)
+        except Exception:
+            content = ""
+        if not content:
+            return {"summary": "知识库暂未检索到足够依据，请如实告知用户无法查证，严禁编造来源或数值。"}
+        return {"summary": f"已检索到以下权威营养资料（回答时请引用出处，不得编造）：\n{content}"}
 
     return {"summary": f"未知工具：{name}"}
 
@@ -1370,6 +1416,19 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
         # 建档后交给 LLM 工具循环排当天方案
         return _agent_loop(user_id, profile, message, history, on_status,st,context)
 
+    if kind == "capability":
+        return {
+            "text": (
+                "我是你的私人膳食营养助手「膳宝」，目前可以帮你做这些事：\n"
+                "- **个性化建档与配餐**：根据你的身体指标、健康目标（减脂/增肌/控糖/维持等）及过敏忌口，生成单餐、一日三餐、一周或指定日期的食谱方案；\n"
+                "- **方案微调与搭配解析**：支持整餐重生成、单菜替换、备选套餐切换，并为你解释每顿饭的营养结构与搭配依据；\n"
+                "- **营养知识检索问答**：基于《中国居民膳食指南》《中国食物成分表》等权威资料，解答食材营养、饮食宜忌与日常搭配问题；\n"
+                "- **症状营养线索与膳食复盘**：针对常见不适提供饮食侧的营养参考线索，并在确认方案后生成周/月膳食分析报告与采购食材清单。\n\n"
+                "需要注意：我提供的营养分析与线索仅作日常饮食参考，不能替代医院检查或医学诊断。"
+            ),
+            "blocks": [],
+        }
+
     # 换候选
     if kind == "swap_candidate":
         # 结构化卡片动作（换一换按钮）：上下文已带 meal_plan_id / meal_slot_id，直接调后端，
@@ -1585,7 +1644,7 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
                 if getattr(e, "code", None) == 2005:
                     st["_pending_confirm_plan_id"] = context.get("meal_plan_id")
                     return {
-                        "text": str(e),
+                        "text": "这段时间已有固定方案，确认新方案会将其整份作废。请选择「替换」以新方案覆盖原方案，或选择「取消」保留原方案。",
                         "blocks": [
                             blocks.quick_actions_block([
                                 {"label": "替换", "phrase": "替换"},
@@ -1656,7 +1715,7 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
                 # 记住本次冲突的目标方案 id，供下一轮「替换/取消」在无 context 时定位（多方案场景）。
                 st["_pending_confirm_plan_id"] = plan.get("meal_plan_id")
                 return {
-                    "text": str(e),
+                    "text": "这段时间已有固定方案，确认新方案会将其整份作废。请选择「替换」以新方案覆盖原方案，或选择「取消」保留原方案。",
                     "blocks": [
                         blocks.quick_actions_block([
                             {"label": "替换", "phrase": "替换"},

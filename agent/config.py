@@ -38,7 +38,7 @@ BACKEND_BASE_URL: str = _env("BACKEND_BASE_URL", "http://127.0.0.1:8000").rstrip
 
 # ---- 数据库（rule_engine 的 SqlDataSource 用）----
 DATABASE_URL: str = _env(
-    "DATABASE_URL", "postgresql+psycopg://diet_backend:diet_backend_dev@localhost:5432/diet_agent"
+    "DATABASE_URL", "postgresql+psycopg://user:password@localhost:5432/diet_agent"
 )
 
 # ---- 大模型（DeepSeek，OpenAI 兼容）----
