@@ -24,6 +24,19 @@
         <div v-else-if="message.status === 'streaming' && !message.thinking" class="typing"><i></i><i></i><i></i></div>
       </template>
 
+      <!-- B1：快捷追问 chip，点一下等于把它当用户消息发回 -->
+      <div v-if="suggestions.length && message.status === 'done'" class="suggestions">
+        <button
+          v-for="s in suggestions"
+          :key="s"
+          class="suggestion-chip"
+          type="button"
+          @click="$emit('phrase', s)"
+        >
+          {{ s }}
+        </button>
+      </div>
+
       <RendererHost
         v-for="block in message.blocks"
         :key="block.__key"
@@ -58,6 +71,18 @@ const thinkingRecord = computed(() => {
   const actions = (props.message.thinkingSteps || []).filter((s) => !META_STEPS.includes(s))
   return actions.length ? actions.map((s) => '已' + s.replace(/^正在/, '')).join(' · ') : ''
 })
+
+// B1：快捷追问。兼容字符串数组与对象数组（对象取 text|label|content|phrase），最多 4 条
+const suggestions = computed(() => {
+  const raw = props.message.suggestions
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((s) =>
+      typeof s === 'string' ? s : (s && (s.text || s.label || s.content || s.phrase)) || ''
+    )
+    .filter(Boolean)
+    .slice(0, 4)
+})
 </script>
 
 <style scoped>
@@ -88,6 +113,30 @@ const thinkingRecord = computed(() => {
   padding: 2px 0 6px;
   color: var(--text-sub, #9a9a9a);
   font-size: 12px;
+}
+
+/* B1 快捷追问 chip：气泡下方一排，点击即发送 */
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.suggestion-chip {
+  padding: 6px 14px;
+  border: 1px solid var(--border-soft, #dfe5e0);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-sub, #5a5a5a);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.suggestion-chip:hover {
+  border-color: var(--brand-medium, #4a7c59);
+  color: var(--brand-medium, #4a7c59);
+  background: #f7faf8;
 }
 
 /* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */

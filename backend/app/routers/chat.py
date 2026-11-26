@@ -228,9 +228,33 @@ def _agent_events(req: ChatRequest, conversation_id: int, token: str | None = No
                     # 过程可见：把 Agent 的「正在读取档案 / 生成方案」等思考步骤透传给前端
                     yield "status", {"stage": data.get("stage", "")}
                 elif event == "done":
-                    # Agent 的 done 只带自己的 conversation_id / message_id，这里不透传
-                    continue
+                    # Agent 的 done 只带自己的 conversation_id / message_id，这里不透传；
+                    # B1：但其中的 suggestions（快捷追问）要带出去，由后端自己的 done 下发
+                    yield "suggestions", data.get("suggestions") or []
                 # Agent 侧的其它事件（如有）不在契约内，忽略
+
+
+def _normalize_suggestions(raw) -> list:
+    """B1 快捷追问：兼容字符串数组 / 对象数组，原样保留元素形状（对象里的 action 等字段不能被吃掉），最多 4 条。"""
+    if isinstance(raw, str):
+        v = raw.strip()
+        return [v] if v else []
+    if not isinstance(raw, list):
+        return []
+    out: list = []
+    seen: set[str] = set()
+    for s in raw:
+        if isinstance(s, str):
+            key, item = s.strip(), s.strip()
+        elif isinstance(s, dict):
+            key = str(s.get("text") or s.get("label") or s.get("content") or s.get("phrase") or "").strip()
+            item = s if key else None
+        else:
+            continue
+        if key and key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out[:4]
 
 
 def _extract_bearer(authorization: str | None) -> str | None:
@@ -264,6 +288,7 @@ def agent_chat(
         finish_reason = "stop"
         meal_plan_id: int | None = None
         assistant_text: list[str] = []
+        suggestions: list = []
 
         try:
             if not _profile_exists(db, req.user_id) and not _looks_like_profile_input(req.message):
@@ -299,6 +324,10 @@ def agent_chat(
                 if finish_reason != "error":
                     try:
                         for event, data in _agent_events(req, conversation_id, token, history):
+                            if event == "suggestions":
+                                # B1：Agent 的快捷追问，留给后端自己的 done 统一下发
+                                suggestions = _normalize_suggestions(data)
+                                continue
                             if event == "message":
                                 assistant_text.append(data.get("content") or "")
                             elif event == "artifact":
@@ -355,6 +384,8 @@ def agent_chat(
                     "conversation_id": conversation_id,
                     "meal_plan_id": meal_plan_id,
                     "finish_reason": finish_reason,
+                    # B1：快捷追问随 done 下发，前端渲染成气泡下方 chip
+                    "suggestions": suggestions,
                 },
             )
 

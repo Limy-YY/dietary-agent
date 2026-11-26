@@ -279,6 +279,15 @@ export const useChatStore = defineStore('chat', () => {
             aiMsg.thinking = '' // 兜底：确保思考步骤条不残留
             if (payload.conversation_id) session.conversationId = payload.conversation_id
             if (payload.meal_plan_id != null) aiMsg.meal_plan_id = payload.meal_plan_id
+            // B1：快捷追问（兼容字符串数组 / 对象数组，对象取 text|label|content|phrase）
+            if (Array.isArray(payload.suggestions)) {
+              aiMsg.suggestions = payload.suggestions
+                .map((s) =>
+                  typeof s === 'string' ? s : (s && (s.text || s.label || s.content || s.phrase)) || ''
+                )
+                .filter(Boolean)
+                .slice(0, 4)
+            }
             session.updatedAt = new Date().toISOString()
           }
 

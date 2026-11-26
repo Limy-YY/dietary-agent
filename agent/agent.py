@@ -1273,11 +1273,36 @@ def _run(user_id: str, message: str, history: list | None = None, on_status=None
     return {"text": "这个我暂时答不好。可以让我排今天的三餐、换候选、或生成膳食报告。", "blocks": []}
 
 
+def _suggestions(result: dict) -> list[str]:
+    """B1 快捷追问：按本轮结果确定性生成（不调 LLM，不增加首字延迟）。
+
+    只在 done 里下发，前端渲染成气泡下方 chip；点一下等于把该 phrase 当用户消息发回。
+    """
+    blocks = result.get("blocks") or []
+    cards = [b for b in blocks if b.get("type") == "meal_card"]
+    if cards:
+        status = cards[-1].get("status")
+        if status in ("draft", "candidates", "pending"):
+            return ["换一道菜", "确认这份方案", "看看营养分析"]
+        return ["看看营养分析", "生成膳食报告", "明天吃什么"]
+    text = f"{result.get('text') or ''}{result.get('narration') or ''}"
+    if "档案" in text:
+        return ["现在建档", "先排今天的三餐", "我需要哪些营养素"]
+    if "报告" in text or "复盘" in text:
+        return ["排明天三餐", "排一周的餐", "换一道菜"]
+    if any(k in text for k in ("计算", "营养素", "推荐摄入")):
+        return ["按我的情况排三餐", "这个营养素在哪吃得到", "看看营养分析"]
+    return ["排今天的三餐", "排一周的餐", "查营养素推荐量"]
+
+
 def run(user_id: str, message: str, history: list | None = None, on_status=None,
         *, conversation_id=None, context=None) -> dict:
     """Serialize mutations per authenticated conversation; different chats stay independent."""
     with cs.locked(user_id,conversation_id) as state:
-        return _run(user_id,message,history,on_status,state=state,context=context or {})
+        result = _run(user_id,message,history,on_status,state=state,context=context or {})
+    if "suggestions" not in result:
+        result["suggestions"] = _suggestions(result)
+    return result
 
 
 def _week_start() -> str:
