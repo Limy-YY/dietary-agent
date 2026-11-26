@@ -333,6 +333,7 @@ def _serialize_plan(plan: MealPlan, db: Session) -> dict:
         "why_summary": _summary_text(plan),
         "data_quality_notes": (plan.generation_context or {}).get("data_quality_notes", []),
         "reference_hints": (plan.generation_context or {}).get("reference_hints", []),
+        "nutrition_tips": plan.nutrition_tips or [],
         "micro_balance_window_start": _iso(plan.micro_balance_window_start),
         "micro_balance_window_end": _iso(plan.micro_balance_window_end),
         "agent_version": plan.agent_version,
@@ -438,6 +439,9 @@ def _persist_plan(
         raise BizError(BizCode.PLAN_GENERATION_FAILED, "合法候选不足两个，未保存方案")
     plan.status = "candidates"
     db.flush()
+    # B2：配餐时生成一次营养提示，落方案字段；面板只读，不在请求时实时生成
+    plan.nutrition_tips = _build_nutrition_tips(db, plan)
+    db.flush()
     return plan
 
 
@@ -495,6 +499,199 @@ def _daily_summary(plan):
 
 def _summary_text(plan):
     return '已安排 %s 餐。各餐目标、实际营养及每日已安排合计见方案；未安排餐次不计入。' % len(plan.slots)
+
+
+# ---------------------------------------------------------------- B2 营养提示（配餐/确认时生成一次，面板只读）
+
+_TIP_MICRO_KEYS = ("calcium", "iron", "zinc", "vitamin_a", "vitamin_b1", "vitamin_b2", "vitamin_c")
+_TIP_MAX_ITEMS = 3
+_TIP_DEFAULT_AGE_GROUP = "18-29"
+
+
+def _tip_age_group(age) -> str:
+    """年龄 → 参考值年龄段（DRIs 2023 成年分层）；缺失或未成年按 18-29。"""
+    try:
+        n = float(age)
+    except (TypeError, ValueError):
+        return _TIP_DEFAULT_AGE_GROUP
+    if n < 30:
+        return "18-29"
+    if n < 50:
+        return "30-49"
+    if n < 65:
+        return "50-64"
+    if n < 75:
+        return "65-74"
+    return "75+"
+
+
+def _tip_sex(raw) -> str:
+    """档案性别 → 参考值性别维度；识别不出按 both。"""
+    s = str(raw or "").strip().lower()
+    if "女" in s or s in ("female", "f", "woman"):
+        return "female"
+    if "男" in s or s in ("male", "m", "man"):
+        return "male"
+    return "both"
+
+
+def _tip_status(coverage: float, scope_ratio: float) -> str:
+    if scope_ratio < 0.8:
+        return "部分覆盖"
+    if coverage < 0.9:
+        return "低于参考量"
+    if coverage < 1.1:
+        return "接近参考量"
+    return "已覆盖"
+
+
+def _tip_payload(value) -> dict:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
+def _build_nutrition_tips(db: Session, plan: MealPlan) -> list[dict]:
+    """B2：按已选候选的微量估算，挑与参考量差距最大的 3 个营养素，配「作用 / 缺乏后果 / 富含来源」。
+
+    口径：
+    - 估算按方案已安排餐次合计，再按覆盖天数折算为日均；缺失按「缺数据」记录，不按 0 计；
+    - 参考量取 DRIs 2023 同年龄段 RNI（该维度无 RNI 时取 AI），性别按档案，识别不出用 both；
+    - 只排部分餐次时日均不代表全天摄入，按已安排热量占比给出「部分覆盖」状态。
+    科普文案取 `knowledge.nutrient_knowledge.payload` 的 function / deficiency / sources。
+    """
+    slots = list(plan.slots)
+    if not slots:
+        return []
+
+    sums = {k: 0.0 for k in _TIP_MICRO_KEYS}
+    missing = {k: 0 for k in _TIP_MICRO_KEYS}
+    for slot in slots:
+        cand = _selected_candidate(slot)
+        micro = (cand.micro_estimate if cand else None) or {}
+        for key in _TIP_MICRO_KEYS:
+            value = micro.get(key)
+            if value is None:
+                missing[key] += 1
+            else:
+                sums[key] += float(value)
+    if all(missing[key] == len(slots) for key in _TIP_MICRO_KEYS):
+        return []
+
+    day_count = max(len({str(s.slot_date) for s in slots}), 1)
+    ids = list(_TIP_MICRO_KEYS)
+
+    profile_row = db.execute(
+        text("SELECT sex, age FROM app.profile WHERE user_id = :uid"), {"uid": plan.user_id}
+    ).first()
+    sex = _tip_sex(profile_row.sex if profile_row is not None else None)
+    age_group = _tip_age_group(profile_row.age if profile_row is not None else None)
+
+    ref_map: dict[tuple[str, str], list] = {}
+    for row in db.execute(
+        text(
+            "SELECT nutrient_id, sex, reference_type, value FROM core.nutrient_reference "
+            "WHERE nutrient_id = ANY(:ids) AND age_group = :ag"
+        ),
+        {"ids": ids, "ag": age_group},
+    ).fetchall():
+        ref_map.setdefault((row.nutrient_id, row.sex), []).append(row)
+
+    def pick_ref(nutrient_id: str):
+        """同年龄段先找 RNI（性别按档案，其次 both），整轮都没有再退到任意类型（如 AI）。"""
+        for want_rni in (True, False):
+            for candidate_sex in (sex, "both", "male", "female"):
+                for row in ref_map.get((nutrient_id, candidate_sex)) or []:
+                    if want_rni and row.reference_type != "RNI":
+                        continue
+                    return row
+        return None
+
+    meta = {
+        row.nutrient_id: row
+        for row in db.execute(
+            text("SELECT nutrient_id, name_zh, unit FROM core.nutrient WHERE nutrient_id = ANY(:ids)"),
+            {"ids": ids},
+        ).fetchall()
+    }
+    knowledge = {
+        row.nutrient_id: _tip_payload(row.payload)
+        for row in db.execute(
+            text("SELECT nutrient_id, payload FROM knowledge.nutrient_knowledge WHERE nutrient_id = ANY(:ids)"),
+            {"ids": ids},
+        ).fetchall()
+    }
+
+    # 口径可信度：已安排餐次的目标热量占全天目标的比例。只排一餐时日均微量必然偏低，
+    # 不能据此判定「不足」，用「部分覆盖」表达。
+    day_target_kcal: dict[str, float] = {}
+    for slot in slots:
+        kcal = (slot.target_macro or {}).get("kcal")
+        if kcal:
+            day_key = str(slot.slot_date)
+            day_target_kcal[day_key] = day_target_kcal.get(day_key, 0.0) + float(kcal)
+    goal_kcal = float(plan.goal_energy_kcal) if plan.goal_energy_kcal else None
+    if day_target_kcal and goal_kcal:
+        scope_ratio = round(min(sum(day_target_kcal.values()) / (goal_kcal * len(day_target_kcal)), 1.0), 4)
+    else:
+        scope_ratio = 1.0
+
+    items: list[dict] = []
+    for key in _TIP_MICRO_KEYS:
+        if missing[key] == len(slots):
+            continue
+        ref = pick_ref(key)
+        if ref is None or ref.value is None or float(ref.value) <= 0:
+            continue
+        daily = round(sums[key] / day_count, 2)
+        ref_value = float(ref.value)
+        coverage = round(daily / ref_value, 4) if ref_value else 0.0
+        info = meta.get(key)
+        payload = knowledge.get(key) or {}
+        name_zh = (getattr(info, "name_zh", None) or key)
+        unit = getattr(info, "unit", None) or ""
+        items.append(
+            {
+                "nutrient_id": key,
+                "name_zh": name_zh,
+                "unit": unit,
+                "daily_amount": daily,
+                "reference_value": _f(ref_value),
+                "reference_type": ref.reference_type,
+                "age_group": age_group,
+                "coverage_pct": round(coverage * 100, 1),
+                "coverage": coverage,
+                "scope_ratio": scope_ratio,
+                "coverage_days": day_count,
+                "missing_slots": missing[key],
+                "function": list(payload.get("function") or []),
+                "deficiency": payload.get("deficiency") or {},
+                "sources": list(payload.get("sources") or []),
+            }
+        )
+
+    items.sort(key=lambda x: (x["coverage"], x["nutrient_id"]))
+    tips = items[:_TIP_MAX_ITEMS]
+    for tip in tips:
+        tip.pop("coverage", None)
+        status = _tip_status(tip["coverage_pct"] / 100, scope_ratio)
+        tip["status"] = status
+        tip["headline"] = (
+            f"{tip['name_zh']}：方案日均约 {tip['daily_amount']}{tip['unit']}，"
+            f"{age_group} 岁 {tip['reference_type']} {tip['reference_value']}{tip['unit']}，{status}"
+        )
+        if tip["missing_slots"]:
+            tip["headline"] += f"；{tip['missing_slots']} 个餐次缺估算，未按 0 计"
+        if scope_ratio < 0.8:
+            tip["headline"] += (
+                f"；本方案餐次目标热量约占全天 {round(scope_ratio * 100)}%，"
+                "日均不代表全天摄入，缺口需其余餐次补足"
+            )
+    return tips
 
 
 def _original_request(plan):
@@ -976,6 +1173,11 @@ def fix_plan(
         db.rollback()
         raise BizError(BizCode.PLAN_STATE_CONFLICT, f"固定失败: {exc}") from exc
 
+    # B2：确认时兜底生成一次；本版之前落库的老方案（列为空）在此补齐，已有内容不重算
+    if not plan.nutrition_tips:
+        plan.nutrition_tips = _build_nutrition_tips(db, plan)
+        db.flush()
+
     # 同步生成/刷新食材清单（一方案一清单）
     items = _shopping_items(db, plan)
     db.execute(
@@ -1015,8 +1217,14 @@ def current_plan(
     user_id: str = CurrentUser,
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict | None]:
-    """最近一个未删除方案（优先 fixed，其次 candidates）；无方案返回 null。"""
-    for status in ("fixed", "candidates"):
+    """最近一次生成/确认的方案；无方案返回 null。
+
+    B3 修正：旧实现「fixed 永远优先」，导致复用生成的新草稿被更早的固定方案顶掉。
+    现在按创建时间比大小 —— 草稿比固定方案更新，就返回草稿（用户刚生成的在面板上可见）；
+    固定方案更新（刚确认）则仍返回固定方案。
+    """
+
+    def _latest(status: str) -> MealPlan | None:
         stmt = (
             select(MealPlan)
             .where(
@@ -1032,9 +1240,14 @@ def current_plan(
                 .selectinload(MealCandidate.dishes)
             )
         )
-        plan = db.execute(stmt).scalar_one_or_none()
-        if plan is not None:
-            return api_success(_serialize_plan(plan, db))
+        return db.execute(stmt).scalar_one_or_none()
+
+    fixed = _latest("fixed")
+    candidates = _latest("candidates")
+    if candidates is not None and (fixed is None or candidates.created_at > fixed.created_at):
+        return api_success(_serialize_plan(candidates, db))
+    if fixed is not None:
+        return api_success(_serialize_plan(fixed, db))
     return api_success(None)
 
 

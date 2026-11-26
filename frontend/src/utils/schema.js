@@ -291,6 +291,35 @@ export function normalizeCurrentPlan(payload) {
     }
   })
   const days = groupDays(slots)
+  // B2 营养提示：后端配餐/确认时已生成并落库，这里只做展示层归一化，不在前端实时生成
+  const normDeficiency = (d) => {
+    if (Array.isArray(d)) return { items: d.map((x) => str(x)).filter(Boolean), note: '' }
+    if (d && typeof d === 'object') {
+      return {
+        items: arr(d.possible_manifestations).map((x) => str(x)).filter(Boolean),
+        note: str(d.interpretation, '')
+      }
+    }
+    return { items: [], note: '' }
+  }
+  const nutritionTips = arr(pick(p, 'nutrition_tips')).map((t) => {
+    const def = normDeficiency(pick(t, 'deficiency'))
+    return {
+      nutrient_id: str(pick(t, 'nutrient_id'), ''),
+      name: str(pick(t, 'name_zh'), ''),
+      unit: str(pick(t, 'unit'), ''),
+      daily_amount: numOrNull(pick(t, 'daily_amount')),
+      reference_value: numOrNull(pick(t, 'reference_value')),
+      reference_type: str(pick(t, 'reference_type'), ''),
+      coverage_pct: numOrNull(pick(t, 'coverage_pct')),
+      status: str(pick(t, 'status'), ''),
+      headline: str(pick(t, 'headline'), ''),
+      function: arr(pick(t, 'function')).map((f) => str(f)).filter(Boolean),
+      deficiency: def.items,
+      deficiency_note: def.note,
+      sources: arr(pick(t, 'sources')).map((s) => str(s)).filter(Boolean)
+    }
+  })
   return {
     type: 'current_plan',
     has_plan: true,
@@ -304,8 +333,10 @@ export function normalizeCurrentPlan(payload) {
         pick(p, 'start_date') && pick(p, 'end_date') ? `${pick(p, 'start_date')} ~ ${pick(p, 'end_date')}` : '',
       goal_energy_kcal: numOrNull(pick(p, 'goal_energy_kcal')),
       fixed_at: str(pick(p, 'fixed_at'), ''),
+      updated_at: str(pick(p, 'updated_at'), ''),
       days,
       slots,
+      nutrition_tips: nutritionTips.filter((t) => t.name || t.headline),
       reason_points: [],
       sources: []
     }

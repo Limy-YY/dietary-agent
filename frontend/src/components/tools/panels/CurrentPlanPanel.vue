@@ -27,6 +27,42 @@
         <div class="po-cal-sub">目标为份量量级参考，不做热量缺口/盈余</div>
       </div>
 
+      <div v-if="plan.nutrition_tips?.length" class="tip-section">
+        <div class="section-head-row">
+          <div class="section-head-title">🥗 营养提示</div>
+        </div>
+        <div v-for="tip in plan.nutrition_tips" :key="tip.nutrient_id" class="nutri-tip">
+          <div class="nt-head">
+            <span class="nt-name">{{ tip.name }}</span>
+            <span class="nt-status" :class="statusClass(tip.status)">{{ tip.status }}</span>
+          </div>
+          <div class="nt-numbers">
+            日均 <span class="num">{{ fmtNum(tip.daily_amount) }}</span>{{ tip.unit }}
+            · {{ tip.reference_type }} {{ fmtNum(tip.reference_value) }}{{ tip.unit }}
+            <template v-if="tip.coverage_pct !== null"> · 达成 {{ tip.coverage_pct }}%</template>
+          </div>
+          <div v-if="tip.function.length" class="nt-block">
+            <span class="nt-label">作用</span>
+            <span class="nt-text">{{ tip.function.join('；') }}</span>
+          </div>
+          <div v-if="tip.deficiency.length" class="nt-block">
+            <span class="nt-label">缺乏后果</span>
+            <span class="nt-text">{{ tip.deficiency.join('；') }}</span>
+          </div>
+          <div v-if="tip.deficiency_note" class="nt-note">{{ tip.deficiency_note }}</div>
+          <div v-if="tip.sources.length" class="nt-block">
+            <span class="nt-label">富含来源</span>
+            <span class="nt-chips">
+              <span v-for="s in tip.sources" :key="s" class="nt-chip">{{ s }}</span>
+            </span>
+          </div>
+          <div v-if="tip.status === '部分覆盖'" class="nt-note">本方案未覆盖全天餐次，日均仅供量级参考。</div>
+        </div>
+        <div class="nt-foot">
+          口径：已选餐次估算合计折算为日均，与 DRIs 2023 同年龄段 RNI（无 RNI 时取 AI）比较；缺估算的餐次不计 0。
+        </div>
+      </div>
+
       <div class="section-head-row">
         <div class="section-head-title">🍽️ 食谱概览</div>
         <button class="expand-all-btn" @click="toggleAllDays">{{ allOpen ? '全部收起' : '全部展开' }}</button>
@@ -97,7 +133,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchCurrentPlan } from '@/api/mealPlan.js'
 import { fetchReport } from '@/api/nutrition.js'
-import { fmtKcal, normalizeCurrentPlan } from '@/utils/schema.js'
+import { fmtKcal, fmtNum, normalizeCurrentPlan } from '@/utils/schema.js'
 import { fmtDateTime } from '@/utils/format.js'
 import { PHRASE } from '@/constants/actions.js'
 import { usePanelStore } from '@/stores/panel.js'
@@ -120,7 +156,8 @@ const reportLoading = ref(false)
 
 const isFixed = computed(() => plan.value?.status === 'fixed')
 const updatedText = computed(() => {
-  const t = plan.value?.fixed_at
+  // 已生效读固定时间；待确认/草稿读最后更新时间，避免固定时间为空时显示「—」
+  const t = isFixed.value ? plan.value?.fixed_at : plan.value?.updated_at || plan.value?.fixed_at
   return t ? fmtDateTime(t) : '—'
 })
 
@@ -266,6 +303,13 @@ function onAction(a) {
   else send(a.phrase)
 }
 
+/** B2 营养提示的状态标签配色：缺口 / 部分覆盖 / 已覆盖 */
+function statusClass(status) {
+  if (status === '低于参考量') return 'low'
+  if (status === '部分覆盖') return 'partial'
+  return 'ok'
+}
+
 onMounted(load)
 watch(() => panel.revision, load)
 watch(() => panel.active, (v) => v === 'current_plan' && load())
@@ -316,5 +360,103 @@ watch(() => panel.active, (v) => v === 'current_plan' && load())
 .cp-report-link:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* B2 营养提示（只读展示，内容由后端落库生成） */
+.tip-section {
+  margin-top: 14px;
+}
+
+.nutri-tip {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e6ece7;
+  border-radius: 10px;
+  background: #fafbfa;
+}
+
+.nt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nt-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #2f3a33;
+}
+
+.nt-status {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.nt-status.low {
+  color: #b4593f;
+  background: #fbeee9;
+}
+
+.nt-status.partial {
+  color: #9a7a25;
+  background: #fdf6e3;
+}
+
+.nt-status.ok {
+  color: #4a7c59;
+  background: #eef5f0;
+}
+
+.nt-numbers {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #5b6b60;
+}
+
+.nt-block {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.nt-label {
+  flex: none;
+  width: 48px;
+  color: #8a9a90;
+}
+
+.nt-text {
+  color: #3f4a43;
+}
+
+.nt-note {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #98a49b;
+}
+
+.nt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.nt-chip {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: #eef5f0;
+  font-size: 11px;
+  color: #4a7c59;
+}
+
+.nt-foot {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #98a49b;
 }
 </style>
