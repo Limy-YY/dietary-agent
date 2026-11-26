@@ -51,9 +51,15 @@
               <div class="hd-dish-head">
                 <span class="hd-dish-name">{{ dish.name }}</span>
                 <span v-if="dish.amount && dish.amount !== '—'" class="hd-dish-amount">{{ dish.amount }}</span>
-                <span v-if="dish.tip" class="hd-dish-method">{{ dish.tip }}</span>
               </div>
               <div v-if="dish.ingredients && dish.ingredients.length" class="hd-dish-ing">食材：{{ dish.ingredients.join('；') }}</div>
+              <div v-if="dish.steps && dish.steps.length" class="hd-dish-ing">
+                做法：
+                <ol class="hd-dish-steps">
+                  <li v-for="(step, si) in dish.steps" :key="si">{{ step }}</li>
+                </ol>
+              </div>
+              <div v-else-if="dish.tip" class="hd-dish-ing">做法：{{ dish.tip }}</div>
             </div>
           </div>
         </div>
@@ -321,12 +327,13 @@ watch(visible, (v) => {
   color: var(--text-sub);
 }
 
-.hd-dish-method {
-  font-size: 11px;
-  color: var(--brand-hover);
-  background: var(--brand-light, #eef4f0);
-  padding: 0 6px;
-  border-radius: 4px;
+.hd-dish-steps {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+
+.hd-dish-steps li {
+  margin: 1px 0;
 }
 
 .hd-dish-ing {

@@ -13,7 +13,13 @@
           <span v-if="dish.kcal" class="rm-dish-kcal">{{ dish.kcal }} kcal</span>
         </div>
         <div v-if="dish.ingredients && dish.ingredients.length" class="rm-dish-tip"><b>食材</b> {{ dish.ingredients.join('；') }}</div>
-        <div v-if="dish.tip" class="rm-dish-tip"><b>做法</b> {{ dish.tip }}</div>
+        <div v-if="dish.steps && dish.steps.length" class="rm-dish-tip">
+          <b>做法</b>
+          <ol class="rm-dish-steps">
+            <li v-for="(step, si) in dish.steps" :key="si">{{ step }}</li>
+          </ol>
+        </div>
+        <div v-else-if="dish.tip" class="rm-dish-tip"><b>做法</b> {{ dish.tip }}</div>
       </div>
       <div v-if="!(meal.dishes && meal.dishes.length)" class="rm-dish-tip">暂无菜品明细</div>
     </div>
@@ -97,5 +103,14 @@ function colorOf(meal) {
   color: var(--text-sub);
   line-height: 1.7;
   margin-top: 2px;
+}
+
+.rm-dish-steps {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+
+.rm-dish-steps li {
+  margin: 1px 0;
 }
 </style>
