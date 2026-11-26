@@ -237,9 +237,9 @@ watch(visible, (v) => {
   margin-bottom: 6px;
 }
 
-/* 天头热量：固定 76px 盒、居中，与 .meal-table .mt-kcal（76px 列）共享中轴 */
+/* 天头热量：固定宽度盒、居中，与 .meal-table .mt-kcal（同一 --kcal-col-w 列）共享中轴 */
 .hd-day-kcal {
-  width: 76px;
+  width: var(--kcal-col-w, 100px);
   text-align: center;
   flex-shrink: 0;
   font-weight: 400;
@@ -258,9 +258,9 @@ watch(visible, (v) => {
   margin: 18px 0 10px;
 }
 
-/* 「展开做法」按钮：胶囊样式，放进固定 76px 盒居中，与热量列中轴对齐 */
+/* 「展开做法」按钮：胶囊样式，放进与热量列同宽的盒居中，中轴对齐 */
 .hd-toggle-cell {
-  width: 76px;
+  width: var(--kcal-col-w, 100px);
   display: flex;
   justify-content: center;
   flex-shrink: 0;

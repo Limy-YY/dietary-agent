@@ -1080,7 +1080,7 @@ button {
 }
 
 .meal-table .mt-kcal {
-  width: 76px;
+  width: var(--kcal-col-w, 100px);
   white-space: nowrap;
 }
 
@@ -3646,11 +3646,25 @@ button {
   margin-bottom: 10px;
 }
 
-/* 弹窗（Element Plus el-dialog）：加大页边距，让文字与容器边界更有呼吸感（ui-spec 6.11） */
-.el-dialog {
+/* 弹窗（Element Plus el-dialog）：加大页边距，让文字与容器边界更有呼吸感（ui-spec 6.11）
+ * 用双类名提权，避免组件库默认 16px 内边距按加载顺序覆盖；内部分区不再各自叠内边距 */
+.el-dialog.el-dialog {
   border-radius: 16px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
-  padding: 26px 30px;
+  padding: 26px 32px;
+}
+
+.el-dialog.el-dialog .el-dialog__header {
+  padding: 0 28px 8px 0;
+  margin-right: 0;
+}
+
+.el-dialog.el-dialog .el-dialog__body {
+  padding: 0;
+}
+
+.el-dialog.el-dialog .el-dialog__footer {
+  padding: 12px 0 0;
 }
 
 /* 窄屏兜底 */

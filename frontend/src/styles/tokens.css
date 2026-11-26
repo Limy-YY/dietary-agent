@@ -37,6 +37,8 @@
   --tool-bar-w: 64px;
   --tool-panel-w: 340px;
   --content-max-w: 880px;
+  /* 食谱表热量列宽：容得下「1200 kcal」，历史详情弹窗的天头/按钮盒共轴复用 */
+  --kcal-col-w: 100px;
 
   /* 餐次色条（结构化渲染统一取色） */
   --meal-breakfast: #e8942c;
