@@ -79,8 +79,20 @@
       >
         <div class="plan-nutrition-title">🥗 营养提示</div>
         <ul class="plan-nutrition-list">
-          <li v-for="(t, i) in tips" :key="'t' + i">
-            <span v-if="t.title" class="pt-name">{{ t.title }}</span>{{ t.text }}<span v-if="t.source" class="pt-source">（{{ t.source }}）</span>
+          <li v-for="(t, i) in tips" :key="'t' + i" class="pt-card">
+            <div class="pt-head">
+              <span v-if="t.title" class="pt-name">{{ t.title }}</span>
+              <span v-if="t.status" class="pt-status" :class="statusClass(t.status)">{{ t.status }}</span>
+            </div>
+            <div v-if="t.headline" class="pt-row pt-headline">{{ t.headline }}</div>
+            <div v-if="t.function.length" class="pt-row"><span class="pt-label">作用</span>{{ t.function.join('；') }}</div>
+            <div v-if="deficiencyText(t)" class="pt-row"><span class="pt-label">缺乏后果</span>{{ deficiencyText(t) }}</div>
+            <div v-if="t.sources.length" class="pt-row">
+              <span class="pt-label">富含来源</span>
+              <span v-for="(s, si) in t.sources" :key="si" class="pt-chip">{{ s }}</span>
+            </div>
+            <div v-if="!hasStructured(t) && t.text" class="pt-row pt-text">{{ t.text }}</div>
+            <div v-if="t.source" class="pt-source">（{{ t.source }}）</div>
           </li>
         </ul>
       </div>
@@ -150,8 +162,23 @@ const isFocused = computed(() => Boolean(plan.value?.plan_id && plan.value.plan_
 const tips = computed(() => {
   const rich = plan.value?.nutrition_tips || []
   if (rich.length) return rich
-  return (plan.value?.reference_hints || []).map((h) => ({ title: '', text: h, source: '' }))
+  return (plan.value?.reference_hints || []).map((h) => ({ title: '', headline: '', text: h, source: '', function: [], deficiency: { items: [], note: '' }, sources: [], status: '' }))
 })
+
+function deficiencyText(t) {
+  const d = t.deficiency || {}
+  return (d.items && d.items.length ? d.items.join('；') : '') || d.note || ''
+}
+
+function hasStructured(t) {
+  return Boolean(t.function.length || deficiencyText(t) || t.sources.length)
+}
+
+function statusClass(status) {
+  if (/已覆盖|达标/.test(status)) return 'ok'
+  if (/部分覆盖|接近/.test(status)) return 'warn'
+  return 'low'
+}
 const updatedText = computed(() => {
   const t = plan.value?.fixed_at
   return t ? fmtDateTime(t) : '—'
@@ -404,23 +431,82 @@ watch(() => panel.focusPlanId, () => load())
 
 .plan-nutrition-list {
   margin: 0;
-  padding-left: 16px;
+  padding: 0;
+  list-style: none;
   font-size: 12px;
   line-height: 1.7;
   color: var(--text-sub, #7a7a7a);
 }
 
-.plan-nutrition-list li {
-  margin: 2px 0;
+.pt-card {
+  padding: 8px 0;
+}
+
+.pt-card + .pt-card {
+  border-top: 1px dashed var(--border-soft, #e5e7eb);
+}
+
+.pt-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
 }
 
 .pt-name {
   font-weight: 600;
   color: var(--text-main, #333);
-  margin-right: 4px;
+}
+
+.pt-status {
+  flex: none;
+  font-size: 10.5px;
+  padding: 0 7px;
+  border-radius: 999px;
+}
+
+.pt-status.ok {
+  color: var(--brand-hover, #3d6a4b);
+  background: var(--brand-light, #eef4f0);
+}
+
+.pt-status.warn {
+  color: #b9791f;
+  background: #fdf3e3;
+}
+
+.pt-status.low {
+  color: #b4553a;
+  background: #fbece8;
+}
+
+.pt-row {
+  margin-top: 2px;
+}
+
+.pt-headline {
+  color: var(--text-main, #333);
+}
+
+.pt-label {
+  display: inline-block;
+  min-width: 44px;
+  margin-right: 6px;
+  color: var(--text-sub, #9a9a9a);
+}
+
+.pt-chip {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 7px;
+  border: 1px solid var(--border-soft, #e5e7eb);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-main, #333);
 }
 
 .pt-source {
+  margin-top: 2px;
   color: var(--text-sub, #9a9a9a);
 }
 

@@ -61,19 +61,50 @@ export function domainOfUrl(url) {
   }
 }
 
-/** F9：营养提示归一化，兼容字符串数组与 {title,text,source} 对象数组；空项丢弃 */
+/** 缺乏后果归一化：deficiency 可能是对象 {possible_manifestations, interpretation}，也可能是 JSON 字符串 */
+function normalizeDeficiency(raw) {
+  let d = raw
+  if (typeof d === 'string') {
+    try { d = JSON.parse(d) } catch { d = {} }
+  }
+  if (!d || typeof d !== 'object') d = {}
+  const items = arr(d.possible_manifestations).map((x) => str(x)).filter(Boolean)
+  const note = str(d.interpretation, '').trim()
+  return { items, note }
+}
+
+/** F9/B2：营养提示归一化。兼容旧字符串数组与 {title,text,source}；保留 function/deficiency/sources 结构化分段，text 作兜底 */
 export function normalizeNutritionTips(list) {
   return arr(list)
     .map((t) => {
       if (t == null) return null
       if (typeof t === 'string') {
         const text = t.trim()
-        return text ? { title: '', text, source: '' } : null
+        return text ? { title: '', headline: '', text, source: '', function: [], deficiency: { items: [], note: '' }, sources: [], status: '', coverage_pct: null, daily_amount: null, reference_value: null, unit: '' } : null
       }
-      const title = str(pick(t, 'title', 'nutrient', 'name'), '')
+      const title = str(pick(t, 'title', 'nutrient', 'name', 'name_zh'), '')
+      const headline = str(pick(t, 'headline'), '')
       const text = str(pick(t, 'text', 'advice', 'content', 'message'), '').trim()
       const source = str(pick(t, 'source', 'source_name'), '')
-      return text ? { title, text, source } : null
+      const fn = arr(pick(t, 'function')).map((x) => str(x)).filter(Boolean)
+      const deficiency = normalizeDeficiency(pick(t, 'deficiency'))
+      const sources = arr(pick(t, 'sources')).map((x) => str(x)).filter(Boolean)
+      const structured = fn.length || deficiency.items.length || deficiency.note || sources.length
+      if (!text && !headline && !structured) return null
+      return {
+        title,
+        headline,
+        text,
+        source,
+        function: fn,
+        deficiency,
+        sources,
+        status: str(pick(t, 'status'), ''),
+        coverage_pct: numOrNull(pick(t, 'coverage_pct')),
+        daily_amount: numOrNull(pick(t, 'daily_amount')),
+        reference_value: numOrNull(pick(t, 'reference_value')),
+        unit: str(pick(t, 'unit'), '')
+      }
     })
     .filter(Boolean)
 }

@@ -152,6 +152,30 @@ export function planToCurrentPlan(card) {
     end_date: card.end_date,
     fixed_at: card.status === 'fixed' ? new Date().toISOString() : null,
     goal_energy_kcal: card.goal_energy_kcal,
+    nutrition_tips: [
+      {
+        title: '钙',
+        headline: '方案日均约 456mg，18 岁以上 RNI 800mg，低于参考量',
+        status: '低于参考量',
+        coverage_pct: 57.5,
+        function: ['维持骨骼和牙齿健康', '参与肌肉收缩与神经传导'],
+        deficiency: { possible_manifestations: ['骨量流失风险增加', '长期不足可能影响骨密度'], interpretation: '' },
+        sources: ['牛奶', '豆制品', '深绿色蔬菜', '小鱼虾'],
+        source: 'DRIs 2023',
+        text: ''
+      },
+      {
+        title: '维生素B2',
+        headline: '方案日均约 0.9mg，18 岁以上 RNI 1.2mg，接近参考量',
+        status: '接近参考量',
+        coverage_pct: 75,
+        function: ['参与能量代谢', '维持皮肤与黏膜健康'],
+        deficiency: { possible_manifestations: ['口角炎', '舌炎'], interpretation: '' },
+        sources: ['奶类', '蛋类', '动物肝脏', '绿叶菜'],
+        source: 'DRIs 2023',
+        text: ''
+      }
+    ],
     slots: card.slots.map((s) => {
       const selected = s.candidates.find((c) => c.candidate_id === s.selected_candidate_id) || s.candidates[0]
       return {
