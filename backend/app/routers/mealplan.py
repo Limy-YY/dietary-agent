@@ -506,6 +506,7 @@ def _summary_text(plan):
 _TIP_MICRO_KEYS = ("calcium", "iron", "zinc", "vitamin_a", "vitamin_b1", "vitamin_b2", "vitamin_c")
 _TIP_MAX_ITEMS = 3
 _TIP_DEFAULT_AGE_GROUP = "18-29"
+_TIP_SOURCE_LABEL = "DRIs 2023"
 
 
 def _tip_age_group(age) -> str:
@@ -553,6 +554,37 @@ def _tip_payload(value) -> dict:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return value if isinstance(value, dict) else {}
+
+
+def _tip_prose(tip: dict) -> str:
+    """把科普三要素拼成一句话，供只读面板的单行提示消费（前端契约 text 字段）。"""
+
+    def _clean(items, limit):
+        out = []
+        for raw in items or []:
+            text = str(raw).strip().rstrip("。；;.")
+            if text:
+                out.append(text)
+            if len(out) >= limit:
+                break
+        return out
+
+    parts: list[str] = []
+    fn = _clean(tip.get("function"), 2)
+    if fn:
+        parts.append("作用：" + "；".join(fn))
+    dfc = tip.get("deficiency") or {}
+    if isinstance(dfc, str):
+        dfc = _tip_payload(dfc)
+    manifestations = _clean(dfc.get("possible_manifestations"), 2)
+    interp = str(dfc.get("interpretation") or "").strip().rstrip("。；;.")
+    body = "；".join(manifestations) or interp
+    if body:
+        parts.append("缺乏后果：" + body)
+    src = _clean(tip.get("sources"), 3)
+    if src:
+        parts.append("富含来源：" + "、".join(src))
+    return "。".join(parts)
 
 
 def _build_nutrition_tips(db: Session, plan: MealPlan) -> list[dict]:
@@ -680,17 +712,23 @@ def _build_nutrition_tips(db: Session, plan: MealPlan) -> list[dict]:
         tip.pop("coverage", None)
         status = _tip_status(tip["coverage_pct"] / 100, scope_ratio)
         tip["status"] = status
-        tip["headline"] = (
-            f"{tip['name_zh']}：方案日均约 {tip['daily_amount']}{tip['unit']}，"
+        body = (
+            f"方案日均约 {tip['daily_amount']}{tip['unit']}，"
             f"{age_group} 岁 {tip['reference_type']} {tip['reference_value']}{tip['unit']}，{status}"
         )
         if tip["missing_slots"]:
-            tip["headline"] += f"；{tip['missing_slots']} 个餐次缺估算，未按 0 计"
+            body += f"；{tip['missing_slots']} 个餐次缺估算，未按 0 计"
         if scope_ratio < 0.8:
-            tip["headline"] += (
+            body += (
                 f"；本方案餐次目标热量约占全天 {round(scope_ratio * 100)}%，"
                 "日均不代表全天摄入，缺口需其余餐次补足"
             )
+        tip["headline"] = f"{tip['name_zh']}：{body}"
+        # 前端契约（normalizeNutritionTips 只读 title/text/source）：三要素拼进 text，结构字段照旧保留
+        prose = _tip_prose(tip)
+        tip["title"] = tip["name_zh"]
+        tip["text"] = f"{body}。{prose}" if prose else body
+        tip["source"] = _TIP_SOURCE_LABEL
     return tips
 
 
