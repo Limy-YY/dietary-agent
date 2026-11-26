@@ -52,7 +52,7 @@ QUERIES: dict[str, list[str]] = {
     "锌的作用和食物来源": ["nutrient:zinc:overview"],
     "维生素C每天摄入多少": ["nutrient:vitamin_c:overview"],
     "维生素A缺乏会怎样": ["nutrient:vitamin_a:overview"],
-    "膳食纤维每天吃多少": ["nutrient:fiber:overview"],
+    "膳食纤维每天吃多少": ["nutrient:dietary_fiber:overview"],
     "钠每天摄入多少合适": ["nutrient:sodium:overview"],
 }
 
@@ -74,7 +74,8 @@ def _search(conn, query: str, vec: list[float] | None, p_min: float) -> list[dic
     return conn.execute(text(
         "SELECT d.stable_key, d.title, s.vector_similarity "
         "FROM knowledge.search_documents("
-        "  CAST(:q AS text), CAST(:emb AS vector), :limit, :pmin, 60) s "
+        "  CAST(:q AS text), CAST(:emb AS vector), "
+        "  CAST(:limit AS integer), CAST(:pmin AS numeric), CAST(60 AS integer)) s "
         "JOIN knowledge.knowledge_doc d ON d.knowledge_doc_id = s.knowledge_doc_id "
         "ORDER BY s.score DESC"
     ), {"q": query, "emb": v, "limit": TOP_K, "pmin": p_min}).mappings().all()
