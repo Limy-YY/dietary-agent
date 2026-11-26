@@ -63,6 +63,11 @@ class MealPlan(Base):
     micro_balance_window_start: Mapped[date | None] = mapped_column(Date)
     micro_balance_window_end: Mapped[date | None] = mapped_column(Date)
 
+    # B2 营养提示：配餐/确认时生成一次（作用 / 缺乏后果 / 富含来源），面板只读展示
+    nutrition_tips: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+
     agent_version: Mapped[str | None] = mapped_column(Text)
     data_version: Mapped[str] = mapped_column(Text, nullable=False)
     derived_from_plan_id: Mapped[int | None] = mapped_column(

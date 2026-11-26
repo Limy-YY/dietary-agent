@@ -139,7 +139,7 @@ const thinkingRecord = computed(() => {
   return actions.length ? actions.map((s) => '已' + s.replace(/^正在/, '')).join(' · ') : ''
 })
 
-// 快捷追问 chip：只在回复完成后、且有建议时展示（IMP-027）
+// 快捷追问 chip：只在回复完成后、且有建议时展示（IMP-027 / B1，suggestions 已由 store 归一化为字符串数组）
 const showSuggestions = computed(
   () => props.message.status === 'done' && (props.message.suggestions || []).length > 0
 )
@@ -173,6 +173,30 @@ const showSuggestions = computed(
   padding: 2px 0 6px;
   color: var(--text-sub, #9a9a9a);
   font-size: 12px;
+}
+
+/* B1 快捷追问 chip：气泡下方一排，点击即发送 */
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.suggestion-chip {
+  padding: 6px 14px;
+  border: 1px solid var(--border-soft, #dfe5e0);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-sub, #5a5a5a);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.suggestion-chip:hover {
+  border-color: var(--brand-medium, #4a7c59);
+  color: var(--brand-medium, #4a7c59);
+  background: #f7faf8;
 }
 
 /* markdown 正文样式（v-html 注入的内容不受 scoped 约束，用 :deep 命中） */

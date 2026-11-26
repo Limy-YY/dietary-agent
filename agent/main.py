@@ -165,6 +165,8 @@ async def _stream(req: AgentChatRequest):
         "conversation_id": conv_id,
         "message_id": f"msg_{int(time.time() * 1000)}",
         "finish_reason": "stop",
+        # B1：快捷追问随 done 下发，后端透传、前端渲染成气泡下方 chip
+        "suggestions": result.get("suggestions") or [],
     })
 
 
