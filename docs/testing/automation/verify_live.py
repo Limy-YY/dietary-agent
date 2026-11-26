@@ -23,6 +23,8 @@ from pathlib import Path
 BASE = os.getenv("LIVE_BASE_URL", "").rstrip("/")
 USER = "TEST-E2E-01"
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from jwt_secret import jwt_secret  # noqa: E402
 
 
 def token() -> str:
@@ -33,7 +35,7 @@ def token() -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {"sub": USER, "iat": now, "exp": now + timedelta(minutes=1440)},
-        "change-me-in-production",
+        jwt_secret(),
         algorithm="HS256",
     )
 

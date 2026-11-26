@@ -4,8 +4,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BASE = os.getenv("LIVE_BASE_URL", "").rstrip("/")
-SECRET = "change-me-in-production"
 HERE = Path(__file__).parent
+sys.path.insert(0, str(HERE))
+from jwt_secret import jwt_secret  # noqa: E402
+
+SECRET = jwt_secret()
 results = []
 
 def jwt_for(sub):

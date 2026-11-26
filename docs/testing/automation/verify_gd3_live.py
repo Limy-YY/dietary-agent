@@ -41,9 +41,11 @@ def jwt_for(uid: str = "TEST-E2E-03") -> str:
         import jwt as pyjwt
     except ImportError:
         return ""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from jwt_secret import jwt_secret
     now = datetime.now(timezone.utc)
     return pyjwt.encode({"sub": uid, "iat": now, "exp": now + timedelta(hours=4)},
-                        "change-me-in-production", algorithm="HS256")
+                        jwt_secret(), algorithm="HS256")
 
 
 def call(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:

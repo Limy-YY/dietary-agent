@@ -21,8 +21,11 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from jwt_secret import jwt_secret  # noqa: E402
+
 BASE = os.getenv("LIVE_BASE_URL", "").rstrip("/")
-SECRET = os.getenv("LIVE_JWT_SECRET", "change-me-in-production")
+SECRET = jwt_secret()
 USER_A = os.getenv("LIVE_USER_A", "TEST-E2E-01")
 USER_B = os.getenv("LIVE_USER_B", "TEST-E2E-02")
 HERE = Path(__file__).resolve().parent
