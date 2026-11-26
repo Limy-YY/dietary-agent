@@ -25,8 +25,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
+sys.path.insert(0, str(HERE))
+from jwt_secret import jwt_secret  # noqa: E402
+
 BASE = os.getenv("LIVE_BASE_URL", "").rstrip("/")
-SECRET = "change-me-in-production"
+SECRET = jwt_secret()
 results: list[dict] = []
 
 
