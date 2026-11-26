@@ -15,7 +15,10 @@ class RagItem(BaseModel):
     source_id: str | None = None
     category: str | None = None
     score: float | None = None
-    kind: str = "doc"  # doc | nutrient
+    kind: str = "doc"  # doc | nutrient | reference | notice（notice=该营养素库内无参考值，仅提示、不含数值）
+    # B7：营养参考值召回路专用。命中营养素时把 RNI/AI（含年龄分层）结构化带回，
+    # 便于 Agent 直接引用数值，不必再解析 content 文本。
+    reference: dict | None = None
 
 
 class RagResult(BaseModel):

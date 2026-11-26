@@ -6,6 +6,14 @@ API-15：优先走 `knowledge.search_documents` 的 RRF 混合检索（向量路
 T10 反向营养：symptom_nutrient_map 表待数据岗补（D3），先走知识库关键词兜底。
 """
 import logging
+import re
+
+try:  # B4：中文分词。缺包时退 n-gram，不让检索接口因为一个新依赖起不来
+    import jieba
+
+    jieba.setLogLevel(60)  # 关掉首次加载词典的日志，避免污染 stderr
+except Exception:  # noqa: BLE001
+    jieba = None
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import bindparam, text
@@ -21,45 +29,114 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 logger = logging.getLogger(__name__)
 
-#: 向量路最低余弦相似度，低于此值不入融合（契约默认 0.5）
+#: 向量路最低余弦相似度默认值（B5：改由 settings.RAG_MIN_SIMILARITY 提供，此处仅作兜底说明）
 _MIN_SIMILARITY = 0.5
+
+#: 查询切片段：空白与中英文标点
+_QUERY_SPLIT = re.compile(r"[\s,，。、；;：:？?！!（）()\[\]【】\"'“”‘’·/]+")
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+#: 中文停用词：问句骨架，只参与召回、不参与打分（避免「每天/多少」把无关文档顶上来）
+_CJK_STOP_WORDS = {
+    "请问", "怎么", "怎样", "如何", "多少", "什么", "哪些", "哪个", "为什么", "是否",
+    "能不能", "可以", "应该", "需要", "推荐", "合适", "一天", "每天", "每日", "一次",
+    "我", "你", "他", "她", "的", "了", "吗", "呢", "啊", "和", "与", "及", "或",
+    "在", "是", "有", "要", "吃", "这", "那", "一些", "比较", "告诉", "建议", "请",
+    "告诉我", "问题", "情况", "时候", "一般", "大概", "左右",
+}
+
+
+def _tokenize(query: str) -> list[str]:
+    """把查询切成检索词（B4）。
+
+    英文/数字按标点切；中文优先 jieba 精确分词，缺包时退 2 字 n-gram。
+    某中文片段滤完停用词后若只剩单字（如「钙每天补多少」→ 钙 / 每天 / 补 / 多少），
+    保留全部切词：宁可多召回也不丢实词，停用词在打分阶段不计分，不会抬高噪声。
+    """
+    terms: list[str] = []
+    for part in _QUERY_SPLIT.split(query or ""):
+        if not part:
+            continue
+        if not _CJK.search(part):
+            terms.append(part)
+            continue
+        if jieba is not None:
+            words = [w for w in jieba.cut_for_search(part) if w.strip()]
+        else:
+            words = [part[i:i + 2] for i in range(max(len(part) - 1, 1))]
+        strong = [w for w in words if len(w) >= 2 and w not in _CJK_STOP_WORDS]
+        if strong:
+            terms.extend(strong)
+            # 单字实词也带上：中文营养素名（钙/铁/锌）和英文代号（维生素D 的 D）都是单字
+            terms.extend(
+                w for w in words
+                if len(w) == 1 and w not in _CJK_STOP_WORDS and w.isalnum()
+                and w.lower() not in ("a", "i")
+            )
+        else:
+            terms.extend(words)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in terms:
+        t = t.strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out[:12]
+
+
+def _score_terms(terms: list[str], title: str, content: str, category: str) -> float:
+    """命中度打分：title 0.9 / category 0.5 / content 0.7，取实词均值。
+
+    停用词只召回不计分；实词全不命中返回 0（该文档直接不进结果）。
+    """
+    title = (title or "").lower()
+    content = (content or "").lower()
+    category = (category or "").lower()
+    weights: list[float] = []
+    for t in terms:
+        if t in _CJK_STOP_WORDS:
+            continue
+        t = t.lower()
+        if t in title:
+            weights.append(0.9)
+        elif t in category:
+            weights.append(0.5)
+        elif t in content:
+            weights.append(0.7)
+        else:
+            weights.append(0.0)
+    return round(sum(weights) / len(weights), 6) if weights else 0.0
 
 
 def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
-    """关键词检索：knowledge_doc 为主，nutrient_knowledge 补充。
+    """关键词检索（B4 重写）：knowledge_doc 为主，nutrient_knowledge 补位。
 
-    多词查询按空白拆分，全部词命中才返回（AND 语义）。
-    score 启发式（可复算）：doc 每个词 title 命中 0.9 / 分类命中 0.5 / 正文命中 0.7，
-    取词均值；nutrient 每个词 id 命中 0.8 / 内容命中 0.6，取词均值。接入向量 RRF 后替换。
+    旧实现按空格分词 + 整串 `ILIKE '%整句%'` + AND 语义，中文无空格查询必然 0 命中。
+    现在：jieba 分词 → `ILIKE` OR 召回 → Python 侧按命中度排序，命中实词为 0 的被丢弃。
     """
-    terms = [t for t in query.split() if t]
+    terms = _tokenize(query)
     if not terms:
         return []
 
-    def _where(cols: list[str]) -> str:
-        return " AND ".join(
-            "(" + " OR ".join(f"{c} ILIKE :w{i}" for c in cols) + ")"
-            for i in range(len(terms))
-        )
-
-    params = {f"w{i}": f"%{t}%" for i, t in enumerate(terms)}
-    params["limit"] = top_k
-    n = len(terms)
-
-    doc_weight = " + ".join(
-        f"(CASE WHEN title ILIKE :w{i} THEN 0.9 WHEN category ILIKE :w{i} THEN 0.5 ELSE 0.7 END)"
-        for i in range(n)
+    where = " OR ".join(
+        f"(title ILIKE :w{i} OR content ILIKE :w{i} OR category ILIKE :w{i})"
+        for i in range(len(terms))
     )
     rows = db.execute(
         text(
-            f"SELECT knowledge_doc_id, title, content, category, source, source_id, "
-            f"({doc_weight}) / {n}::float AS score "
+            f"SELECT knowledge_doc_id, title, content, category, source, source_id "
             f"FROM knowledge.knowledge_doc "
-            f"WHERE NOT is_deleted AND {_where(['title', 'content', 'category'])} "
-            f"ORDER BY score DESC, knowledge_doc_id LIMIT :limit"
+            f"WHERE NOT is_deleted AND ({where}) LIMIT 300"
         ),
-        params,
+        {f"w{i}": f"%{t}%" for i, t in enumerate(terms)},
     ).mappings().all()
+
+    scored = [
+        (_score_terms(terms, r["title"], r["content"], r["category"]), r) for r in rows
+    ]
+    scored = [s for s in scored if s[0] > 0]
+    scored.sort(key=lambda x: (-x[0], x[1]["knowledge_doc_id"]))
     items = [
         RagItem(
             doc_id=str(r["knowledge_doc_id"]),
@@ -68,35 +145,38 @@ def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
             source=r["source"],
             source_id=r["source_id"],
             category=r["category"],
-            score=float(r["score"]) if r["score"] is not None else None,
+            score=s,
             kind="doc",
         )
-        for r in rows
+        for s, r in scored[:top_k]
     ]
 
     if len(items) < top_k:
-        n_weight = " + ".join(
-            f"(CASE WHEN nutrient_id ILIKE :w{i} THEN 0.8 ELSE 0.6 END)"
-            for i in range(n)
+        nwhere = " OR ".join(
+            f"(payload::text ILIKE :w{i} OR nutrient_id ILIKE :w{i})" for i in range(len(terms))
         )
         nrows = db.execute(
             text(
                 f"SELECT nutrient_id, payload::text AS content, "
-                f"({n_weight}) / {n}::float AS score "
+                f"COALESCE(payload ->> 'name', nutrient_id) AS name_zh "
                 f"FROM knowledge.nutrient_knowledge "
-                f"WHERE {_where(['payload::text', 'nutrient_id'])} "
-                f"ORDER BY score DESC LIMIT :limit"
+                f"WHERE {nwhere} LIMIT 100"
             ),
-            params,
+            {f"w{i}": f"%{t}%" for i, t in enumerate(terms)},
         ).mappings().all()
+        nscored = [
+            (_score_terms(terms, r["name_zh"], r["content"], ""), r) for r in nrows
+        ]
+        nscored = [s for s in nscored if s[0] > 0]
+        nscored.sort(key=lambda x: (-x[0], x[1]["nutrient_id"]))
         items.extend(
             RagItem(
-                title=f"营养素知识：{r['nutrient_id']}",
+                title=f"营养素知识：{r['name_zh']}",
                 content=r["content"],
-                score=float(r["score"]) if r["score"] is not None else None,
+                score=s,
                 kind="nutrient",
             )
-            for r in nrows
+            for s, r in nscored[: top_k - len(items)]
         )
     return items
 
@@ -123,7 +203,7 @@ def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], 
                 "q": query,
                 "emb": to_pgvector_literal(embedding),
                 "limit": top_k,
-                "min_sim": _MIN_SIMILARITY,
+                "min_sim": settings.RAG_MIN_SIMILARITY,
                 "rrf_k": settings.RAG_RRF_K,
             },
         ).mappings().all()
@@ -169,10 +249,168 @@ def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], 
     return items, ("hybrid_rrf" if embedding is not None else "rrf_text_only")
 
 
+#: B7 营养参考值召回：默认取成人 18-29 岁层（rag-query 无 user_id，不做个性化）
+_REFERENCE_DEFAULT_AGE_GROUP = "18-29"
+_REFERENCE_SOURCE_NAME = "中国营养学会《中国居民膳食营养素参考摄入量（2023版）》"
+_REFERENCE_SOURCE_ID = "DRIs 2023"
+
+
+def _match_nutrients(query: str, db: Session) -> list[dict]:
+    """从查询文本识别营养素（确定性匹配，不做模糊）。
+
+    命中规则：`core.nutrient.name_zh` 括号外主名（如「维生素B1（硫胺素）」→「维生素B1」）
+    出现在查询里；否则用 `knowledge.nutrient_knowledge.payload.aliases` 兜底，
+    别名限定 ≥2 字符，避免「Ca」「B1」这类短串误命中无关文本。
+    """
+    rows = db.execute(
+        text(
+            "SELECT n.nutrient_id, n.name_zh, n.unit, "
+            "       COALESCE(k.payload -> 'aliases', '[]'::jsonb) AS aliases "
+            "FROM core.nutrient n "
+            "LEFT JOIN knowledge.nutrient_knowledge k ON k.nutrient_id = n.nutrient_id"
+        )
+    ).mappings().all()
+
+    hits: list[dict] = []
+    for r in rows:
+        name_zh = (r["name_zh"] or "").strip()
+        base = name_zh.split("（")[0].strip()
+        matched = bool(base) and base in query
+        if not matched:
+            for alias in (r["aliases"] or []):
+                alias = str(alias).strip()
+                if len(alias) >= 2 and alias in query:
+                    matched = True
+                    break
+        if matched:
+            hits.append({"nutrient_id": r["nutrient_id"], "name_zh": name_zh, "unit": r["unit"]})
+    return hits
+
+
+def _fmt_num(v) -> str:
+    """数值格式化：800.0 → 800，0.75 → 0.75。"""
+    if v is None:
+        return ""
+    f = float(v)
+    return str(int(f)) if f == int(f) else f"{f:g}"
+
+
+def _search_nutrient_reference(query: str, db: Session) -> list[RagItem]:
+    """B7：营养参考值召回路。命中营养素时查 `core.nutrient_reference`。
+
+    取成人 18-29 岁层；男/女数值一致时合并为一条「成人」，不一致时按性别各出一条。
+    数值全部取自库，不在此处推算或补默认值。
+    """
+    items: list[RagItem] = []
+    for n in _match_nutrients(query, db):
+        rows = db.execute(
+            text(
+                "SELECT sex, age_group, reference_type, value, ul_value "
+                "FROM core.nutrient_reference "
+                "WHERE nutrient_id = :nid "
+                "ORDER BY age_min_months, sex, age_group"
+            ),
+            {"nid": n["nutrient_id"]},
+        ).mappings().all()
+        if not rows:
+            # 库内无该营养素的 RNI/AI 行（当前 8 种：叶酸/ω-3/B12/B5/B6/B7/D/K）。
+            # 给一条显式「暂无数据」提示且不返回任何数值，避免 Agent 编造，
+            # 也避免把 nutrient_knowledge 的科普文案当成参考量引用。
+            items.append(
+                RagItem(
+                    doc_id=f"notice:no-reference:{n['nutrient_id']}",
+                    title=f"{n['name_zh']}：库内暂无参考值",
+                    content=(
+                        f"{n['name_zh']} 的 RNI/AI 参考摄入量尚未入库，本节不给数值。"
+                        "需要按参考量安排摄入时，请以《中国居民膳食营养素参考摄入量（2023）》原文为准。"
+                    ),
+                    source=_REFERENCE_SOURCE_NAME,
+                    source_id=_REFERENCE_SOURCE_ID,
+                    category="营养参考值",
+                    kind="notice",
+                )
+            )
+            continue
+
+        # 代表层取成人 18-29（rag-query 无 user_id，不做个性化）；无该层时退到全量首层
+        adult = [r for r in rows if r["age_group"] == _REFERENCE_DEFAULT_AGE_GROUP] or rows
+
+        # 年龄分层全量随 reference.layers 一并返回，供 Agent 按用户年龄/孕哺期取用
+        layers = [
+            {
+                "age_group": r["age_group"],
+                "sex": r["sex"],
+                "reference_type": r["reference_type"],
+                "value": float(r["value"]),
+                "ul": float(r["ul_value"]) if r["ul_value"] is not None else None,
+            }
+            for r in rows
+        ]
+
+        unit = n["unit"] if n["unit"] and n["unit"] != "未提供" else ""
+        by_value: dict[tuple, list] = {}
+        for r in adult:
+            key = (r["reference_type"], _fmt_num(r["value"]), _fmt_num(r["ul_value"]))
+            by_value.setdefault(key, []).append(r)
+
+        groups: list[tuple[str, list]] = []
+        if len(by_value) == 1:
+            groups.append(("成人", next(iter(by_value.values()))))
+        else:
+            for _key, rs in by_value.items():
+                label = {"male": "男", "female": "女"}.get(rs[0]["sex"], rs[0]["sex"])
+                groups.append((label, rs))
+
+        for idx, (label, rs) in enumerate(groups):
+            r = rs[0]
+            rt = r["reference_type"]
+            value = _fmt_num(r["value"])
+            ul = _fmt_num(r["ul_value"])
+            age = r["age_group"]
+            who = "成人" if label == "成人" else f"{label}性"
+            headline = f"{who}（{age}岁）每天 {value} {unit}".strip()
+            content = f"{rt} {value} {unit}/天".strip()
+            if ul:
+                content += f"；UL（可耐受最高摄入量）{ul} {unit}/天"
+            ref = {
+                "nutrient_id": n["nutrient_id"],
+                "name_zh": n["name_zh"],
+                "unit": unit,
+                "age_group": age,
+                "sex": "both" if label == "成人" else r["sex"],
+                "reference_type": rt,
+                "value": float(r["value"]),
+                "ul": float(r["ul_value"]) if r["ul_value"] is not None else None,
+                "headline": headline,
+            }
+            # 分层只挂第一条，避免同营养素多条 item 各自重复一份全量
+            if idx == 0:
+                ref["layers"] = layers
+            items.append(
+                RagItem(
+                    title=f"营养参考值：{n['name_zh']}（{label}）",
+                    content=content,
+                    source=_REFERENCE_SOURCE_NAME,
+                    source_id=_REFERENCE_SOURCE_ID,
+                    category="营养参考值",
+                    kind="reference",
+                    reference=ref,
+                )
+            )
+    return items
+
+
 @router.post("/rag-query")
 def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)) -> ApiResponse[RagResult]:
-    """RAG 知识库检索（RRF 混合检索，兼容关键词退化；每条带 doc_id 溯源）。"""
+    """RAG 知识库检索（RRF 混合检索，兼容关键词退化；每条带 doc_id 溯源）。
+
+    B7：命中营养素时先去 `core.nutrient_reference` 取定量参考值（kind=reference），
+    再按原检索顺序补齐文档，总量仍受 `top_k` 约束。
+    """
     items, method = _search_hybrid(req.query, req.top_k, db)
+    refs = _search_nutrient_reference(req.query, db)
+    if refs:
+        items = (refs + items)[: req.top_k]
     return api_success(RagResult(items=items, method=method))
 
 
