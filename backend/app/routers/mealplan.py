@@ -1404,27 +1404,32 @@ def current_plan(
     user_id: str = CurrentUser,
     db: Session = Depends(get_db),
 ) -> ApiResponse[dict | None]:
-    """最近一个未删除方案（优先 fixed，其次 candidates）；无方案返回 null。"""
-    for status in ("fixed", "candidates"):
-        stmt = (
-            select(MealPlan)
-            .where(
-                MealPlan.user_id == user_id,
-                MealPlan.is_deleted.is_(False),
-                MealPlan.status == status,
-            )
-            .order_by(MealPlan.created_at.desc(), MealPlan.meal_plan_id.desc())
-            .limit(1)
-            .options(
-                selectinload(MealPlan.slots)
-                .selectinload(MealSlot.candidates)
-                .selectinload(MealCandidate.dishes)
-            )
+    """最近一个未删除、未被取代的方案；无方案返回 null。
+
+    与 `/list` 同口径：只按 `created_at` 取最新，**不再按 status 分组**（BUG-031）。
+    旧写法「先 fixed、再 candidates」会让 status 分组压过时间——用户刚生成的
+    candidates 永远顶不上「当前方案」，前端首屏点完「生成方案」画面不变，
+    误以为生成失败而重复点，方案越堆越多；与 /list（按时间倒序）结论也相反。
+    """
+    stmt = (
+        select(MealPlan)
+        .where(
+            MealPlan.user_id == user_id,
+            MealPlan.is_deleted.is_(False),
+            MealPlan.status != "superseded",
         )
-        plan = db.execute(stmt).scalar_one_or_none()
-        if plan is not None:
-            return api_success(_serialize_plan(plan, db))
-    return api_success(None)
+        .order_by(MealPlan.created_at.desc(), MealPlan.meal_plan_id.desc())
+        .limit(1)
+        .options(
+            selectinload(MealPlan.slots)
+            .selectinload(MealSlot.candidates)
+            .selectinload(MealCandidate.dishes)
+        )
+    )
+    plan = db.execute(stmt).scalar_one_or_none()
+    if plan is None:
+        return api_success(None)
+    return api_success(_serialize_plan(plan, db))
 
 
 # ---------------------------------------------------------------- API-05 列表
