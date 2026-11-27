@@ -24,7 +24,10 @@ class RagItem(BaseModel):
 
 class RagResult(BaseModel):
     items: list[RagItem]
-    method: str = "keyword_fallback"
+    # 实际走的检索路径：hybrid_rrf | rrf_text_only | no_hit | func_missing
+    method: str = "no_hit"
+    # 排查用：has_query_vector（是否算得出查询向量）、with_emb / total_docs（库内已灌向量数）
+    diag: dict | None = None
 
 
 class ReverseNutritionRequest(BaseModel):
