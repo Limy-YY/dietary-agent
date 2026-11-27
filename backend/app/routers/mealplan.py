@@ -239,7 +239,7 @@ def _dish_details(db: Session, dish_ids) -> dict[str, dict]:
     if not ids:
         return {}
     dish_rows = db.execute(
-        text("SELECT dish_id, name, method_text FROM core.dish WHERE dish_id = ANY(:ids)"),
+        text("SELECT dish_id, name, method_text, steps FROM core.dish WHERE dish_id = ANY(:ids)"),
         {"ids": ids},
     ).mappings().all()
     ing_rows = db.execute(
@@ -253,7 +253,12 @@ def _dish_details(db: Session, dish_ids) -> dict[str, dict]:
         {"ids": ids},
     ).mappings().all()
     details: dict[str, dict] = {
-        r["dish_id"]: {"name": r["name"], "method_text": r["method_text"], "ingredients": []}
+        r["dish_id"]: {
+            "name": r["name"],
+            "method_text": r["method_text"],
+            "steps": r["steps"],
+            "ingredients": [],
+        }
         for r in dish_rows
     }
     for r in ing_rows:
@@ -282,6 +287,7 @@ def _serialize_candidate(c: MealCandidate, details: dict[str, dict]) -> dict:
                 "dish_id": d.dish_id,
                 "name": (details.get(d.dish_id) or {}).get("name", ""),
                 "method_text": (details.get(d.dish_id) or {}).get("method_text") or "",
+                "steps": (details.get(d.dish_id) or {}).get("steps") or [],
                 "ingredients": (details.get(d.dish_id) or {}).get("ingredients", []),
                 "role": d.role,
                 "servings": _f(d.servings, 2),
