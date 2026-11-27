@@ -2,7 +2,8 @@
 
 API-15：优先走 `knowledge.search_documents` 的 RRF 混合检索（向量路 + 关键词路，
 权重 1:1、`k=60`、`top_k=5`、每路池 20）；未配置 `EMBEDDING_API_KEY` 或函数不可用时，
-自动退化为纯关键词 RRF；再不行回落进程内关键词兜底，并在 `method` 字段如实标注。
+自动退化为纯关键词 RRF；再不行回落进程内关键词兜底。`method` 与 `diag` 如实区分
+「函数没部署」「向量没灌」「两路都没命中」三种情况（BUG-032）。
 T10 反向营养：symptom_nutrient_map 表待数据岗补（D3），先走知识库关键词兜底。
 """
 import logging
@@ -196,15 +197,39 @@ def _search_knowledge(query: str, top_k: int, db: Session) -> list[RagItem]:
     return items
 
 
-def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], str]:
+def _embedding_stats(db: Session) -> dict:
+    """知识库向量就绪统计，只服务 diag，失败不影响检索主流程。"""
+    try:
+        row = db.execute(
+            text(
+                "SELECT count(*) FILTER (WHERE embedding IS NOT NULL) AS with_emb, "
+                "       count(*) AS total_docs "
+                "FROM knowledge.knowledge_doc WHERE NOT is_deleted"
+            )
+        ).one()
+        return {"with_emb": int(row[0]), "total_docs": int(row[1])}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("向量就绪统计失败：%s", exc)
+        db.rollback()
+        return {"with_emb": None, "total_docs": None}
+
+
+def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], str, dict]:
     """RRF 混合检索（`knowledge.search_documents`），不可用时回落关键词兜底。
 
-    返回 `(items, method)`：`hybrid_rrf` 表示向量+关键词双路融合，
-    `rrf_text_only` 表示仅有查询向量缺失时的关键词路 RRF，
-    `keyword_fallback` 表示检索函数不存在（未跑 14 脚本）或查询为空。
+    返回 `(items, method, diag)`。`method` 只描述「实际走了哪条路、有没有命中」：
+
+    - `hybrid_rrf`：有查询向量，向量 + 文本双路融合；
+    - `rrf_text_only`：查询向量缺失/为空，只剩文本 RRF；
+    - `no_hit`：两路都没命中（含只有文本路的情况）；
+    - `func_missing`：`search_documents` 不可用（函数未部署 / 权限 / 维度不符），回落进程内关键词。
+
+    `diag` 固定带 `has_query_vector`、`with_emb`、`total_docs`，用来把「函数缺失」与
+    「向量未灌」分开——只看 `method` 会把两者混成一句话，排查会走错方向（BUG-032）。
     """
     settings = get_settings()
     embedding = embed_text(query)
+    diag = {"has_query_vector": embedding is not None, **_embedding_stats(db)}
     sql = text(
         "SELECT s.knowledge_doc_id, s.title, s.category, s.content, s.score, "
         "       s.vector_rank, s.text_rank, d.source, d.source_id, "
@@ -230,13 +255,14 @@ def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], 
         # 函数未部署 / 权限不足 / 维度不符：回到进程内关键词兜底，不影响出参结构
         logger.warning("search_documents 不可用，回落关键词兜底：%s", exc)
         db.rollback()
-        return _search_knowledge(query, top_k, db), "keyword_fallback"
+        return _search_knowledge(query, top_k, db), "func_missing", diag
 
     if not rows:
-        return _search_knowledge(query, top_k, db), "keyword_fallback"
+        # 两路都没命中：向量没灌 / 查询向量缺失 / 关键词确实不匹配，原因看 diag
+        return _search_knowledge(query, top_k, db), "no_hit", diag
 
     # BUG-027：knowledge.search_documents 的 RETURNS TABLE 不含 source/source_id，
-    # 这里按 knowledge_doc_id 回查一次补齐，保证 hybrid 与 keyword_fallback 两路溯源行为一致。
+    # 这里按 knowledge_doc_id 回查一次补齐，保证 hybrid 与关键词兜底两路溯源行为一致。
     doc_ids = [r["knowledge_doc_id"] for r in rows]
     sources: dict[int, tuple[str | None, str | None]] = {}
     try:
@@ -259,20 +285,14 @@ def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], 
             content=r["content"] or "",
             source=(sources.get(r["knowledge_doc_id"]) or (None, None))[0],
             source_id=(sources.get(r["knowledge_doc_id"]) or (None, None))[1],
+            source_url=r["source_url"],
             category=r["category"],
             score=float(r["score"]) if r["score"] is not None else None,
             kind="doc",
         )
         for r in rows
     ]
-    return items, ("hybrid_rrf" if embedding is not None else "rrf_text_only")
-
-
-#: B7 营养参考值召回：默认取成人 18-29 岁层（rag-query 无 user_id，不做个性化）
-_REFERENCE_DEFAULT_AGE_GROUP = "18-29"
-_REFERENCE_SOURCE_NAME = "中国营养学会《中国居民膳食营养素参考摄入量（2023版）》"
-_REFERENCE_SOURCE_ID = "DRIs 2023"
-
+    return items, ("hybrid_rrf" if embedding is not None else "rrf_text_only"), diag
 
 def _match_nutrients(query: str, db: Session) -> list[dict]:
     """从查询文本识别营养素（确定性匹配，不做模糊）。
@@ -426,11 +446,11 @@ def rag_query(req: RagQueryRequest, db: Session = Depends(get_db)) -> ApiRespons
     B7：命中营养素时先去 `core.nutrient_reference` 取定量参考值（kind=reference），
     再按原检索顺序补齐文档，总量仍受 `top_k` 约束。
     """
-    items, method = _search_hybrid(req.query, req.top_k, db)
+    items, method, diag = _search_hybrid(req.query, req.top_k, db)
     refs = _search_nutrient_reference(req.query, db)
     if refs:
         items = (refs + items)[: req.top_k]
-    return api_success(RagResult(items=items, method=method))
+    return api_success(RagResult(items=items, method=method, diag=diag))
 
 
 def _search_symptom_map(symptoms: str, db: Session) -> list[RagItem]:
