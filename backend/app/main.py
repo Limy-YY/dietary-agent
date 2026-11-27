@@ -3,11 +3,14 @@
 统一响应结构、业务错误码、全局异常处理见 app.core。
 路由前缀约定：/api（与《后端接口契约》§2.1 一致）。
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.config import get_settings
 from app.core.errors import BizCode, BizError
 from app.core.response import ApiResponse
 from app.routers import (
@@ -25,10 +28,18 @@ from app.routers import (
     shopping,
 )
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """启动期执行配置校验（#28）：弱密钥在 production 直接失败，dev 打印 [SECURITY] 告警。"""
+    get_settings()
+    yield
+
+
 app = FastAPI(
     title="膳食搭配智能体系统 - 后端 API",
     version="0.1.0",
     description="接口契约：膳食搭配智能体系统-后端接口契约.md",
+    lifespan=lifespan,
 )
 
 app.include_router(health.router, prefix="/api")

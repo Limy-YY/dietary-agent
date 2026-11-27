@@ -1,17 +1,29 @@
 """应用配置：从 .env 读取。"""
+import logging
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# B6/#28：JWT 密钥强度基线。占位串或不足 32 字节一律视为弱密钥
+PLACEHOLDER_JWT_SECRET = "dev-only-placeholder-change-me-32bytes"
+MIN_JWT_SECRET_LEN = 32
+PRODUCTION_ENVS = {"prod", "production"}
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # 运行环境：dev（默认）/ production。production 下弱密钥直接拒绝启动（#28）
+    APP_ENV: str = "dev"
+
     # 数据库：不写死口令，密码由 .env / 环境变量 DATABASE_URL 或 PGPASSWORD 提供
     DATABASE_URL: str = "postgresql+psycopg://diet_app@localhost:5432/diet_agent"
 
-    # JWT（B6：必须 ≥32 字节；.env 里配真实随机串，默认值仅占位，缺配置时启动即报弱密钥告警）
-    JWT_SECRET: str = "dev-only-placeholder-change-me-32bytes"
+    # JWT（B6/#28：必须 ≥32 字节；.env 里配真实随机串，默认值仅占位，缺配置时启动即报弱密钥告警）
+    JWT_SECRET: str = PLACEHOLDER_JWT_SECRET
     JWT_ALGORITHM: str = "HS256"
     TOKEN_EXPIRE_MINUTES: int = 1440
 
@@ -40,6 +52,31 @@ class Settings(BaseSettings):
     # Agent 服务（agent/ 目录的 FastAPI，默认 8001）：/agent/chat 代理目标
     AGENT_BASE_URL: str = "http://127.0.0.1:8001"
     AGENT_TIMEOUT_S: float = 60.0
+
+    @property
+    def jwt_secret_is_weak(self) -> bool:
+        """占位串（含 .env.example 的 <random-secret>）或长度不足 32 字节，视为弱密钥。"""
+        secret = (self.JWT_SECRET or "").strip()
+        return (
+            secret.startswith("dev-only-placeholder")
+            or secret == "change-me-in-production"
+            or len(secret) < MIN_JWT_SECRET_LEN
+        )
+
+    @model_validator(mode="after")
+    def _guard_jwt_secret(self) -> "Settings":
+        """#28：服务端弱密钥防护。dev 告警不阻断，production 直接拒绝启动。"""
+        if not self.jwt_secret_is_weak:
+            return self
+        message = (
+            f"[SECURITY] JWT_SECRET 为占位/弱密钥（{len(self.JWT_SECRET or '')} 字节，"
+            f"要求 ≥{MIN_JWT_SECRET_LEN}），仅限本地开发；"
+            '生成方式：python -c "import secrets;print(secrets.token_urlsafe(48))"'
+        )
+        if (self.APP_ENV or "").strip().lower() in PRODUCTION_ENVS:
+            raise ValueError(f"{message}；APP_ENV={self.APP_ENV} 下拒绝启动")
+        logger.warning(message)
+        return self
 
 
 @lru_cache
