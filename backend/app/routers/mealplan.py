@@ -563,6 +563,13 @@ def _tip_payload(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _reviewed_tip(payload: dict) -> dict:
+    tip = _tip_payload(payload.get("nutrition_tip"))
+    if tip.get("review_status") == "approved" and tip.get("reviewer") and tip.get("reviewed_at"):
+        return tip
+    return {}
+
+
 def _tip_prose(tip: dict) -> str:
     """把科普三要素拼成一句话，供只读面板的单行提示消费（前端契约 text 字段）。"""
 
@@ -631,7 +638,7 @@ def _build_nutrition_tips(db: Session, plan: MealPlan) -> list[dict]:
     - 估算按方案已安排餐次合计，再按覆盖天数折算为日均；缺失按「缺数据」记录，不按 0 计；
     - 参考量取 DRIs 2023 同年龄段 RNI（该维度无 RNI 时取 AI），性别按档案，识别不出用 both；
     - 只排部分餐次时日均不代表全天摄入，按已安排热量占比给出「部分覆盖」状态。
-    科普文案取 `knowledge.nutrient_knowledge.payload` 的 function / deficiency / sources。
+    科普文案优先使用经审核的 nutrition_tip，缺少时沿用原有资料。
     """
     slots = list(plan.slots)
     if not slots:
@@ -721,6 +728,9 @@ def _build_nutrition_tips(db: Session, plan: MealPlan) -> list[dict]:
         coverage = round(daily / ref_value, 4) if ref_value else 0.0
         info = meta.get(key)
         payload = knowledge.get(key) or {}
+        reviewed_tip = _reviewed_tip(payload)
+        prose = reviewed_tip or payload
+        tip_source = reviewed_tip.get("source")
         name_zh = (getattr(info, "name_zh", None) or key)
         unit = getattr(info, "unit", None) or ""
         items.append(
@@ -737,9 +747,11 @@ def _build_nutrition_tips(db: Session, plan: MealPlan) -> list[dict]:
                 "scope_ratio": scope_ratio,
                 "coverage_days": day_count,
                 "missing_slots": missing[key],
-                "function": list(payload.get("function") or []),
-                "deficiency": payload.get("deficiency") or {},
-                "sources": list(payload.get("sources") or []),
+                "function": list(prose.get("function") or []),
+                "deficiency": prose.get("deficiency") or {},
+                "sources": list(prose.get("sources") or []),
+                "source": f"{_TIP_SOURCE_LABEL} / {tip_source}" if tip_source else _TIP_SOURCE_LABEL,
+                "source_url": reviewed_tip.get("source_url"),
             }
         )
 
@@ -763,9 +775,10 @@ def _build_nutrition_tips(db: Session, plan: MealPlan) -> list[dict]:
         tip["headline"] = f"{tip['name_zh']}：{body}"
         # 前端契约（主线 F9 的 normalizeNutritionTips 只读 title/text/source）：三要素拼进 text，结构化字段照旧保留
         prose = _tip_prose(tip)
+        if prose and tip.get("source_url"):
+            prose += "。方案估算只能作为饮食参考，不能判断是否缺乏"
         tip["title"] = tip["name_zh"]
         tip["text"] = f"{body}。{prose}" if prose else body
-        tip["source"] = _TIP_SOURCE_LABEL
     return tips
 
 

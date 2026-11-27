@@ -283,7 +283,7 @@ def classify(message: str) -> dict:
     r = _regex_intent(message)
     if r:
         return r
-    if re.search(r"症状|缺什么|乏力|掉发|头晕|抽筋|便秘|口角炎|夜盲", message):
+    if re.search(r"症状|缺什么|乏力|掉发|头晕|抽筋|便秘|口角炎|夜盲|精力(?:不足|不济|下降)|没(?:有)?精神|提不起劲", message):
         return {"intent": "reverse_nutrition"}
     return _llm_classify(message)
 

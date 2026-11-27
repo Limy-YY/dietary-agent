@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
-from app.routers.agent import _search_knowledge
+from app.routers.agent import _search_hybrid, _search_knowledge
+from app.routers.mealplan import _reviewed_tip
 from app.routers.nutrition import MICRO_IDS, _achievement, _aggregate_rows, _macro_summary
 
 
@@ -37,12 +39,38 @@ class RagAndReportTests(unittest.TestCase):
             "source": "成人高血压食养指南（2023年版）",
             "source_id": "NHC-HTN-2023",
             "source_url": "https://example.test/htn",
-            "score": 1.0,
+            "boost": 1.0,
         }])
         items = _search_knowledge("高血压人群平时应该怎么控制盐的摄入？", 1, db)
         self.assertEqual(items[0].source_id, "NHC-HTN-2023")
         self.assertIn("jsonb_array_elements_text", db.sql)
         self.assertEqual(db.params["query"], "高血压人群平时应该怎么控制盐的摄入？")
+
+    def test_hybrid_preserves_the_official_source_link(self):
+        url = "https://ods.od.nih.gov/factsheets/Iron-HealthProfessional/"
+        db = _Db([{
+            "knowledge_doc_id": 2,
+            "title": "铁",
+            "content": "促进吸收或利用：维生素C",
+            "source": "NIH ODS",
+            "source_id": None,
+            "source_url": url,
+            "category": "矿物质",
+            "score": 0.03,
+        }])
+        with patch("app.routers.agent.embed_text", return_value=[0.1]):
+            items, method = _search_hybrid("铁的吸收", 1, db)
+        self.assertEqual(method, "hybrid_rrf")
+        self.assertEqual(items[0].source_url, url)
+        self.assertEqual(items[0].source, "NIH ODS")
+
+    def test_nutrition_tip_requires_review_record(self):
+        tip = {"function": ["样本文案"], "review_status": "pending"}
+        self.assertEqual(_reviewed_tip({"nutrition_tip": tip}), {})
+        tip["review_status"] = "approved"
+        self.assertEqual(_reviewed_tip({"nutrition_tip": tip}), {})
+        tip.update(reviewer="test-only", reviewed_at="2026-11-27T00:00:00Z")
+        self.assertEqual(_reviewed_tip({"nutrition_tip": tip}), tip)
 
     def test_micro_overall_reports_its_real_denominator(self):
         agg = {
