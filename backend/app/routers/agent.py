@@ -17,7 +17,7 @@ except Exception:  # noqa: BLE001
     jieba = None
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -261,30 +261,13 @@ def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], 
         # 两路都没命中：向量没灌 / 查询向量缺失 / 关键词确实不匹配，原因看 diag
         return _search_knowledge(query, top_k, db), "no_hit", diag
 
-    # BUG-027：knowledge.search_documents 的 RETURNS TABLE 不含 source/source_id，
-    # 这里按 knowledge_doc_id 回查一次补齐，保证 hybrid 与关键词兜底两路溯源行为一致。
-    doc_ids = [r["knowledge_doc_id"] for r in rows]
-    sources: dict[int, tuple[str | None, str | None]] = {}
-    try:
-        src_rows = db.execute(
-            text(
-                "SELECT knowledge_doc_id, source, source_id FROM knowledge.knowledge_doc "
-                "WHERE knowledge_doc_id IN :ids"
-            ).bindparams(bindparam("ids", expanding=True)),
-            {"ids": doc_ids},
-        ).mappings().all()
-        sources = {r["knowledge_doc_id"]: (r["source"], r["source_id"]) for r in src_rows}
-    except Exception as exc:  # noqa: BLE001 —— 溯源补查失败不应把检索接口打挂
-        logger.warning("溯源回查失败，source 置空：%s", exc)
-        db.rollback()
-
     items = [
         RagItem(
             doc_id=str(r["knowledge_doc_id"]),
             title=r["title"] or "",
             content=r["content"] or "",
-            source=(sources.get(r["knowledge_doc_id"]) or (None, None))[0],
-            source_id=(sources.get(r["knowledge_doc_id"]) or (None, None))[1],
+            source=r["source"],
+            source_id=r["source_id"],
             source_url=r["source_url"],
             category=r["category"],
             score=float(r["score"]) if r["score"] is not None else None,
