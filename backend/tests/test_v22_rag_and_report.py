@@ -29,6 +29,21 @@ class _Db:
         return _Rows(self.rows)
 
 
+class ReferenceConstantTests(unittest.TestCase):
+    """回归：B7 营养参考值召回依赖三个模块级常量（issue #34）。
+
+    67d14ae 重构 _search_hybrid 时把它们连带删掉，导致凡命中营养素的 rag-query
+    直接 500（NameError: _REFERENCE_SOURCE_NAME）。这里在导入期就卡住。
+    """
+
+    def test_reference_constants_present(self):
+        from app.routers import agent
+
+        self.assertEqual(agent._REFERENCE_DEFAULT_AGE_GROUP, "18-29")
+        self.assertTrue(agent._REFERENCE_SOURCE_NAME)
+        self.assertTrue(agent._REFERENCE_SOURCE_ID)
+
+
 class RagAndReportTests(unittest.TestCase):
     def test_chinese_question_uses_document_aliases(self):
         db = _Db([{
@@ -39,7 +54,7 @@ class RagAndReportTests(unittest.TestCase):
             "source": "成人高血压食养指南（2023年版）",
             "source_id": "NHC-HTN-2023",
             "source_url": "https://example.test/htn",
-            "boost": 1.0,
+            "boost": 1.0,  # 真实 SQL 里 boost 来自 title 命中加权，fake 行必须对齐列形状
         }])
         items = _search_knowledge("高血压人群平时应该怎么控制盐的摄入？", 1, db)
         self.assertEqual(items[0].source_id, "NHC-HTN-2023")
@@ -58,8 +73,10 @@ class RagAndReportTests(unittest.TestCase):
             "category": "矿物质",
             "score": 0.03,
         }])
-        with patch("app.routers.agent.embed_text", return_value=[0.1]):
-            items, method = _search_hybrid("铁的吸收", 1, db)
+        with patch("app.routers.agent.embed_text", return_value=[0.1]), \
+                patch("app.routers.agent._embedding_stats",
+                      return_value={"with_emb": 1, "total_docs": 1}):
+            items, method, diag = _search_hybrid("铁的吸收", 1, db)
         self.assertEqual(method, "hybrid_rrf")
         self.assertEqual(items[0].source_url, url)
         self.assertEqual(items[0].source, "NIH ODS")
