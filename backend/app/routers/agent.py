@@ -294,6 +294,12 @@ def _search_hybrid(query: str, top_k: int, db: Session) -> tuple[list[RagItem], 
     ]
     return items, ("hybrid_rrf" if embedding is not None else "rrf_text_only"), diag
 
+#: B7 营养参考值召回：默认取成人 18-29 岁层（rag-query 无 user_id，不做个性化）
+_REFERENCE_DEFAULT_AGE_GROUP = "18-29"
+_REFERENCE_SOURCE_NAME = "中国营养学会《中国居民膳食营养素参考摄入量（2023版）》"
+_REFERENCE_SOURCE_ID = "DRIs 2023"
+
+
 def _match_nutrients(query: str, db: Session) -> list[dict]:
     """从查询文本识别营养素（确定性匹配，不做模糊）。
 
